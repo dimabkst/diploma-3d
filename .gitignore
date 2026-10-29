@@ -1,0 +1,9 @@
+*.md
+.vscode/
+node_modules/
+dist/
+.svelte-kit/
+coverage/
+playwright-report/
+test-results/
+
