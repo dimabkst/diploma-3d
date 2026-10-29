@@ -1,4 +1,9 @@
 <script lang="ts">
+import AppHeader from './lib/components/AppHeader.svelte';
+import ControlsPanel from './lib/components/ControlsPanel.svelte';
+import PageHeading from './lib/components/PageHeading.svelte';
+import PreviewPanel from './lib/components/PreviewPanel.svelte';
+
 const shapes = [
   { value: 'cube', label: 'Куб' },
   { value: 'cuboid', label: 'Прямокутний паралелепіпед' },
@@ -10,7 +15,7 @@ const shapes = [
   { value: 'cone', label: 'Конус' },
 ] as const;
 
-let selectedShape: (typeof shapes)[number]['value'] = $state('cube');
+let selectedShape = $state<string>('cube');
 let width = $state(40);
 let height = $state(40);
 const selectedShapeName = $derived(shapes.find((shape) => shape.value === selectedShape)?.label ?? '—');
@@ -20,80 +25,66 @@ const selectedShapeName = $derived(shapes.find((shape) => shape.value === select
   <title>Стереометрія 3D</title>
 </svelte:head>
 
-<header class="topbar">
-  <a class="brand" href="/" aria-label="Стереометрія 3D — головна">
-    <span class="brand-mark" aria-hidden="true">S3</span>
-    <span>Стереометрія 3D</span>
-  </a>
-  <p>Навчальні моделі для 10–11 класів</p>
-</header>
+<AppHeader />
 
 <main>
   <section class="intro" aria-labelledby="page-title">
-    <div>
-      <p class="eyebrow">Від формули до фізичної моделі</p>
-      <h1 id="page-title">Створіть геометричне тіло</h1>
-      <p class="lead">Оберіть фігуру, налаштуйте параметри та підготуйте модель до 3D-друку.</p>
-    </div>
-    <span class="status">Початкова версія</span>
+    <p class="eyebrow">Від формули до фізичної моделі</p>
+    <PageHeading id="page-title" title="Створіть геометричне тіло" />
+    <p class="lead">Оберіть фігуру, налаштуйте параметри та підготуйте модель до 3D-друку.</p>
   </section>
 
   <div class="workspace">
-    <aside class="controls" aria-label="Налаштування моделі">
-      <section aria-labelledby="shape-heading">
-        <div class="section-heading">
-          <span>01</span>
-          <h2 id="shape-heading">Вибір фігури</h2>
-        </div>
-        <label for="shape">Геометричне тіло</label>
-        <select id="shape" bind:value={selectedShape}>
-          {#each shapes as shape}
-            <option value={shape.value}>{shape.label}</option>
-          {/each}
-        </select>
-      </section>
-
-      <section aria-labelledby="parameters-heading">
-        <div class="section-heading">
-          <span>02</span>
-          <h2 id="parameters-heading">Параметри</h2>
-        </div>
-        <div class="field-grid">
-          <label>
-            <span>Ширина</span>
-            <span class="number-field"><input bind:value={width} type="number" min="1" /><small>мм</small></span>
-          </label>
-          <label>
-            <span>Висота</span>
-            <span class="number-field"><input bind:value={height} type="number" min="1" /><small>мм</small></span>
-          </label>
-        </div>
-        <p class="hint">Точні обмеження параметрів будуть додані разом із геометричним рушієм.</p>
-      </section>
-    </aside>
-
-    <section class="preview" aria-labelledby="preview-heading">
-      <div class="preview-header">
-        <div class="section-heading">
-          <span>03</span>
-          <h2 id="preview-heading">3D-перегляд</h2>
-        </div>
-        <span class="units">мм</span>
-      </div>
-      <div class="viewport">
-        <div class="grid" aria-hidden="true"></div>
-        <div class="wire-cube" aria-hidden="true">
-          <span></span>
-        </div>
-        <div class="empty-state">
-          <strong>Область 3D-моделі</strong>
-          <span>Інтерактивний перегляд з’явиться на наступному етапі.</span>
-        </div>
-      </div>
-      <div class="preview-footer">
-        <span>Фігура: {selectedShapeName}</span>
-        <span>{width} × {height} мм</span>
-      </div>
-    </section>
+    <ControlsPanel {shapes} bind:selectedShape bind:width bind:height />
+    <PreviewPanel shapeName={selectedShapeName} {width} {height} />
   </div>
 </main>
+
+<style>
+  main {
+    width: 100%;
+    max-width: var(--page-max);
+    margin: 0 auto;
+    padding: var(--space-8) var(--page-gutter) var(--space-24);
+  }
+
+  .intro {
+    margin-bottom: var(--space-6);
+  }
+
+  .eyebrow {
+    margin-bottom: var(--space-2);
+    color: var(--color-text-dim);
+    font-family: var(--font-heading);
+    font-size: var(--text-tiny);
+    font-variant-ligatures: none;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .lead {
+    max-width: var(--prose-width);
+    margin-bottom: 0;
+    color: var(--color-text-muted);
+    font-size: var(--text-lead);
+  }
+
+  .workspace {
+    display: grid;
+    grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+    gap: var(--space-6);
+  }
+
+  @media (max-width: 860px) {
+    .workspace {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 600px) {
+    main {
+      padding-top: var(--space-6);
+      padding-bottom: var(--space-16);
+    }
+  }
+</style>
