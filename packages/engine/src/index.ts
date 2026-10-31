@@ -13,3 +13,4 @@ export {
   type Vec3,
 } from './mesh.ts';
 export { type GeneratedModel, generateModel, type Solid } from './model.ts';
+export { type BoxShape, boxEdgeLengthsMm, boxProportions } from './shapes/box.ts';

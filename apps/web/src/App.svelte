@@ -1,52 +1,86 @@
 <script lang="ts">
-import { THREE_MF_MEDIA_TYPE } from '@diploma-3d/engine';
-import { defaultModelSpecs } from '@diploma-3d/schema';
+import { boxEdgeLengthsMm, THREE_MF_MEDIA_TYPE } from '@diploma-3d/engine';
+import { untrack } from 'svelte';
 import AppHeader from './lib/components/AppHeader.svelte';
 import ControlsPanel from './lib/components/ControlsPanel.svelte';
 import PageHeading from './lib/components/PageHeading.svelte';
 import PreviewPanel from './lib/components/PreviewPanel.svelte';
 import { saveFile } from './lib/download.ts';
 import { buildModel } from './lib/model/buildModel.ts';
-import { describeModelError, type ModelState } from './lib/model/modelState.ts';
-import { isAvailableShape, measurementItems, shapeDescriptions, shapeLabel, shapeOptions } from './lib/shapes.ts';
+import { describeModelError, type ModelState, visibleArtifacts } from './lib/model/modelState.ts';
+import { initialParameterTexts, resolveModelRequest } from './lib/model/parameters.ts';
+import {
+  isAvailableShape,
+  measurementItems,
+  parameterHints,
+  shapeDescriptions,
+  shapeLabel,
+  shapeOptions,
+  shapeParameters,
+} from './lib/shapes.ts';
+
+// Parameter edits are coalesced briefly so that typing "1,75" does not rebuild the model for every keystroke.
+const EDIT_DEBOUNCE_MS = 150;
 
 let selectedShape = $state<string>('cube');
+let parameterTexts = $state(initialParameterTexts());
 let attempt = $state(0);
 // Raw state: the artifacts hold large typed arrays that must not be wrapped in deep reactive proxies.
-let model = $state.raw<ModelState>({ status: 'generating' });
+let model = $state.raw<ModelState>({ status: 'generating', stale: undefined });
 
 const selectedKind = $derived(isAvailableShape(selectedShape) ? selectedShape : undefined);
 const selectedShapeName = $derived(shapeLabel(selectedShape));
-const measurements = $derived(
-  selectedKind === undefined
-    ? []
-    : measurementItems(selectedKind, model.status === 'ready' ? model.artifacts.model.solids[0]?.measurements : undefined),
-);
+const request = $derived(selectedKind === undefined ? undefined : resolveModelRequest(selectedKind, parameterTexts));
+// Texts that denote the same specification ("1,5" and "1.50") share a key and do not trigger a rebuild.
+const requestKey = $derived(request?.key);
+const measurements = $derived.by(() => {
+  if (selectedKind === undefined) return [];
+  const edges = request?.spec === undefined ? undefined : boxEdgeLengthsMm(request.spec.shape, request.spec.scale);
+  const ready = model.status === 'ready' && model.key === requestKey ? model.artifacts : undefined;
+  return measurementItems(selectedKind, edges, ready?.model.solids[0]?.measurements);
+});
 
 let latestRequest = 0;
 
 $effect(() => {
   void attempt;
   const kind = selectedKind;
-  const request = ++latestRequest;
+  const key = requestKey;
+  const spec = untrack(() => request?.spec);
+  // Every change invalidates the current model at once, so outdated geometry can never be downloaded; results of
+  // superseded requests are discarded when they arrive.
+  const requestId = ++latestRequest;
+  const previous = untrack(() => visibleArtifacts(model));
+  const stale = previous?.model.kind === kind ? previous : undefined;
+
   if (kind === undefined) {
     model = { status: 'error', message: 'Ця фігура ще недоступна.' };
     return;
   }
-  model = { status: 'generating' };
-  buildModel(defaultModelSpecs[kind]).then(
-    (artifacts) => {
-      if (request === latestRequest) model = { status: 'ready', artifacts };
+  if (key === undefined || spec === undefined) {
+    model = { status: 'invalid', stale };
+    return;
+  }
+  model = { status: 'generating', stale };
+  const timer = setTimeout(
+    () => {
+      buildModel(spec).then(
+        (artifacts) => {
+          if (requestId === latestRequest) model = { status: 'ready', key, artifacts };
+        },
+        (error: unknown) => {
+          console.error(error);
+          if (requestId === latestRequest) model = { status: 'error', message: describeModelError(error) };
+        },
+      );
     },
-    (error: unknown) => {
-      console.error(error);
-      if (request === latestRequest) model = { status: 'error', message: describeModelError(error) };
-    },
+    stale === undefined ? 0 : EDIT_DEBOUNCE_MS,
   );
+  return () => clearTimeout(timer);
 });
 
 function downloadPrintFile() {
-  if (model.status !== 'ready') return;
+  if (model.status !== 'ready' || model.key !== requestKey) return;
   const { fileName, bytes } = model.artifacts.printFile;
   saveFile(bytes, fileName, THREE_MF_MEDIA_TYPE);
 }
@@ -70,6 +104,10 @@ function downloadPrintFile() {
       shapes={shapeOptions}
       bind:selectedShape
       description={selectedKind === undefined ? '' : shapeDescriptions[selectedKind]}
+      fields={selectedKind === undefined ? [] : shapeParameters[selectedKind]}
+      bind:values={parameterTexts}
+      errors={request?.errors ?? {}}
+      parameterHint={selectedKind === undefined ? undefined : parameterHints[selectedKind]}
       {measurements}
     />
     <PreviewPanel

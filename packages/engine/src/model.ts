@@ -4,7 +4,7 @@ import { GeometryError, InvalidModelSpecError } from './errors.ts';
 import type { GeometryKernel } from './kernel.ts';
 import { assertValidSolidMesh, type MeshMeasurements, measureMesh, meshFromManifold, type TriangleMesh } from './mesh.ts';
 import { type Track, withScope } from './scope.ts';
-import { buildUnitCube } from './shapes/cube.ts';
+import { buildUnitBox } from './shapes/box.ts';
 
 export interface Solid {
   /** ASCII identifier, also used as the object name in exported files. */
@@ -29,7 +29,7 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpec): Generat
 
   const mesh = withScope((track) => {
     const unitSolid = buildUnitShape(kernel, track, spec.shape);
-    const solid = track(unitSolid.scale(spec.scale.unitLengthMm));
+    const solid = track(unitSolid.scale(spec.scale.longestDimensionMm));
     const status = solid.status();
     if (status !== 'NoError' || solid.isEmpty()) {
       throw new GeometryError(`Geometry kernel produced no solid (${status}).`);
@@ -45,6 +45,7 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpec): Generat
 function buildUnitShape(kernel: GeometryKernel, track: Track, shape: Shape): Manifold {
   switch (shape.kind) {
     case 'cube':
-      return buildUnitCube(kernel, track, shape);
+    case 'cuboid':
+      return buildUnitBox(kernel, track, shape);
   }
 }

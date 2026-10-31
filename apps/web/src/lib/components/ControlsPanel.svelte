@@ -1,5 +1,7 @@
 <script lang="ts">
-import type { MeasurementItem, ShapeOption } from '../shapes.ts';
+import type { ParameterErrors, ParameterTexts } from '../model/parameters.ts';
+import type { MeasurementItem, ParameterField, ShapeOption } from '../shapes.ts';
+import DecimalInput from './DecimalInput.svelte';
 import Field from './Field.svelte';
 import MeasurementList from './MeasurementList.svelte';
 import SectionHeading from './SectionHeading.svelte';
@@ -8,11 +10,19 @@ let {
   shapes,
   selectedShape = $bindable(),
   description,
+  fields,
+  values = $bindable(),
+  errors,
+  parameterHint,
   measurements,
 }: {
   shapes: readonly ShapeOption[];
   selectedShape: string;
   description: string;
+  fields: readonly ParameterField[];
+  values: ParameterTexts;
+  errors: ParameterErrors;
+  parameterHint: string | undefined;
   measurements: readonly MeasurementItem[];
 } = $props();
 </script>
@@ -33,9 +43,29 @@ let {
 
   <section aria-labelledby="parameters-heading">
     <SectionHeading id="parameters-heading" step="02" title="Параметри" />
-    <p class="hint">{description}</p>
-    <MeasurementList items={measurements} />
-    <p class="hint">Розміри наведено для файлу друку. За потреби змініть масштаб у слайсері.</p>
+    <div class="section-body">
+      <p class="hint">{description}</p>
+      {#if fields.length > 0}
+        <div class="field-grid">
+          {#each fields as field (field.key)}
+            {@const error = errors[field.key]}
+            <Field label={field.label} forId={field.key} {error}>
+              <DecimalInput
+                id={field.key}
+                bind:value={values[field.key]}
+                invalid={error !== undefined}
+                describedBy={error === undefined ? undefined : `${field.key}-error`}
+              />
+            </Field>
+          {/each}
+        </div>
+      {/if}
+      {#if parameterHint !== undefined}
+        <p class="hint">{parameterHint}</p>
+      {/if}
+      <MeasurementList items={measurements} />
+      <p class="hint">Розміри наведено для файлу друку. За потреби змініть масштаб у слайсері.</p>
+    </div>
   </section>
 </aside>
 
@@ -80,20 +110,31 @@ let {
     opacity: 0.55;
   }
 
+  .section-body {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .field-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-3);
+  }
+
   .hint {
-    margin: 0 0 var(--space-4);
+    margin: 0;
     color: var(--color-text-muted);
     font-size: var(--text-small);
     line-height: 1.5;
   }
 
-  .hint:last-child {
-    margin: var(--space-4) 0 0;
-  }
-
   @media (max-width: 420px) {
     .controls-panel {
       padding: var(--space-4);
+    }
+
+    .field-grid {
+      grid-template-columns: 1fr;
     }
   }
 </style>

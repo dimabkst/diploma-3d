@@ -10,13 +10,12 @@ let {
 }: {
   glb: Uint8Array<ArrayBuffer>;
   alt: string;
-  onload: () => void;
-  onerror: () => void;
+  onload: (glb: Uint8Array<ArrayBuffer>) => void;
+  onerror: (glb: Uint8Array<ArrayBuffer>) => void;
 } = $props();
 
 let elementDefined = $state(false);
 let viewer = $state<HTMLElement>();
-let src = $state<string>();
 
 onMount(() => {
   let active = true;
@@ -29,18 +28,12 @@ onMount(() => {
       if (active) elementDefined = true;
     },
     () => {
-      if (active) onerror();
+      if (active) onerror(glb);
     },
   );
   return () => {
     active = false;
   };
-});
-
-$effect(() => {
-  const url = URL.createObjectURL(new Blob([glb], { type: GLB_MEDIA_TYPE }));
-  src = url;
-  return () => URL.revokeObjectURL(url);
 });
 
 // Keyboard focus lands on an element inside model-viewer's shadow root that exposes no CSS part; without this rule it
@@ -56,16 +49,24 @@ $effect(() => {
   shadowRoot.adoptedStyleSheets = [...shadowRoot.adoptedStyleSheets, sheet];
 });
 
+// The element stays mounted while models are replaced, so the camera and WebGL context are kept. A load event names
+// the URL it loaded, which ties it to its GLB even when the source changes again before loading finishes.
 $effect(() => {
   if (viewer === undefined) return;
   const element = viewer;
-  const handleLoad = () => onload();
-  const handleError = () => onerror();
+  const current = glb;
+  const url = URL.createObjectURL(new Blob([current], { type: GLB_MEDIA_TYPE }));
+  const handleLoad = (event: Event) => {
+    if ((event as CustomEvent<{ url?: string }>).detail?.url === url) onload(current);
+  };
+  const handleError = () => onerror(current);
   element.addEventListener('load', handleLoad);
   element.addEventListener('error', handleError);
+  element.setAttribute('src', url);
   return () => {
     element.removeEventListener('load', handleLoad);
     element.removeEventListener('error', handleError);
+    URL.revokeObjectURL(url);
   };
 });
 </script>
@@ -75,7 +76,6 @@ $effect(() => {
   <model-viewer
     bind:this={viewer}
     class="viewer"
-    {src}
     {alt}
     camera-controls
     camera-orbit="35deg 62deg auto"

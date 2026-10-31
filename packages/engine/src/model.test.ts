@@ -1,10 +1,11 @@
-import { DEFAULT_CUBE_EDGE_LENGTH_MM, defaultModelSpecs, type ModelSpec } from '@diploma-3d/schema';
+import { type CuboidShape, DEFAULT_LONGEST_DIMENSION_MM, defaultModelSpecs, type ModelSpec } from '@diploma-3d/schema';
 import type { Manifold } from 'manifold-3d';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { GeometryError, InvalidModelSpecError } from './errors.ts';
 import { type GeometryKernel, loadGeometryKernel } from './kernel.ts';
 import { findMeshDefects, type TriangleMesh, triangleAreaVector, triangleAt, triangleCount, vertexAt } from './mesh.ts';
 import { generateModel } from './model.ts';
+import { boxEdgeLengthsMm } from './shapes/box.ts';
 
 let kernel: GeometryKernel;
 
@@ -16,22 +17,59 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const cube = (unitLengthMm: number): ModelSpec => ({ shape: { kind: 'cube' }, scale: { unitLengthMm } });
+const scale = (longestDimensionMm: number) => ({ longestDimensionMm });
+const cube = (longestDimensionMm: number): ModelSpec => ({ shape: { kind: 'cube' }, scale: scale(longestDimensionMm) });
+const cuboid = (widthRatio: number, heightRatio: number, longestDimensionMm = 80): ModelSpec => ({
+  shape: { kind: 'cuboid', widthRatio, heightRatio },
+  scale: scale(longestDimensionMm),
+});
 
-/** Groups triangles into planar faces by their outward axis direction, e.g. "+z". */
-function axisAlignedFaces(mesh: TriangleMesh): Map<string, { area: number; vertices: Set<number> }> {
+const RELATIVE_TOLERANCE = 1e-6;
+const expectRelativelyClose = (actual: number | undefined, expected: number) => {
+  expect(Math.abs((actual ?? Number.NaN) / expected - 1)).toBeLessThan(RELATIVE_TOLERANCE);
+};
+
+const onlySolid = (spec: ModelSpec) => {
+  const [solid] = generateModel(kernel, spec).solids;
+  if (solid === undefined) throw new Error('No solid');
+  return solid;
+};
+
+/** Vertex positions as an order-independent multiset, so comparisons do not depend on the kernel's vertex order. */
+const sortedVertices = (mesh: TriangleMesh) =>
+  Array.from({ length: mesh.positions.length / 3 }, (_, vertex) => vertexAt(mesh, vertex).join(',')).sort();
+
+/**
+ * Checks that the mesh consists of six axis-aligned rectangular faces of a box with edges a, b, c along X, Y, Z: each
+ * face has four corners spanning its two edges and an area equal to their product.
+ */
+function expectBoxFaces(mesh: TriangleMesh, edges: readonly [number, number, number]) {
   const faces = new Map<string, { area: number; vertices: Set<number> }>();
   for (let triangle = 0; triangle < triangleCount(mesh); triangle += 1) {
     const areaVector = triangleAreaVector(mesh, triangle);
-    const axis = areaVector.findIndex((component) => Math.abs(component) > 0);
     expect(areaVector.filter((component) => component !== 0)).toHaveLength(1);
+    const axis = areaVector.findIndex((component) => component !== 0);
     const key = `${(areaVector[axis] as number) > 0 ? '+' : '-'}${'xyz'[axis]}`;
     const face = faces.get(key) ?? { area: 0, vertices: new Set<number>() };
     face.area += Math.abs(areaVector[axis] as number) / 2;
     for (const vertex of triangleAt(mesh, triangle)) face.vertices.add(vertex);
     faces.set(key, face);
   }
-  return faces;
+
+  expect([...faces.keys()].sort()).toEqual(['+x', '+y', '+z', '-x', '-y', '-z']);
+  for (const [key, face] of faces) {
+    const normalAxis = 'xyz'.indexOf(key[1] as string);
+    const inPlaneAxes = [0, 1, 2].filter((axis) => axis !== normalAxis);
+    expect(face.vertices.size).toBe(4);
+    expectRelativelyClose(
+      face.area,
+      inPlaneAxes.reduce((product, axis) => product * (edges[axis] as number), 1),
+    );
+    for (const axis of inPlaneAxes) {
+      const coordinates = [...face.vertices].map((vertex) => vertexAt(mesh, vertex)[axis] as number);
+      expectRelativelyClose(Math.max(...coordinates) - Math.min(...coordinates), edges[axis] as number);
+    }
+  }
 }
 
 describe('generateModel for a cube', () => {
@@ -43,51 +81,34 @@ describe('generateModel for a cube', () => {
     expect(solid?.name).toBe('cube');
     expect(solid?.measurements.bounds).toEqual({ min: [-40, -40, 0], max: [40, 40, 80] });
     expect(solid?.measurements.size).toEqual([
-      DEFAULT_CUBE_EDGE_LENGTH_MM,
-      DEFAULT_CUBE_EDGE_LENGTH_MM,
-      DEFAULT_CUBE_EDGE_LENGTH_MM,
+      DEFAULT_LONGEST_DIMENSION_MM,
+      DEFAULT_LONGEST_DIMENSION_MM,
+      DEFAULT_LONGEST_DIMENSION_MM,
     ]);
     expect(solid?.mesh.positions).toHaveLength(8 * 3);
     expect(solid?.mesh.triangles).toHaveLength(12 * 3);
   });
 
   it.each([1, 12.5, 80, 333.3])('has volume a³, surface area 6a² and three equal dimensions for a = %s mm', (a) => {
-    const [solid] = generateModel(kernel, cube(a)).solids;
-    if (solid === undefined) throw new Error('No solid');
-    const relativeTolerance = 1e-6;
-    expect(Math.abs(solid.measurements.volume / a ** 3 - 1)).toBeLessThan(relativeTolerance);
-    expect(Math.abs(solid.measurements.surfaceArea / (6 * a ** 2) - 1)).toBeLessThan(relativeTolerance);
-    for (const dimension of solid.measurements.size) {
-      expect(Math.abs(dimension / a - 1)).toBeLessThan(relativeTolerance);
+    const { measurements } = onlySolid(cube(a));
+    expectRelativelyClose(measurements.volume, a ** 3);
+    expectRelativelyClose(measurements.surfaceArea, 6 * a ** 2);
+    for (const dimension of measurements.size) {
+      expectRelativelyClose(dimension, a);
     }
   });
 
   it('produces a closed, consistently outward-oriented mesh', () => {
-    const [solid] = generateModel(kernel, defaultModelSpecs.cube).solids;
-    expect(findMeshDefects(solid?.mesh as TriangleMesh)).toEqual([]);
+    expect(findMeshDefects(onlySolid(defaultModelSpecs.cube).mesh)).toEqual([]);
   });
 
   it('has six square faces of area a², one per axis direction', () => {
-    const a = DEFAULT_CUBE_EDGE_LENGTH_MM;
-    const mesh = generateModel(kernel, defaultModelSpecs.cube).solids[0]?.mesh as TriangleMesh;
-    const faces = axisAlignedFaces(mesh);
-    expect([...faces.keys()].sort()).toEqual(['+x', '+y', '+z', '-x', '-y', '-z']);
-    for (const [key, face] of faces) {
-      expect(face.area).toBeCloseTo(a ** 2, 6);
-      // Four corners spanning a × a in the face plane, together with area a², make the face a square of side a.
-      expect(face.vertices.size).toBe(4);
-      const normalAxis = 'xyz'.indexOf(key[1] as string);
-      for (const axis of [0, 1, 2].filter((candidate) => candidate !== normalAxis)) {
-        const coordinates = [...face.vertices].map((vertex) => vertexAt(mesh, vertex)[axis] as number);
-        expect(Math.max(...coordinates) - Math.min(...coordinates)).toBeCloseTo(a, 6);
-      }
-    }
+    const a = DEFAULT_LONGEST_DIMENSION_MM;
+    expectBoxFaces(onlySolid(defaultModelSpecs.cube).mesh, [a, a, a]);
   });
 
   it('is deterministic', () => {
-    const first = generateModel(kernel, defaultModelSpecs.cube).solids[0]?.mesh;
-    const second = generateModel(kernel, defaultModelSpecs.cube).solids[0]?.mesh;
-    expect(second).toEqual(first);
+    expect(onlySolid(defaultModelSpecs.cube).mesh).toEqual(onlySolid(defaultModelSpecs.cube).mesh);
   });
 
   it.each([
@@ -95,68 +116,130 @@ describe('generateModel for a cube', () => {
     ['negative', cube(-80)],
     ['NaN', cube(Number.NaN)],
     ['infinite', cube(Number.POSITIVE_INFINITY)],
-    ['independent dimensions', { shape: { kind: 'cube', width: 1, height: 2 }, scale: { unitLengthMm: 80 } }],
-    ['an unknown shape', { shape: { kind: 'torus' }, scale: { unitLengthMm: 80 } }],
+    ['independent dimensions', { shape: { kind: 'cube', width: 1, height: 2 }, scale: scale(80) }],
+    ['an unknown shape', { shape: { kind: 'torus' }, scale: scale(80) }],
     ['a missing scale', { shape: { kind: 'cube' } }],
   ])('rejects a %s specification before allocating geometry', (_, spec) => {
     const cubeConstructor = vi.spyOn(kernel.Manifold, 'cube');
     expect(() => generateModel(kernel, spec as ModelSpec)).toThrow(InvalidModelSpecError);
     expect(cubeConstructor).not.toHaveBeenCalled();
   });
+});
 
-  describe('releases Manifold objects', () => {
-    // Instances use the embind prototype, which differs from the wrapper's `Manifold.prototype`.
-    function instancePrototype(): Manifold {
-      const probe = kernel.Manifold.cube(1);
-      const prototype = Object.getPrototypeOf(probe) as Manifold;
-      probe.delete();
-      return prototype;
-    }
+describe('generateModel for a rectangular cuboid', () => {
+  it('builds the default 40 × 60 × 80 mm cuboid (b/a = 1.5, c/a = 2, L = 80 mm) on the build plate', () => {
+    const { kind, solids } = generateModel(kernel, defaultModelSpecs.cuboid);
+    expect(kind).toBe('cuboid');
+    expect(solids.map((solid) => solid.name)).toEqual(['cuboid']);
+    expect(solids[0]?.measurements.bounds).toEqual({ min: [-20, -30, 0], max: [20, 30, 80] });
+    expect(boxEdgeLengthsMm(defaultModelSpecs.cuboid.shape, defaultModelSpecs.cuboid.scale)).toEqual([40, 60, 80]);
+  });
 
-    function trackCreatedManifolds(): { created: Manifold[]; prototype: Manifold } {
-      const created: Manifold[] = [];
-      const record = <T extends Manifold>(manifold: T): T => {
-        created.push(manifold);
-        return manifold;
-      };
-      const prototype = instancePrototype();
-      const { cube: originalCube } = kernel.Manifold;
-      const { translate, scale } = prototype;
-      vi.spyOn(kernel.Manifold, 'cube').mockImplementation((...args) => record(originalCube.apply(kernel.Manifold, args)));
-      vi.spyOn(prototype, 'translate').mockImplementation(function (this: Manifold, ...args) {
-        return record(translate.apply(this, args));
-      });
-      vi.spyOn(prototype, 'scale').mockImplementation(function (this: Manifold, ...args) {
-        return record(scale.apply(this, args));
-      });
-      return { created, prototype };
-    }
+  // [b/a, c/a, L, expected a × b × c]: the longest edge is c, b, a and b respectively.
+  it.each([
+    [1.5, 2, 80, [40, 60, 80]],
+    [2.5, 0.5, 80, [32, 80, 16]],
+    [0.25, 0.5, 50, [50, 12.5, 25]],
+    [4, 0.25, 120, [30, 120, 7.5]],
+    [0.75, 3, 90, [30, 22.5, 90]],
+  ] as const)('b/a = %s, c/a = %s, L = %s mm gives a × b × c = %j mm', (widthRatio, heightRatio, longest, edges) => {
+    const spec = cuboid(widthRatio, heightRatio, longest);
+    const [a, b, c] = edges;
+    const { mesh, measurements } = onlySolid(spec);
 
-    const isDeleted = (manifold: Manifold) => (manifold as unknown as { isDeleted(): boolean }).isDeleted();
-
-    it('after successful generation', () => {
-      const { created } = trackCreatedManifolds();
-      generateModel(kernel, defaultModelSpecs.cube);
-      expect(created).toHaveLength(3);
-      expect(created.every(isDeleted)).toBe(true);
+    boxEdgeLengthsMm(spec.shape as CuboidShape, spec.scale).forEach((length, axis) => {
+      expectRelativelyClose(length, edges[axis] as number);
     });
-
-    it('when the kernel reports an invalid result', () => {
-      const { created, prototype } = trackCreatedManifolds();
-      vi.spyOn(prototype, 'status').mockReturnValue('NotManifold');
-      expect(() => generateModel(kernel, defaultModelSpecs.cube)).toThrow(GeometryError);
-      expect(created).toHaveLength(3);
-      expect(created.every(isDeleted)).toBe(true);
+    measurements.size.forEach((length, axis) => {
+      expectRelativelyClose(length, edges[axis] as number);
     });
+    expect(Math.max(...measurements.size)).toBeCloseTo(longest, 4);
+    expectRelativelyClose(measurements.volume, a * b * c);
+    expectRelativelyClose(measurements.surfaceArea, 2 * (a * b + a * c + b * c));
+    expect(measurements.bounds.min[2]).toBe(0);
+    expect(measurements.bounds.min[0]).toBeCloseTo(-measurements.bounds.max[0], 5);
+    expect(measurements.bounds.min[1]).toBeCloseTo(-measurements.bounds.max[1], 5);
+    expect(findMeshDefects(mesh)).toEqual([]);
+    expectBoxFaces(mesh, edges);
+  });
 
-    it('when a kernel operation throws midway', () => {
-      const { created, prototype } = trackCreatedManifolds();
-      vi.spyOn(prototype, 'scale').mockImplementation(() => {
-        throw new Error('out of memory');
-      });
-      expect(() => generateModel(kernel, defaultModelSpecs.cube)).toThrow('out of memory');
-      expect(created).toHaveLength(2);
-      expect(created.every(isDeleted)).toBe(true);
+  it.each([80, 37.5])('with equal ratios reproduces the cube geometry at L = %s mm', (longest) => {
+    const fromCuboid = onlySolid(cuboid(1, 1, longest));
+    const fromCube = onlySolid(cube(longest));
+    expect(sortedVertices(fromCuboid.mesh)).toEqual(sortedVertices(fromCube.mesh));
+    expect(fromCuboid.measurements).toEqual(fromCube.measurements);
+  });
+
+  it.each([
+    ['a zero ratio', cuboid(0, 2)],
+    ['a negative ratio', cuboid(1.5, -2)],
+    ['a NaN ratio', cuboid(Number.NaN, 2)],
+    ['an infinite ratio', cuboid(1.5, Number.POSITIVE_INFINITY)],
+    ['a ratio below the minimum', cuboid(0.2, 2)],
+    ['a ratio above the maximum', cuboid(1.5, 4.5)],
+    ['a missing ratio', { shape: { kind: 'cuboid', widthRatio: 1.5 }, scale: scale(80) }],
+    ['a string ratio', { shape: { kind: 'cuboid', widthRatio: '1.5', heightRatio: 2 }, scale: scale(80) }],
+  ])('rejects %s before allocating geometry', (_, spec) => {
+    const cubeConstructor = vi.spyOn(kernel.Manifold, 'cube');
+    expect(() => generateModel(kernel, spec as ModelSpec)).toThrow(InvalidModelSpecError);
+    expect(cubeConstructor).not.toHaveBeenCalled();
+  });
+});
+
+describe('releases Manifold objects', () => {
+  // Instances use the embind prototype, which differs from the wrapper's `Manifold.prototype`.
+  function instancePrototype(): Manifold {
+    const probe = kernel.Manifold.cube(1);
+    const prototype = Object.getPrototypeOf(probe) as Manifold;
+    probe.delete();
+    return prototype;
+  }
+
+  function trackCreatedManifolds(): { created: Manifold[]; prototype: Manifold } {
+    const created: Manifold[] = [];
+    const record = <T extends Manifold>(manifold: T): T => {
+      created.push(manifold);
+      return manifold;
+    };
+    const prototype = instancePrototype();
+    const { cube: originalCube } = kernel.Manifold;
+    const { translate, scale } = prototype;
+    vi.spyOn(kernel.Manifold, 'cube').mockImplementation((...args) => record(originalCube.apply(kernel.Manifold, args)));
+    vi.spyOn(prototype, 'translate').mockImplementation(function (this: Manifold, ...args) {
+      return record(translate.apply(this, args));
     });
+    vi.spyOn(prototype, 'scale').mockImplementation(function (this: Manifold, ...args) {
+      return record(scale.apply(this, args));
+    });
+    return { created, prototype };
+  }
+
+  const isDeleted = (manifold: Manifold) => (manifold as unknown as { isDeleted(): boolean }).isDeleted();
+
+  const kinds = ['cube', 'cuboid'] as const;
+
+  it.each(kinds)('after successful generation of a %s', (kind) => {
+    const { created } = trackCreatedManifolds();
+    generateModel(kernel, defaultModelSpecs[kind]);
+    expect(created).toHaveLength(3);
+    expect(created.every(isDeleted)).toBe(true);
+  });
+
+  it.each(kinds)('when the kernel reports an invalid %s', (kind) => {
+    const { created, prototype } = trackCreatedManifolds();
+    vi.spyOn(prototype, 'status').mockReturnValue('NotManifold');
+    expect(() => generateModel(kernel, defaultModelSpecs[kind])).toThrow(GeometryError);
+    expect(created).toHaveLength(3);
+    expect(created.every(isDeleted)).toBe(true);
+  });
+
+  it.each(kinds)('when a kernel operation throws midway through a %s', (kind) => {
+    const { created, prototype } = trackCreatedManifolds();
+    vi.spyOn(prototype, 'scale').mockImplementation(() => {
+      throw new Error('out of memory');
+    });
+    expect(() => generateModel(kernel, defaultModelSpecs[kind])).toThrow('out of memory');
+    expect(created).toHaveLength(2);
+    expect(created.every(isDeleted)).toBe(true);
   });
 });

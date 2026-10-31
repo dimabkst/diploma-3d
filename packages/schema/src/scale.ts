@@ -1,12 +1,14 @@
 import { z } from 'zod';
 
-// Larger models exceed any desktop printer's build volume; the bound also keeps float32 vertex precision well below 0.1 µm.
-export const MAX_UNIT_LENGTH_MM = 1000;
+export const DEFAULT_LONGEST_DIMENSION_MM = 80;
 
-// Shapes are defined in dimensionless model units. One uniform scale converts every solid of a model to millimetres,
-// so all parts cut from the same model share it. Each shape family documents which length equals one unit.
+// Larger models exceed any desktop printer's build volume; the bound also keeps float32 vertex precision well below 0.1 µm.
+export const MAX_LONGEST_DIMENSION_MM = 1000;
+
+// Shapes are defined in dimensionless model units, normalised so that their longest dimension is 1. One uniform scale,
+// the longest dimension L in millimetres, converts every solid of a model, so all parts cut from the same model share it.
 export const physicalScaleSchema = z.strictObject({
-  unitLengthMm: z.number().positive().max(MAX_UNIT_LENGTH_MM),
+  longestDimensionMm: z.number().positive().max(MAX_LONGEST_DIMENSION_MM),
 });
 
 export type PhysicalScale = z.infer<typeof physicalScaleSchema>;

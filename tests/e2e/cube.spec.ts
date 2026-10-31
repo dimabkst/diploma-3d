@@ -1,29 +1,22 @@
-import { readFile } from 'node:fs/promises';
-import { expect, type Page, test } from '@playwright/test';
-import { readThreeMf } from '../../packages/engine/src/export/three-mf.test-helper.ts';
-import { findMeshDefects, measureMesh } from '../../packages/engine/src/mesh.ts';
-
-function collectErrors(page: Page) {
-  const errors: string[] = [];
-  page.on('console', (message) => {
-    if (message.type() === 'error') errors.push(message.text());
-  });
-  page.on('pageerror', (error) => errors.push(error.message));
-  return errors;
-}
-
-const viewport = (page: Page) => page.locator('[data-preview-status]');
-const downloadButton = (page: Page) => page.getByRole('button', { name: 'Завантажити 3MF' });
+import { expect, test } from '@playwright/test';
+import {
+  collectErrors,
+  downloadButton,
+  downloadThreeMf,
+  expectPreviewOf,
+  type ModelViewerElement,
+  modelViewer,
+  previewViewport,
+  shapeSelect,
+} from './helpers.ts';
 
 test('cube: selection, interactive preview and a valid 80 mm 3MF download', async ({ page }) => {
   const errors = collectErrors(page);
   await page.goto('/');
 
-  await page.getByLabel('Геометричне тіло', { exact: true }).selectOption('cube');
-  await expect(viewport(page)).toHaveAttribute('data-preview-status', 'loaded', { timeout: 30_000 });
-  type Orbit = { theta: number; radius: number };
-  type ModelViewerElement = { loaded: boolean; getCameraOrbit(): Orbit };
-  const viewer = page.locator('model-viewer');
+  await shapeSelect(page).selectOption('cube');
+  await expectPreviewOf(page, 'Куб · 80 × 80 × 80 мм');
+  const viewer = modelViewer(page);
   await expect.poll(() => viewer.evaluate((element) => (element as unknown as ModelViewerElement).loaded)).toBe(true);
   const orbit = () => viewer.evaluate((element) => (element as unknown as ModelViewerElement).getCameraOrbit());
   const initial = await orbit();
@@ -37,21 +30,10 @@ test('cube: selection, interactive preview and a valid 80 mm 3MF download', asyn
   await page.mouse.wheel(0, -400);
   await expect.poll(async () => (await orbit()).radius).toBeLessThan(initial.radius);
 
-  await expect(page.getByText('Фігура: Куб · 80 × 80 × 80 мм')).toBeVisible();
   await expect(page.getByRole('definition').filter({ hasText: /^80 мм$/ })).toBeVisible();
 
-  await expect(downloadButton(page)).toBeEnabled();
-  const [download] = await Promise.all([page.waitForEvent('download'), downloadButton(page).click()]);
-  expect(download.suggestedFilename()).toBe('cube.3mf');
-
-  const { model } = readThreeMf(new Uint8Array(await readFile(await download.path())));
-  expect(model.unit).toBe('millimeter');
-  expect(model.objects).toHaveLength(1);
-  expect(model.buildItems).toEqual([{ objectId: model.objects[0]?.id }]);
-  const mesh = model.objects[0]?.mesh;
-  if (mesh === undefined) throw new Error('The 3MF file contains no mesh.');
-  expect(findMeshDefects(mesh)).toEqual([]);
-  const measurements = measureMesh(mesh);
+  const { fileName, measurements } = await downloadThreeMf(page);
+  expect(fileName).toBe('cube.3mf');
   expect(measurements.size).toEqual([80, 80, 80]);
   expect(measurements.volume).toBeCloseTo(512_000, 3);
 
@@ -70,6 +52,6 @@ test('cube: a failed geometry module download shows an error and can be retried'
 
   await page.unroute(WASM_REQUEST);
   await page.getByRole('button', { name: 'Спробувати ще раз' }).click();
-  await expect(viewport(page)).toHaveAttribute('data-preview-status', 'loaded', { timeout: 30_000 });
+  await expect(previewViewport(page)).toHaveAttribute('data-preview-status', 'loaded', { timeout: 30_000 });
   await expect(downloadButton(page)).toBeEnabled();
 });

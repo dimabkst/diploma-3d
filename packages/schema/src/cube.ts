@@ -1,8 +1,6 @@
 import { z } from 'zod';
 
-export const DEFAULT_CUBE_EDGE_LENGTH_MM = 80;
-
-// A cube has no independent shape parameters: its edge is one model unit, so the scale's unit length is the edge length.
+// A cube has no independent shape parameters: all edges are equal, so each edge is the longest dimension L.
 export const cubeShapeSchema = z.strictObject({
   kind: z.literal('cube'),
 });

@@ -1,5 +1,5 @@
 <script lang="ts">
-import type { ModelState } from '../model/modelState.ts';
+import { type ModelState, visibleArtifacts } from '../model/modelState.ts';
 import { formatSize } from '../shapes.ts';
 import Button from './Button.svelte';
 import ModelViewer from './ModelViewer.svelte';
@@ -22,10 +22,17 @@ let {
 let loadedGlb = $state.raw<Uint8Array<ArrayBuffer>>();
 let failedGlb = $state.raw<Uint8Array<ArrayBuffer>>();
 
-const glb = $derived(model.status === 'ready' ? model.artifacts.previewGlb : undefined);
+const glb = $derived(visibleArtifacts(model)?.previewGlb);
 const previewStatus = $derived(
-  glb === undefined ? 'waiting' : glb === failedGlb ? 'failed' : glb === loadedGlb ? 'loaded' : 'loading',
+  model.status !== 'ready' ? model.status : glb === failedGlb ? 'failed' : glb === loadedGlb ? 'loaded' : 'loading',
 );
+// Without a GLB the viewer is removed; the next one starts empty.
+$effect.pre(() => {
+  if (glb === undefined) loadedGlb = undefined;
+});
+
+// Whether some earlier model is already on screen, so an update needs only a small indicator instead of an overlay.
+const showsPreview = $derived(glb !== undefined && loadedGlb !== undefined && failedGlb !== glb);
 const size = $derived(model.status === 'ready' ? model.artifacts.model.solids[0]?.measurements.size : undefined);
 </script>
 
@@ -34,33 +41,44 @@ const size = $derived(model.status === 'ready' ? model.artifacts.model.solids[0]
     <SectionHeading id="preview-heading" step="03" title="3D-перегляд" />
     <div class="unit-badge"><StatusBadge label="мм" /></div>
   </div>
-  <div class="viewport" data-preview-status={previewStatus} aria-busy={previewStatus === 'loading' || model.status === 'generating'}>
+  <div
+    class="viewport"
+    data-preview-status={previewStatus}
+    aria-busy={previewStatus === 'loading' || previewStatus === 'generating'}
+  >
     <div class="grid" aria-hidden="true"></div>
     {#if glb !== undefined}
-      {#key glb}
+      <div class={['viewer-layer', { outdated: model.status === 'invalid' }]}>
         <ModelViewer
           {glb}
           alt={`Інтерактивна 3D-модель: ${shapeName.toLowerCase()}`}
-          onload={() => (loadedGlb = glb)}
-          onerror={() => (failedGlb = glb)}
+          onload={(loaded) => (loadedGlb = loaded)}
+          onerror={(failed) => (failedGlb = failed)}
         />
-      {/key}
+      </div>
     {/if}
 
-    {#if model.status === 'generating'}
+    {#if (previewStatus === 'generating' || previewStatus === 'loading') && showsPreview}
+      <div class="viewport-badge" role="status"><StatusBadge label="Оновлення…" /></div>
+    {:else if previewStatus === 'generating'}
       <div class="viewport-status" role="status">
         <strong>Створення моделі…</strong>
         <span>Обчислюємо геометрію та готуємо файли.</span>
+      </div>
+    {:else if previewStatus === 'loading'}
+      <div class="viewport-status" role="status">
+        <strong>Завантаження 3D-перегляду…</strong>
+      </div>
+    {:else if model.status === 'invalid'}
+      <div class="viewport-status error" role="alert">
+        <strong>Модель не оновлено</strong>
+        <span>Виправте параметри фігури, щоб створити нову модель.</span>
       </div>
     {:else if model.status === 'error'}
       <div class="viewport-status error" role="alert">
         <strong>Не вдалося створити модель</strong>
         <span>{model.message}</span>
         <div class="status-action"><Button variant="secondary" onclick={onretry}>Спробувати ще раз</Button></div>
-      </div>
-    {:else if previewStatus === 'loading'}
-      <div class="viewport-status" role="status">
-        <strong>Завантаження 3D-перегляду…</strong>
       </div>
     {:else if previewStatus === 'failed'}
       <div class="viewport-status error" role="alert">
@@ -141,6 +159,24 @@ const size = $derived(model.status === 'ready' ? model.artifacts.model.solids[0]
     bottom: 0;
     left: 50%;
     width: 1px;
+  }
+
+  .viewer-layer {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    transition: opacity 200ms ease;
+  }
+
+  .viewer-layer.outdated {
+    opacity: 0.35;
+  }
+
+  .viewport-badge {
+    position: absolute;
+    z-index: 1;
+    top: var(--space-3);
+    left: var(--space-3);
   }
 
   .viewport-status {
