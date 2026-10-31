@@ -7,7 +7,7 @@ import { loadGeometryKernel } from '../kernel.ts';
 import { cross, dot, subtract, type TriangleMesh, triangleAt, triangleCount, type Vec3, vertexAt } from '../mesh.ts';
 import { generateModel } from '../model.ts';
 import { rightTetrahedron } from '../test-fixtures.ts';
-import { createPreviewGlb, toGltfPosition } from './glb.ts';
+import { createPreviewGlb, EDGE_LIFT_RELATIVE, toGltfPosition } from './glb.ts';
 
 const TRIANGLES = 4;
 const LINES = 1;
@@ -99,26 +99,70 @@ describe('createPreviewGlb', () => {
     expect(Math.abs(sixfoldVolume / 6 / expectedVolume - 1)).toBeLessThan(1e-6);
   });
 
-  it('outlines the twelve cube edges, slightly outside the surface, but not the face diagonals', async () => {
+  it('outlines the twelve cube edges, connected at the corners just outside the surface, but not the face diagonals', async () => {
     const kernel = await loadGeometryKernel();
     const cubeMesh = generateModel(kernel, defaultModelSpecs.cube).solids[0]?.mesh as TriangleMesh;
     const { edges } = await readPrimitives(await createPreviewGlb([{ name: 'cube', mesh: cubeMesh }]));
     const endpoints = vectors(edges?.getAttribute('POSITION') ?? null);
+    // 0,2 % of the 80√3 mm diagonal, in metres.
+    const lift = (EDGE_LIFT_RELATIVE * 80 * Math.sqrt(3)) / 1000;
+    const centre = toGltfPosition([0, 0, 40]);
     const corners = Array.from({ length: cubeMesh.positions.length / 3 }, (_, vertex) =>
       toGltfPosition(vertexAt(cubeMesh, vertex)),
     );
-    const distanceToNearestCorner = (point: Vec3) => Math.min(...corners.map((corner) => Math.hypot(...subtract(point, corner))));
 
     expect(endpoints).toHaveLength(24);
     for (let index = 0; index < endpoints.length; index += 2) {
       const delta = subtract(endpoints[index + 1] as Vec3, endpoints[index] as Vec3).map(Math.abs);
       expect(delta.filter((component) => component > 1e-9)).toHaveLength(1);
-      expect(Math.max(...delta)).toBeCloseTo(0.08, METRE_DIGITS);
+      expect(Math.max(...delta)).toBeCloseTo(0.08 + 2 * lift, METRE_DIGITS);
     }
+    // Every corner has a single lifted point, lift outside each of its three faces, shared by its three edges.
+    for (const corner of corners) {
+      const [dx, dy, dz] = subtract(corner, centre);
+      const lifted: Vec3 = [corner[0] + lift * Math.sign(dx), corner[1] + lift * Math.sign(dy), corner[2] + lift * Math.sign(dz)];
+      const matches = endpoints.filter((endpoint) => Math.hypot(...subtract(endpoint, lifted)) < 1e-8);
+      expect(matches).toHaveLength(3);
+    }
+  });
+
+  it('lifts every edge of a slanted solid the same distance off both adjacent faces and joins them at the vertices', async () => {
+    const { edges } = await readPrimitives(await createPreviewGlb([{ name: 'tetrahedron', mesh: tetrahedron }]));
+    // Back to Z-up millimetres: glTF (x, y, z) in metres is (x, −z, y) × 1000.
+    const endpoints = vectors(edges?.getAttribute('POSITION') ?? null).map(([x, y, z]): Vec3 => [x * 1000, -z * 1000, y * 1000]);
+    const lift = EDGE_LIFT_RELATIVE * Math.hypot(10, 20, 30);
+    const vertices = Array.from({ length: 4 }, (_, vertex) => vertexAt(tetrahedron, vertex));
+    const nearestVertex = (point: Vec3) =>
+      vertices.reduce(
+        (best, vertex, index) =>
+          Math.hypot(...subtract(point, vertex)) < Math.hypot(...subtract(point, vertices[best] as Vec3)) ? index : best,
+        0,
+      );
+
+    // All six edges of the tetrahedron are feature edges; three of them end at each lifted vertex.
+    expect(endpoints).toHaveLength(12);
+    const liftedVertices = new Map<number, Vec3>();
     for (const endpoint of endpoints) {
-      const distance = distanceToNearestCorner(endpoint);
-      expect(distance).toBeGreaterThan(0);
-      expect(distance).toBeLessThan(0.0003);
+      const vertex = nearestVertex(endpoint);
+      const known = liftedVertices.get(vertex) ?? endpoint;
+      expect(Math.hypot(...subtract(endpoint, known))).toBeLessThan(1e-5);
+      liftedVertices.set(vertex, known);
+    }
+    expect(liftedVertices.size).toBe(4);
+
+    // A lifted vertex lies the same distance outside each face meeting there. Putting the vertices at (0, 20, 0) and
+    // (0, 0, 30) a full lift outside the slanted face (unit normal (6, 3, 2) / 7) and both coordinate planes would need
+    // offsets of √27 and √66 lifts, so they are shortened to the 3-lift cap, which scales those distances by
+    // 3/√27 and 3/√66. The right-angle vertex (√3 lifts) and the vertex (10, 0, 0) (√6 lifts) are exact.
+    const expectedDistances = [1, 1, 3 / Math.sqrt(27), 3 / Math.sqrt(66)].map((share) => share * lift);
+    for (let triangle = 0; triangle < triangleCount(tetrahedron); triangle += 1) {
+      const corners = triangleAt(tetrahedron, triangle);
+      const [a, b, c] = corners.map((vertex) => vertexAt(tetrahedron, vertex)) as [Vec3, Vec3, Vec3];
+      const normal = cross(subtract(b, a), subtract(c, a));
+      const unit = normal.map((component) => component / Math.hypot(...normal)) as unknown as Vec3;
+      for (const vertex of corners) {
+        expect(dot(unit, subtract(liftedVertices.get(vertex) as Vec3, a))).toBeCloseTo(expectedDistances[vertex] as number, 5);
+      }
     }
   });
 

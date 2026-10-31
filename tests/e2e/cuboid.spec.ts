@@ -5,9 +5,9 @@ import {
   downloadThreeMf,
   expectPreviewOf,
   expectSizesClose,
+  expectViewerBox,
   previewViewport,
   shapeSelect,
-  viewerDimensionsMm,
 } from './helpers.ts';
 
 type RatioField = 'Ширина b' | 'Висота c';
@@ -20,8 +20,6 @@ const stepButton = (page: Page, field: RatioField, action: 'зменшити' | 
   page.getByRole('button', { name: `${field}: ${action}`, exact: true });
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const NAME = 'Прямокутний паралелепіпед';
-// Covers the preview's edge lines, which are drawn slightly outside the solid.
-const VIEWER_TOLERANCE_MM = 0.5;
 
 const sizeFormat = new Intl.NumberFormat('uk-UA', { maximumFractionDigits: 1 });
 
@@ -52,13 +50,13 @@ test('cuboid: ratios drive the preview and the downloaded 3MF', async ({ page })
   await expectSynchronized(page, 'Висота c', '2');
   await expectPreviewOf(page, `${NAME} · 40 × 60 × 80 мм`);
   // Z-up a × b × c becomes glTF X × Y × Z = a × c × b: the height is the viewer's vertical axis.
-  expectSizesClose(await viewerDimensionsMm(page), [40, 80, 60], VIEWER_TOLERANCE_MM);
+  await expectViewerBox(page, [40, 60, 80]);
 
   // L / max(1, 2,5, 0,5) = 32 mm, so a × b × c = 32 × 80 × 16 mm; the width is now the longest edge.
   await widthRatio(page).fill('2,5');
   await heightRatio(page).fill('0,5');
   await expectPreviewOf(page, `${NAME} · 32 × 80 × 16 мм`);
-  expectSizesClose(await viewerDimensionsMm(page), [32, 16, 80], VIEWER_TOLERANCE_MM);
+  await expectViewerBox(page, [32, 80, 16]);
 
   const { fileName, measurements } = await downloadThreeMf(page);
   expect(fileName).toBe('cuboid.3mf');
@@ -318,7 +316,7 @@ test('cuboid: switching back to the cube restores equal edges and keeps the cubo
   await shapeSelect(page).selectOption('cube');
   await expect(widthRatio(page)).toHaveCount(0);
   await expectPreviewOf(page, 'Куб · 80 × 80 × 80 мм');
-  expectSizesClose(await viewerDimensionsMm(page), [80, 80, 80], VIEWER_TOLERANCE_MM);
+  await expectViewerBox(page, [80, 80, 80]);
   const cube = await downloadThreeMf(page);
   expect(cube.fileName).toBe('cube.3mf');
   expect(cube.measurements.size).toEqual([80, 80, 80]);

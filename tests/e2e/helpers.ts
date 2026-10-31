@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { expect, type Page } from '@playwright/test';
+import { EDGE_LIFT_RELATIVE } from '../../packages/engine/src/export/glb.ts';
 import { readThreeMf } from '../../packages/engine/src/export/three-mf.test-helper.ts';
 import { findMeshDefects, type MeshMeasurements, measureMesh } from '../../packages/engine/src/mesh.ts';
 
@@ -30,13 +31,19 @@ export async function expectPreviewOf(page: Page, summary: string): Promise<void
   await expect(downloadButton(page)).toBeEnabled();
 }
 
-/**
- * Bounding box of the model shown by model-viewer, in its Y-up frame and in millimetres. The preview's edge lines sit
- * 0.2% of the diagonal outside the solid, so callers should allow about half a millimetre.
- */
-export async function viewerDimensionsMm(page: Page): Promise<[number, number, number]> {
+/** Bounding box of the model shown by model-viewer, in its Y-up frame and in millimetres. */
+async function viewerDimensionsMm(page: Page): Promise<[number, number, number]> {
   const { x, y, z } = await modelViewer(page).evaluate((element) => (element as unknown as ModelViewerElement).getDimensions());
   return [x * 1000, y * 1000, z * 1000];
+}
+
+/**
+ * Expects the viewer to show an axis-aligned box of Z-up size [x, y, z] mm as glTF [x, z, y]. The preview's edge lines
+ * run a lift of EDGE_LIFT_RELATIVE × diagonal outside every face, which widens the shown box by two lifts per axis.
+ */
+export async function expectViewerBox(page: Page, [x, y, z]: readonly [number, number, number]): Promise<void> {
+  const lift = EDGE_LIFT_RELATIVE * Math.hypot(x, y, z);
+  expectSizesClose(await viewerDimensionsMm(page), [x + 2 * lift, z + 2 * lift, y + 2 * lift], 0.01);
 }
 
 /** Downloads the print file and returns its name with the measurements of its only, verified closed object. */
