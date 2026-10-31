@@ -12,6 +12,12 @@
     }
   },
   "dependencies": {
-    "@diploma-3d/schema": "workspace:*"
+    "@diploma-3d/schema": "workspace:*",
+    "@gltf-transform/core": "4.5.1",
+    "fflate": "0.8.3",
+    "manifold-3d": "3.5.4"
+  },
+  "devDependencies": {
+    "fast-xml-parser": "5.11.2"
   }
 }

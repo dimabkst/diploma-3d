@@ -1,0 +1,82 @@
+<script lang="ts">
+import type { Snippet } from 'svelte';
+import type { HTMLButtonAttributes } from 'svelte/elements';
+
+type Props = Omit<HTMLButtonAttributes, 'class' | 'children'> & {
+  variant?: 'primary' | 'secondary';
+  loading?: boolean;
+  children: Snippet;
+};
+
+let { variant = 'primary', loading = false, disabled = false, type = 'button', children, ...rest }: Props = $props();
+</script>
+
+<button {...rest} {type} class={['button', variant]} disabled={disabled || loading} aria-busy={loading || undefined}>
+  {#if loading}<span class="spinner" aria-hidden="true"></span>{/if}
+  {@render children()}
+</button>
+
+<style>
+  .button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    min-height: 44px;
+    padding: 0 var(--space-4);
+    border: 1px solid transparent;
+    border-radius: var(--radius-button);
+    font-family: var(--font-heading);
+    font-size: var(--text-small);
+    font-variant-ligatures: none;
+    line-height: 1.2;
+    white-space: nowrap;
+    transition:
+      background-color 200ms ease,
+      border-color 200ms ease,
+      color 200ms ease;
+  }
+
+  .primary {
+    color: var(--color-on-primary);
+    background: var(--color-primary);
+  }
+
+  .primary:hover:not(:disabled) {
+    background: var(--color-primary-hover);
+  }
+
+  .secondary {
+    color: var(--color-text);
+    background: transparent;
+    border-color: var(--color-border-strong);
+  }
+
+  .secondary:hover:not(:disabled) {
+    border-color: var(--color-text-dim);
+  }
+
+  .button:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  .button[aria-busy="true"] {
+    cursor: progress;
+  }
+
+  .spinner {
+    width: 0.875em;
+    height: 0.875em;
+    border: 2px solid currentcolor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: spin 800ms linear infinite;
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(1turn);
+    }
+  }
+</style>

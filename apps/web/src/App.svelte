@@ -1,24 +1,55 @@
 <script lang="ts">
+import { THREE_MF_MEDIA_TYPE } from '@diploma-3d/engine';
+import { defaultModelSpecs } from '@diploma-3d/schema';
 import AppHeader from './lib/components/AppHeader.svelte';
 import ControlsPanel from './lib/components/ControlsPanel.svelte';
 import PageHeading from './lib/components/PageHeading.svelte';
 import PreviewPanel from './lib/components/PreviewPanel.svelte';
-
-const shapes = [
-  { value: 'cube', label: 'Куб' },
-  { value: 'cuboid', label: 'Прямокутний паралелепіпед' },
-  { value: 'prism', label: 'Призма' },
-  { value: 'pyramid', label: 'Піраміда' },
-  { value: 'tetrahedron', label: 'Тетраедр' },
-  { value: 'sphere', label: 'Сфера' },
-  { value: 'cylinder', label: 'Циліндр' },
-  { value: 'cone', label: 'Конус' },
-] as const;
+import { saveFile } from './lib/download.ts';
+import { buildModel } from './lib/model/buildModel.ts';
+import { describeModelError, type ModelState } from './lib/model/modelState.ts';
+import { isAvailableShape, measurementItems, shapeDescriptions, shapeLabel, shapeOptions } from './lib/shapes.ts';
 
 let selectedShape = $state<string>('cube');
-let width = $state(40);
-let height = $state(40);
-const selectedShapeName = $derived(shapes.find((shape) => shape.value === selectedShape)?.label ?? '—');
+let attempt = $state(0);
+// Raw state: the artifacts hold large typed arrays that must not be wrapped in deep reactive proxies.
+let model = $state.raw<ModelState>({ status: 'generating' });
+
+const selectedKind = $derived(isAvailableShape(selectedShape) ? selectedShape : undefined);
+const selectedShapeName = $derived(shapeLabel(selectedShape));
+const measurements = $derived(
+  selectedKind === undefined
+    ? []
+    : measurementItems(selectedKind, model.status === 'ready' ? model.artifacts.model.solids[0]?.measurements : undefined),
+);
+
+let latestRequest = 0;
+
+$effect(() => {
+  void attempt;
+  const kind = selectedKind;
+  const request = ++latestRequest;
+  if (kind === undefined) {
+    model = { status: 'error', message: 'Ця фігура ще недоступна.' };
+    return;
+  }
+  model = { status: 'generating' };
+  buildModel(defaultModelSpecs[kind]).then(
+    (artifacts) => {
+      if (request === latestRequest) model = { status: 'ready', artifacts };
+    },
+    (error: unknown) => {
+      console.error(error);
+      if (request === latestRequest) model = { status: 'error', message: describeModelError(error) };
+    },
+  );
+});
+
+function downloadPrintFile() {
+  if (model.status !== 'ready') return;
+  const { fileName, bytes } = model.artifacts.printFile;
+  saveFile(bytes, fileName, THREE_MF_MEDIA_TYPE);
+}
 </script>
 
 <svelte:head>
@@ -35,8 +66,18 @@ const selectedShapeName = $derived(shapes.find((shape) => shape.value === select
   </section>
 
   <div class="workspace">
-    <ControlsPanel {shapes} bind:selectedShape bind:width bind:height />
-    <PreviewPanel shapeName={selectedShapeName} {width} {height} />
+    <ControlsPanel
+      shapes={shapeOptions}
+      bind:selectedShape
+      description={selectedKind === undefined ? '' : shapeDescriptions[selectedKind]}
+      {measurements}
+    />
+    <PreviewPanel
+      shapeName={selectedShapeName}
+      {model}
+      onretry={() => (attempt += 1)}
+      ondownload={downloadPrintFile}
+    />
   </div>
 </main>
 
