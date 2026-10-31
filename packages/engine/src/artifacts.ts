@@ -13,6 +13,6 @@ export interface ModelArtifacts {
 /** Preview and print file are both derived from the single validated mesh set of `generateModel`. */
 export async function buildModelArtifacts(kernel: GeometryKernel, spec: ModelSpec): Promise<ModelArtifacts> {
   const model = generateModel(kernel, spec);
-  const printFile = { fileName: `${model.kind}.3mf`, bytes: createThreeMf(model.solids, { title: model.kind }) };
+  const printFile = { fileName: `${model.name}.3mf`, bytes: createThreeMf(model.solids, { title: model.name }) };
   return { model, previewGlb: await createPreviewGlb(model.solids), printFile };
 }

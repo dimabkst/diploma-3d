@@ -25,9 +25,13 @@ async function previewSurfacePositions(glb: Uint8Array): Promise<Accessor> {
 }
 
 describe('buildModelArtifacts', () => {
-  it.each(['cube', 'cuboid'] as const)('derives the %s preview and print file from the same geometry', async (kind) => {
+  it.each([
+    ['cube', 'cube.3mf'],
+    ['cuboid', 'cuboid.3mf'],
+    ['prism', 'prism-3-sided.3mf'],
+  ] as const)('derives the %s preview and print file %s from the same geometry', async (kind, fileName) => {
     const { model, previewGlb, printFile } = await buildModelArtifacts(kernel, defaultModelSpecs[kind]);
-    expect(printFile.fileName).toBe(`${kind}.3mf`);
+    expect(printFile.fileName).toBe(fileName);
 
     const printed = readThreeMf(printFile.bytes).model.objects[0]?.mesh;
     expect(printed).toEqual(model.solids[0]?.mesh);
@@ -95,10 +99,64 @@ describe('buildModelArtifacts', () => {
     });
   });
 
+  describe('for a hexagonal prism with h/a = 0,5', () => {
+    // The hexagon is two edges wide, so a = 80 / 2 = 40 mm, h = 20 mm and the base is 40√3 mm deep.
+    const spec: ModelSpec = { shape: { kind: 'prism', baseSides: 6, heightRatio: 0.5 }, scale: { longestDimensionMm: 80 } };
+    const a = 40;
+    const h = 20;
+    const baseArea = ((3 * Math.sqrt(3)) / 2) * a ** 2;
+
+    it('exports prism-6-sided.3mf as one closed object in millimetres with the analytic size, volume and area', async () => {
+      const { printFile } = await buildModelArtifacts(kernel, spec);
+      const { model } = readThreeMf(printFile.bytes);
+
+      expect(printFile.fileName).toBe('prism-6-sided.3mf');
+      expect(model.unit).toBe('millimeter');
+      expect(model.objects.map(({ name, type }) => ({ name, type }))).toEqual([{ name: 'prism-6-sided', type: 'model' }]);
+      const mesh = model.objects[0]?.mesh;
+      if (mesh === undefined) throw new Error('No exported mesh');
+      expect(findMeshDefects(mesh)).toEqual([]);
+      const measurements = measureMesh(mesh);
+      expect(measurements.bounds.min[2]).toBe(0);
+      [2 * a, Math.sqrt(3) * a, h].forEach((size, axis) => {
+        expect(measurements.size[axis]).toBeCloseTo(size, 4);
+      });
+      expect(measurements.volume / (baseArea * h)).toBeCloseTo(1, 6);
+      expect(measurements.surfaceArea / (2 * baseArea + 6 * a * h)).toBeCloseTo(1, 6);
+    });
+
+    it('previews the height in glTF Y and the base depth in glTF Z, in metres and outward-oriented', async () => {
+      const { previewGlb } = await buildModelArtifacts(kernel, spec);
+      const positions = await previewSurfacePositions(previewGlb);
+      const points = Array.from(
+        { length: positions.getCount() },
+        (_, index) => positions.getElement(index, []) as unknown as Vec3,
+      );
+      const extent = (axis: 0 | 1 | 2) => [Math.min(...points.map((p) => p[axis])), Math.max(...points.map((p) => p[axis]))];
+      const halfDepth = (Math.sqrt(3) * a) / 2 / 1000;
+      [
+        [-0.04, 0.04],
+        [0, h / 1000],
+        [-halfDepth, halfDepth],
+      ].forEach(([min, max], axis) => {
+        const [actualMin, actualMax] = extent(axis as 0 | 1 | 2);
+        expect(actualMin).toBeCloseTo(min as number, METRE_DIGITS);
+        expect(actualMax).toBeCloseTo(max as number, METRE_DIGITS);
+      });
+      let sixfoldVolume = 0;
+      for (let corner = 0; corner < points.length; corner += 3) {
+        const [p, q, r] = points.slice(corner, corner + 3) as [Vec3, Vec3, Vec3];
+        sixfoldVolume += dot(p, cross(q, r));
+      }
+      expect(sixfoldVolume / 6 / ((baseArea * h) / 1e9)).toBeCloseTo(1, 5);
+    });
+  });
+
   it.each([
     ['cube', { shape: { kind: 'cube' }, scale: { longestDimensionMm: -1 } }],
     ['cuboid', { shape: { kind: 'cuboid', widthRatio: 5, heightRatio: 2 }, scale: { longestDimensionMm: 80 } }],
-  ] as const)('produces no %s artifacts for invalid input', async (_, invalid: ModelSpec) => {
-    await expect(buildModelArtifacts(kernel, invalid)).rejects.toBeInstanceOf(InvalidModelSpecError);
+    ['prism', { shape: { kind: 'prism', baseSides: 8, heightRatio: 2 }, scale: { longestDimensionMm: 80 } }],
+  ] as const)('produces no %s artifacts for invalid input', async (_, invalid) => {
+    await expect(buildModelArtifacts(kernel, invalid as unknown as ModelSpec)).rejects.toBeInstanceOf(InvalidModelSpecError);
   });
 });

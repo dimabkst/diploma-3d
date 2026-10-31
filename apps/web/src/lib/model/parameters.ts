@@ -1,18 +1,25 @@
 import {
-  CUBOID_RATIO_LIMITS,
-  cuboidRatioSchema,
   defaultModelSpecs,
   type ModelSpec,
   modelSpecSchema,
   type PhysicalScale,
+  type PrismBaseSides,
+  RATIO_LIMITS,
+  ratioSchema,
   type ShapeKind,
 } from '@diploma-3d/schema';
 import { formatDecimal, parseDecimal } from '../decimal.ts';
 
-export type ParameterKey = 'widthRatio' | 'heightRatio';
+/** Ratio fields, kept per shape so that switching shapes never carries a value into a different meaning. */
+export type ParameterKey = 'cuboidWidthRatio' | 'cuboidHeightRatio' | 'prismHeightRatio';
 
 /** Raw field text, kept separately from parsed values so that empty and partially typed input stays editable. */
 export type ParameterTexts = Record<ParameterKey, string>;
+
+/** Parameters picked from fixed options. */
+export type ParameterChoices = { prismBaseSides: PrismBaseSides };
+
+export type ChoiceKey = keyof ParameterChoices;
 
 export type ParameterErrors = Partial<Record<ParameterKey, string>>;
 
@@ -26,39 +33,60 @@ export type ModelRequest = {
 } & ({ readonly spec: ModelSpec; readonly key: string } | { readonly spec: undefined; readonly key: undefined });
 
 export const initialParameterTexts = (): ParameterTexts => ({
-  widthRatio: formatDecimal(defaultModelSpecs.cuboid.shape.widthRatio),
-  heightRatio: formatDecimal(defaultModelSpecs.cuboid.shape.heightRatio),
+  cuboidWidthRatio: formatDecimal(defaultModelSpecs.cuboid.shape.widthRatio),
+  cuboidHeightRatio: formatDecimal(defaultModelSpecs.cuboid.shape.heightRatio),
+  prismHeightRatio: formatDecimal(defaultModelSpecs.prism.shape.heightRatio),
+});
+
+export const initialParameterChoices = (): ParameterChoices => ({
+  prismBaseSides: defaultModelSpecs.prism.shape.baseSides,
 });
 
 export function validateRatio(text: string): { value: number } | { error: string } {
   if (text.trim() === '') return { error: 'Введіть значення.' };
   const value = parseDecimal(text);
   if (value === undefined) return { error: 'Введіть число, наприклад 1,5.' };
-  if (!cuboidRatioSchema.safeParse(value).success) {
-    return {
-      error: `Допустимі значення — від ${formatDecimal(CUBOID_RATIO_LIMITS.min)} до ${formatDecimal(CUBOID_RATIO_LIMITS.max)}.`,
-    };
+  if (!ratioSchema.safeParse(value).success) {
+    return { error: `Допустимі значення — від ${formatDecimal(RATIO_LIMITS.min)} до ${formatDecimal(RATIO_LIMITS.max)}.` };
   }
   return { value };
 }
 
-/** Turns the selected shape and field texts into a validated specification, or field errors when it is not valid. */
-export function resolveModelRequest(kind: ShapeKind, texts: ParameterTexts): ModelRequest {
+function validateRatios(
+  keys: readonly ParameterKey[],
+  texts: ParameterTexts,
+): { values: ParameterValues; errors: ParameterErrors } {
+  const values: ParameterValues = {};
+  const errors: ParameterErrors = {};
+  for (const key of keys) {
+    const result = validateRatio(texts[key]);
+    if ('error' in result) errors[key] = result.error;
+    else values[key] = result.value;
+  }
+  return { values, errors };
+}
+
+/**
+ * Turns the selected shape, field texts and choices into a validated specification, or field errors when it is not
+ * valid. Only the fields of the selected shape are read.
+ */
+export function resolveModelRequest(kind: ShapeKind, texts: ParameterTexts, choices: ParameterChoices): ModelRequest {
   const { scale } = defaultModelSpecs[kind];
   switch (kind) {
     case 'cube':
       return withKey({ shape: { kind }, scale }, {});
     case 'cuboid': {
-      const width = validateRatio(texts.widthRatio);
-      const height = validateRatio(texts.heightRatio);
-      const values: ParameterValues = {};
-      const errors: ParameterErrors = {};
-      if ('error' in width) errors.widthRatio = width.error;
-      else values.widthRatio = width.value;
-      if ('error' in height) errors.heightRatio = height.error;
-      else values.heightRatio = height.value;
-      if ('error' in width || 'error' in height) return { scale, values, errors, spec: undefined, key: undefined };
-      return withKey({ shape: { kind, widthRatio: width.value, heightRatio: height.value }, scale }, values);
+      const { values, errors } = validateRatios(['cuboidWidthRatio', 'cuboidHeightRatio'], texts);
+      const { cuboidWidthRatio: widthRatio, cuboidHeightRatio: heightRatio } = values;
+      if (widthRatio === undefined || heightRatio === undefined)
+        return { scale, values, errors, spec: undefined, key: undefined };
+      return withKey({ shape: { kind, widthRatio, heightRatio }, scale }, values);
+    }
+    case 'prism': {
+      const { values, errors } = validateRatios(['prismHeightRatio'], texts);
+      const { prismHeightRatio: heightRatio } = values;
+      if (heightRatio === undefined) return { scale, values, errors, spec: undefined, key: undefined };
+      return withKey({ shape: { kind, baseSides: choices.prismBaseSides, heightRatio }, scale }, values);
     }
   }
 }

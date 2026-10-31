@@ -1,7 +1,15 @@
-import type { MeshMeasurements, Vec3 } from '@diploma-3d/engine';
-import { CUBOID_RATIO_LIMITS, defaultModelSpecs, type PhysicalScale, type ShapeKind } from '@diploma-3d/schema';
+import { boxEdgeLengthsMm, type MeshMeasurements, prismDimensionsMm, regularPolygonArea } from '@diploma-3d/engine';
+import {
+  defaultModelSpecs,
+  type PhysicalScale,
+  PRISM_BASE_SIDES,
+  type PrismBaseSides,
+  RATIO_LIMITS,
+  type Shape,
+  type ShapeKind,
+} from '@diploma-3d/schema';
 import { formatDecimal, type StepRange } from './decimal.ts';
-import type { ParameterKey } from './model/parameters.ts';
+import type { ChoiceKey, ParameterKey } from './model/parameters.ts';
 
 export type ShapeOption = {
   readonly value: string;
@@ -17,15 +25,25 @@ export type MeasurementItem = {
 };
 
 /** A multiplier field: "label [value] suffix", e.g. "Ширина b [1,5] × a", with a slider over `range`. */
-export type ParameterField = {
+export type RatioField = {
+  readonly type: 'ratio';
   readonly key: ParameterKey;
   readonly label: string;
   readonly suffix: string;
   readonly range: StepRange;
 };
 
+/** A parameter picked from fixed options, such as the base polygon. */
+export type ChoiceField = {
+  readonly type: 'choice';
+  readonly key: ChoiceKey;
+  readonly label: string;
+  readonly options: readonly { readonly value: PrismBaseSides; readonly label: string }[];
+};
+
+export type ParameterField = RatioField | ChoiceField;
+
 const plannedShapes = [
-  { value: 'prism', label: 'Призма' },
   { value: 'pyramid', label: 'Піраміда' },
   { value: 'tetrahedron', label: 'Тетраедр' },
   { value: 'sphere', label: 'Сфера' },
@@ -36,6 +54,7 @@ const plannedShapes = [
 export const shapeOptions: readonly ShapeOption[] = [
   { value: 'cube', label: 'Куб', available: true },
   { value: 'cuboid', label: 'Прямокутний паралелепіпед', available: true },
+  { value: 'prism', label: 'Правильна призма', available: true },
   ...plannedShapes.map((shape) => ({ ...shape, available: false })),
 ];
 
@@ -59,17 +78,35 @@ export function shapeDescription(kind: ShapeKind, scale: PhysicalScale): string 
       return `Куб не має окремих параметрів форми: усі ребра рівні, а всі грані — квадрати. Ребро моделі — ${formatLength(scale)}.`;
     case 'cuboid':
       return 'Усі грані — прямокутники, усі кути прямі. Ребро a — довжина, b — ширина, c — висота.';
+    case 'prism':
+      return 'Основи — рівні правильні многокутники, бічні ребра перпендикулярні до основ, а бічні грані — прямокутники.';
   }
 }
 
 // Buttons, arrow keys and the slider move ratios to multiples of 0,25; typed values keep any precision.
-const ratioRange: StepRange = { ...CUBOID_RATIO_LIMITS, increment: 0.25 };
+const ratioRange: StepRange = { ...RATIO_LIMITS, increment: 0.25 };
+
+const baseNames: Readonly<Record<PrismBaseSides, string>> = {
+  3: 'Рівносторонній трикутник',
+  4: 'Квадрат',
+  5: 'Правильний п’ятикутник',
+  6: 'Правильний шестикутник',
+};
 
 export const shapeParameters: Readonly<Record<ShapeKind, readonly ParameterField[]>> = {
   cube: [],
   cuboid: [
-    { key: 'widthRatio', label: 'Ширина b', suffix: '× a', range: ratioRange },
-    { key: 'heightRatio', label: 'Висота c', suffix: '× a', range: ratioRange },
+    { type: 'ratio', key: 'cuboidWidthRatio', label: 'Ширина b', suffix: '× a', range: ratioRange },
+    { type: 'ratio', key: 'cuboidHeightRatio', label: 'Висота c', suffix: '× a', range: ratioRange },
+  ],
+  prism: [
+    {
+      type: 'choice',
+      key: 'prismBaseSides',
+      label: 'Основа',
+      options: PRISM_BASE_SIDES.map((sides) => ({ value: sides, label: baseNames[sides] })),
+    },
+    { type: 'ratio', key: 'prismHeightRatio', label: 'Висота h', suffix: '× a', range: ratioRange },
   ],
 };
 
@@ -82,33 +119,43 @@ export function parameterHint(kind: ShapeKind, scale: PhysicalScale): string | u
         'Множники задають ширину b і висоту c відносно довжини a. ' +
         `Найбільший вимір моделі завжди дорівнює ${formatLength(scale)}, тому зміна пропорцій може змінити всі фізичні розміри.`
       );
+    case 'prism':
+      return (
+        'a — сторона основи, h — висота призми, перпендикулярна до основи. ' +
+        `Найбільший габаритний вимір завжди ${formatLength(scale)}, тому зміна основи чи висоти може змінити всі розміри.`
+      );
   }
 }
 
 /**
- * Edge lengths follow directly from the validated parameters; area and volume are measured on the generated mesh, so
- * they describe exactly the geometry that is previewed and exported.
+ * Edge lengths and the base area follow directly from the validated parameters (`shape` is undefined while they are
+ * not valid); surface area and volume are measured on the generated mesh, so they describe exactly the geometry that is
+ * previewed and exported.
  */
 export function measurementItems(
   kind: ShapeKind,
   scale: PhysicalScale,
-  edges: Vec3 | undefined,
+  shape: Shape | undefined,
   measurements: MeshMeasurements | undefined,
 ): MeasurementItem[] {
-  // A box whose longest edge is L has edges up to L, surface area up to 6L² and volume up to L³ (all reached by the
-  // cube). Formatting the bounds with one decimal gives the widest text any value can take.
+  // Every solid here fits in its bounding box with longest side L: its edges are at most L, a face at most L², the
+  // surface area at most 6L² and the volume at most L³ (convex solids inside a cube). Formatting these bounds with one
+  // decimal gives the widest text any value can take.
   const length = scale.longestDimensionMm;
   const edge = (value: number | undefined) => ({ value: formatQuantity(value, 'мм'), widest: widestQuantity(length, 'мм') });
   const area = { value: formatQuantity(measurements?.surfaceArea, 'мм²'), widest: widestQuantity(6 * length ** 2, 'мм²') };
   const volume = { value: formatQuantity(measurements?.volume, 'мм³'), widest: widestQuantity(length ** 3, 'мм³') };
   switch (kind) {
-    case 'cube':
+    case 'cube': {
+      const edges = shape?.kind === 'cube' ? boxEdgeLengthsMm(shape, scale) : undefined;
       return [
         { label: 'Ребро a', ...edge(edges?.[0]) },
         { label: 'Площа поверхні', ...area },
         { label: 'Об’єм', ...volume },
       ];
-    case 'cuboid':
+    }
+    case 'cuboid': {
+      const edges = shape?.kind === 'cuboid' ? boxEdgeLengthsMm(shape, scale) : undefined;
       return [
         { label: 'Довжина a', ...edge(edges?.[0]) },
         { label: 'Ширина b', ...edge(edges?.[1]) },
@@ -116,6 +163,19 @@ export function measurementItems(
         { label: 'Площа поверхні', ...area },
         { label: 'Об’єм', ...volume },
       ];
+    }
+    case 'prism': {
+      const dimensions = shape?.kind === 'prism' ? prismDimensionsMm(shape, scale) : undefined;
+      const baseArea =
+        shape?.kind === 'prism' && dimensions !== undefined ? regularPolygonArea(shape.baseSides, dimensions.edge) : undefined;
+      return [
+        { label: 'Сторона основи a', ...edge(dimensions?.edge) },
+        { label: 'Висота h', ...edge(dimensions?.height) },
+        { label: 'Площа основи', value: formatQuantity(baseArea, 'мм²'), widest: widestQuantity(length ** 2, 'мм²') },
+        { label: 'Площа поверхні', ...area },
+        { label: 'Об’єм', ...volume },
+      ];
+    }
   }
 }
 

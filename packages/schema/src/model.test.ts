@@ -1,15 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CUBOID_RATIO_LIMITS,
   DEFAULT_LONGEST_DIMENSION_MM,
   defaultModelSpecs,
   MAX_LONGEST_DIMENSION_MM,
   modelSpecSchema,
+  PRISM_BASE_SIDES,
+  RATIO_LIMITS,
 } from './index.ts';
 
 const scale = { longestDimensionMm: 80 };
 const cubeWithLongestDimension = (longestDimensionMm: unknown) => ({ shape: { kind: 'cube' }, scale: { longestDimensionMm } });
 const cuboid = (widthRatio: unknown, heightRatio: unknown) => ({ shape: { kind: 'cuboid', widthRatio, heightRatio }, scale });
+const prism = (baseSides: unknown, heightRatio: unknown) => ({ shape: { kind: 'prism', baseSides, heightRatio }, scale });
 
 const invalidNumbers: readonly (readonly [string, unknown])[] = [
   ['zero', 0],
@@ -29,6 +31,10 @@ describe('modelSpecSchema', () => {
     expect(modelSpecSchema.parse(defaultModelSpecs.cube)).toEqual({ shape: { kind: 'cube' }, scale });
     expect(modelSpecSchema.parse(defaultModelSpecs.cuboid)).toEqual({
       shape: { kind: 'cuboid', widthRatio: 1.5, heightRatio: 2 },
+      scale,
+    });
+    expect(modelSpecSchema.parse(defaultModelSpecs.prism)).toEqual({
+      shape: { kind: 'prism', baseSides: 3, heightRatio: 2 },
       scale,
     });
   });
@@ -62,10 +68,10 @@ describe('modelSpecSchema', () => {
 });
 
 describe('cuboid proportions', () => {
-  const { min, max } = CUBOID_RATIO_LIMITS;
+  const { min, max } = RATIO_LIMITS;
 
   it('limits both ratios to [0.25, 4]', () => {
-    expect(CUBOID_RATIO_LIMITS).toEqual({ min: 0.25, max: 4 });
+    expect(RATIO_LIMITS).toEqual({ min: 0.25, max: 4 });
   });
 
   it.each([
@@ -88,5 +94,48 @@ describe('cuboid proportions', () => {
   it('rejects absolute dimensions instead of proportions', () => {
     const result = modelSpecSchema.safeParse({ shape: { kind: 'cuboid', widthRatio: 1, heightRatio: 1, a: 40 }, scale });
     expect(result.success).toBe(false);
+  });
+});
+
+describe('regular prism parameters', () => {
+  const { min, max } = RATIO_LIMITS;
+
+  it('supports triangular, square, pentagonal and hexagonal bases', () => {
+    expect(PRISM_BASE_SIDES).toEqual([3, 4, 5, 6]);
+  });
+
+  it.each(PRISM_BASE_SIDES.flatMap((baseSides) => [min, 1.1, max].map((heightRatio) => [baseSides, heightRatio] as const)))(
+    'accepts %s base sides with h/a = %s, including the ratio boundaries',
+    (baseSides, heightRatio) => {
+      expect(modelSpecSchema.parse(prism(baseSides, heightRatio)).shape).toEqual({ kind: 'prism', baseSides, heightRatio });
+    },
+  );
+
+  it.each([
+    ['too few sides', 2],
+    ['too many sides', 7],
+    ['a non-integer side count', 3.5],
+    ['a numeric string', '3'],
+    ['NaN', Number.NaN],
+    ['null', null],
+    ['missing', undefined],
+  ])('rejects a base with %s', (_, baseSides) => {
+    expect(modelSpecSchema.safeParse(prism(baseSides, 2)).success).toBe(false);
+  });
+
+  it.each([...invalidNumbers, ['just below the minimum', min - 1e-9] as const, ['just above the maximum', max + 1e-9] as const])(
+    'rejects a height ratio that is %s, without clamping',
+    (_, ratio) => {
+      expect(modelSpecSchema.safeParse(prism(4, ratio)).success).toBe(false);
+    },
+  );
+
+  it('rejects fields of other shapes and absolute dimensions', () => {
+    expect(
+      modelSpecSchema.safeParse({ shape: { kind: 'prism', baseSides: 3, heightRatio: 2, widthRatio: 1 }, scale }).success,
+    ).toBe(false);
+    expect(modelSpecSchema.safeParse({ shape: { kind: 'prism', baseSides: 3, heightRatio: 2, a: 40 }, scale }).success).toBe(
+      false,
+    );
   });
 });

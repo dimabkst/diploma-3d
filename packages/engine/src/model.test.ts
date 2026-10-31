@@ -202,9 +202,10 @@ describe('releases Manifold objects', () => {
       return manifold;
     };
     const prototype = instancePrototype();
-    const { cube: originalCube } = kernel.Manifold;
+    const { cube: originalCube, extrude: originalExtrude } = kernel.Manifold;
     const { translate, scale } = prototype;
     vi.spyOn(kernel.Manifold, 'cube').mockImplementation((...args) => record(originalCube.apply(kernel.Manifold, args)));
+    vi.spyOn(kernel.Manifold, 'extrude').mockImplementation((...args) => record(originalExtrude.apply(kernel.Manifold, args)));
     vi.spyOn(prototype, 'translate').mockImplementation(function (this: Manifold, ...args) {
       return record(translate.apply(this, args));
     });
@@ -216,30 +217,35 @@ describe('releases Manifold objects', () => {
 
   const isDeleted = (manifold: Manifold) => (manifold as unknown as { isDeleted(): boolean }).isDeleted();
 
-  const kinds = ['cube', 'cuboid'] as const;
+  // Boxes: cube, translate onto the build plate, scale to millimetres. Prisms: extrude, scale to millimetres.
+  const kinds = [
+    ['cube', 3],
+    ['cuboid', 3],
+    ['prism', 2],
+  ] as const;
 
-  it.each(kinds)('after successful generation of a %s', (kind) => {
+  it.each(kinds)('after successful generation of a %s', (kind, objects) => {
     const { created } = trackCreatedManifolds();
     generateModel(kernel, defaultModelSpecs[kind]);
-    expect(created).toHaveLength(3);
+    expect(created).toHaveLength(objects);
     expect(created.every(isDeleted)).toBe(true);
   });
 
-  it.each(kinds)('when the kernel reports an invalid %s', (kind) => {
+  it.each(kinds)('when the kernel reports an invalid %s', (kind, objects) => {
     const { created, prototype } = trackCreatedManifolds();
     vi.spyOn(prototype, 'status').mockReturnValue('NotManifold');
     expect(() => generateModel(kernel, defaultModelSpecs[kind])).toThrow(GeometryError);
-    expect(created).toHaveLength(3);
+    expect(created).toHaveLength(objects);
     expect(created.every(isDeleted)).toBe(true);
   });
 
-  it.each(kinds)('when a kernel operation throws midway through a %s', (kind) => {
+  it.each(kinds)('when a kernel operation throws midway through a %s', (kind, objects) => {
     const { created, prototype } = trackCreatedManifolds();
     vi.spyOn(prototype, 'scale').mockImplementation(() => {
       throw new Error('out of memory');
     });
     expect(() => generateModel(kernel, defaultModelSpecs[kind])).toThrow('out of memory');
-    expect(created).toHaveLength(2);
+    expect(created).toHaveLength(objects - 1);
     expect(created.every(isDeleted)).toBe(true);
   });
 });

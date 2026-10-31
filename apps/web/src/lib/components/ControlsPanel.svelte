@@ -1,5 +1,5 @@
 <script lang="ts">
-import type { ParameterErrors, ParameterTexts, ParameterValues } from '../model/parameters.ts';
+import type { ParameterChoices, ParameterErrors, ParameterTexts, ParameterValues } from '../model/parameters.ts';
 import type { MeasurementItem, ParameterField, ShapeOption } from '../shapes.ts';
 import Field from './Field.svelte';
 import MeasurementList from './MeasurementList.svelte';
@@ -12,6 +12,7 @@ let {
   description,
   fields,
   texts = $bindable(),
+  choices = $bindable(),
   values,
   errors,
   parameterHint,
@@ -22,6 +23,7 @@ let {
   description: string;
   fields: readonly ParameterField[];
   texts: ParameterTexts;
+  choices: ParameterChoices;
   values: ParameterValues;
   errors: ParameterErrors;
   parameterHint: string | undefined;
@@ -50,16 +52,26 @@ let {
       {#if fields.length > 0}
         <div class="field-grid">
           {#each fields as field (field.key)}
-            <NumberField
-              id={field.key}
-              label={field.label}
-              bind:text={texts[field.key]}
-              value={values[field.key]}
-              range={field.range}
-              suffix={field.suffix}
-              error={errors[field.key]}
-              describedBy={parameterHint === undefined ? undefined : 'parameter-hint'}
-            />
+            {#if field.type === 'choice'}
+              <Field label={field.label} forId={field.key}>
+                <select id={field.key} bind:value={choices[field.key]}>
+                  {#each field.options as option (option.value)}
+                    <option value={option.value}>{option.label}</option>
+                  {/each}
+                </select>
+              </Field>
+            {:else}
+              <NumberField
+                id={field.key}
+                label={field.label}
+                bind:text={texts[field.key]}
+                value={values[field.key]}
+                range={field.range}
+                suffix={field.suffix}
+                error={errors[field.key]}
+                describedBy={parameterHint === undefined ? undefined : 'parameter-hint'}
+              />
+            {/if}
           {/each}
         </div>
       {/if}

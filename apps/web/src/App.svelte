@@ -1,5 +1,5 @@
 <script lang="ts">
-import { boxEdgeLengthsMm, THREE_MF_MEDIA_TYPE } from '@diploma-3d/engine';
+import { THREE_MF_MEDIA_TYPE } from '@diploma-3d/engine';
 import { untrack } from 'svelte';
 import AppHeader from './lib/components/AppHeader.svelte';
 import ControlsPanel from './lib/components/ControlsPanel.svelte';
@@ -8,7 +8,7 @@ import PreviewPanel from './lib/components/PreviewPanel.svelte';
 import { saveFile } from './lib/download.ts';
 import { buildModel } from './lib/model/buildModel.ts';
 import { describeModelError, type ModelState, visibleArtifacts } from './lib/model/modelState.ts';
-import { initialParameterTexts, resolveModelRequest } from './lib/model/parameters.ts';
+import { initialParameterChoices, initialParameterTexts, resolveModelRequest } from './lib/model/parameters.ts';
 import {
   isAvailableShape,
   measurementItems,
@@ -24,13 +24,16 @@ const EDIT_DEBOUNCE_MS = 150;
 
 let selectedShape = $state<string>('cube');
 let parameterTexts = $state(initialParameterTexts());
+let parameterChoices = $state(initialParameterChoices());
 let attempt = $state(0);
 // Raw state: the artifacts hold large typed arrays that must not be wrapped in deep reactive proxies.
 let model = $state.raw<ModelState>({ status: 'generating', stale: undefined });
 
 const selectedKind = $derived(isAvailableShape(selectedShape) ? selectedShape : undefined);
 const selectedShapeName = $derived(shapeLabel(selectedShape));
-const request = $derived(selectedKind === undefined ? undefined : resolveModelRequest(selectedKind, parameterTexts));
+const request = $derived(
+  selectedKind === undefined ? undefined : resolveModelRequest(selectedKind, parameterTexts, parameterChoices),
+);
 // Texts that denote the same specification ("1,5" and "1.50") share a key and do not trigger a rebuild.
 const requestKey = $derived(request?.key);
 const description = $derived(
@@ -41,9 +44,8 @@ const hint = $derived(
 );
 const measurements = $derived.by(() => {
   if (selectedKind === undefined || request === undefined) return [];
-  const edges = request.spec === undefined ? undefined : boxEdgeLengthsMm(request.spec.shape, request.spec.scale);
   const ready = model.status === 'ready' && model.key === requestKey ? model.artifacts : undefined;
-  return measurementItems(selectedKind, request.scale, edges, ready?.model.solids[0]?.measurements);
+  return measurementItems(selectedKind, request.scale, request.spec?.shape, ready?.model.solids[0]?.measurements);
 });
 
 let latestRequest = 0;
@@ -112,6 +114,7 @@ function downloadPrintFile() {
       {description}
       fields={selectedKind === undefined ? [] : shapeParameters[selectedKind]}
       bind:texts={parameterTexts}
+      bind:choices={parameterChoices}
       values={request?.values ?? {}}
       errors={request?.errors ?? {}}
       parameterHint={hint}

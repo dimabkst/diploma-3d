@@ -259,7 +259,7 @@ function onsliderinput(event: Event & { currentTarget: HTMLInputElement }) {
     justify-content: space-between;
     color: var(--color-text-dim);
     font-family: var(--font-heading);
-    font-size: var(--text-tiny);
+    font-size: var(--text-small);
     font-variant-ligatures: none;
     font-variant-numeric: tabular-nums;
     line-height: 1.2;

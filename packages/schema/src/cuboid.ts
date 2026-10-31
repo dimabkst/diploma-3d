@@ -1,9 +1,5 @@
 import { z } from 'zod';
-
-// Practical application limits for this version, not geometric ones; adjust them here only.
-export const CUBOID_RATIO_LIMITS = { min: 0.25, max: 4 } as const;
-
-export const cuboidRatioSchema = z.number().min(CUBOID_RATIO_LIMITS.min).max(CUBOID_RATIO_LIMITS.max);
+import { ratioSchema } from './ratio.ts';
 
 /**
  * Rectangular cuboid with edges a, b, c along X, Y, Z (Z is the height) and all angles 90°. Its shape is given by two
@@ -11,8 +7,8 @@ export const cuboidRatioSchema = z.number().min(CUBOID_RATIO_LIMITS.min).max(CUB
  */
 export const cuboidShapeSchema = z.strictObject({
   kind: z.literal('cuboid'),
-  widthRatio: cuboidRatioSchema,
-  heightRatio: cuboidRatioSchema,
+  widthRatio: ratioSchema,
+  heightRatio: ratioSchema,
 });
 
 export type CuboidShape = z.infer<typeof cuboidShapeSchema>;
