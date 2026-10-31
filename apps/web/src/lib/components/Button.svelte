@@ -4,14 +4,30 @@ import type { HTMLButtonAttributes } from 'svelte/elements';
 
 type Props = Omit<HTMLButtonAttributes, 'class' | 'children'> & {
   variant?: 'primary' | 'secondary';
+  /** `icon`: a square button for a single icon; it needs an `aria-label`. */
+  size?: 'default' | 'icon';
   loading?: boolean;
   children: Snippet;
 };
 
-let { variant = 'primary', loading = false, disabled = false, type = 'button', children, ...rest }: Props = $props();
+let {
+  variant = 'primary',
+  size = 'default',
+  loading = false,
+  disabled = false,
+  type = 'button',
+  children,
+  ...rest
+}: Props = $props();
 </script>
 
-<button {...rest} {type} class={['button', variant]} disabled={disabled || loading} aria-busy={loading || undefined}>
+<button
+  {...rest}
+  {type}
+  class={['button', variant, size]}
+  disabled={disabled || loading}
+  aria-busy={loading || undefined}
+>
   {#if loading}<span class="spinner" aria-hidden="true"></span>{/if}
   {@render children()}
 </button>
@@ -35,6 +51,12 @@ let { variant = 'primary', loading = false, disabled = false, type = 'button', c
       background-color 200ms ease,
       border-color 200ms ease,
       color 200ms ease;
+  }
+
+  .icon {
+    flex: none;
+    width: 44px;
+    padding: 0;
   }
 
   .primary {

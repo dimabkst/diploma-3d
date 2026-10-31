@@ -4,8 +4,10 @@ import {
   defaultModelSpecs,
   type ModelSpec,
   modelSpecSchema,
+  type PhysicalScale,
   type ShapeKind,
 } from '@diploma-3d/schema';
+import { formatDecimal, parseDecimal } from '../decimal.ts';
 
 export type ParameterKey = 'widthRatio' | 'heightRatio';
 
@@ -14,26 +16,19 @@ export type ParameterTexts = Record<ParameterKey, string>;
 
 export type ParameterErrors = Partial<Record<ParameterKey, string>>;
 
-export type ModelRequest =
-  | { readonly spec: ModelSpec; readonly key: string; readonly errors: ParameterErrors }
-  | { readonly spec: undefined; readonly key: undefined; readonly errors: ParameterErrors };
+/** Validated field values; the same numbers drive the controls and, when every field is valid, the specification. */
+export type ParameterValues = Partial<Record<ParameterKey, number>>;
 
-const decimalFormat = new Intl.NumberFormat('uk-UA', { maximumFractionDigits: 4, useGrouping: false });
-
-export const formatDecimal = (value: number): string => decimalFormat.format(value);
+export type ModelRequest = {
+  readonly scale: PhysicalScale;
+  readonly values: ParameterValues;
+  readonly errors: ParameterErrors;
+} & ({ readonly spec: ModelSpec; readonly key: string } | { readonly spec: undefined; readonly key: undefined });
 
 export const initialParameterTexts = (): ParameterTexts => ({
   widthRatio: formatDecimal(defaultModelSpecs.cuboid.shape.widthRatio),
   heightRatio: formatDecimal(defaultModelSpecs.cuboid.shape.heightRatio),
 });
-
-// Plain decimals with a comma (Ukrainian) or a point; exponents and fragments such as "-" or "," are not numbers.
-const DECIMAL_PATTERN = /^[+-]?(\d+([.,]\d*)?|[.,]\d+)$/;
-
-export function parseDecimal(text: string): number | undefined {
-  const trimmed = text.trim();
-  return DECIMAL_PATTERN.test(trimmed) ? Number(trimmed.replace(',', '.')) : undefined;
-}
 
 export function validateRatio(text: string): { value: number } | { error: string } {
   if (text.trim() === '') return { error: 'Введіть значення.' };
@@ -49,23 +44,26 @@ export function validateRatio(text: string): { value: number } | { error: string
 
 /** Turns the selected shape and field texts into a validated specification, or field errors when it is not valid. */
 export function resolveModelRequest(kind: ShapeKind, texts: ParameterTexts): ModelRequest {
+  const { scale } = defaultModelSpecs[kind];
   switch (kind) {
     case 'cube':
-      return withKey(defaultModelSpecs.cube, {});
+      return withKey({ shape: { kind }, scale }, {});
     case 'cuboid': {
       const width = validateRatio(texts.widthRatio);
       const height = validateRatio(texts.heightRatio);
+      const values: ParameterValues = {};
       const errors: ParameterErrors = {};
       if ('error' in width) errors.widthRatio = width.error;
+      else values.widthRatio = width.value;
       if ('error' in height) errors.heightRatio = height.error;
-      if ('error' in width || 'error' in height) return { spec: undefined, key: undefined, errors };
-      const shape = { kind, widthRatio: width.value, heightRatio: height.value };
-      return withKey({ shape, scale: defaultModelSpecs.cuboid.scale }, errors);
+      else values.heightRatio = height.value;
+      if ('error' in width || 'error' in height) return { scale, values, errors, spec: undefined, key: undefined };
+      return withKey({ shape: { kind, widthRatio: width.value, heightRatio: height.value }, scale }, values);
     }
   }
 }
 
-function withKey(candidate: ModelSpec, errors: ParameterErrors): ModelRequest {
+function withKey(candidate: ModelSpec, values: ParameterValues): ModelRequest {
   const spec = modelSpecSchema.parse(candidate);
-  return { spec, key: JSON.stringify(spec), errors };
+  return { scale: spec.scale, values, errors: {}, spec, key: JSON.stringify(spec) };
 }

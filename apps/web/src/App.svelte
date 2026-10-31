@@ -12,8 +12,8 @@ import { initialParameterTexts, resolveModelRequest } from './lib/model/paramete
 import {
   isAvailableShape,
   measurementItems,
-  parameterHints,
-  shapeDescriptions,
+  parameterHint,
+  shapeDescription,
   shapeLabel,
   shapeOptions,
   shapeParameters,
@@ -33,11 +33,17 @@ const selectedShapeName = $derived(shapeLabel(selectedShape));
 const request = $derived(selectedKind === undefined ? undefined : resolveModelRequest(selectedKind, parameterTexts));
 // Texts that denote the same specification ("1,5" and "1.50") share a key and do not trigger a rebuild.
 const requestKey = $derived(request?.key);
+const description = $derived(
+  selectedKind === undefined || request === undefined ? '' : shapeDescription(selectedKind, request.scale),
+);
+const hint = $derived(
+  selectedKind === undefined || request === undefined ? undefined : parameterHint(selectedKind, request.scale),
+);
 const measurements = $derived.by(() => {
-  if (selectedKind === undefined) return [];
-  const edges = request?.spec === undefined ? undefined : boxEdgeLengthsMm(request.spec.shape, request.spec.scale);
+  if (selectedKind === undefined || request === undefined) return [];
+  const edges = request.spec === undefined ? undefined : boxEdgeLengthsMm(request.spec.shape, request.spec.scale);
   const ready = model.status === 'ready' && model.key === requestKey ? model.artifacts : undefined;
-  return measurementItems(selectedKind, edges, ready?.model.solids[0]?.measurements);
+  return measurementItems(selectedKind, request.scale, edges, ready?.model.solids[0]?.measurements);
 });
 
 let latestRequest = 0;
@@ -103,11 +109,12 @@ function downloadPrintFile() {
     <ControlsPanel
       shapes={shapeOptions}
       bind:selectedShape
-      description={selectedKind === undefined ? '' : shapeDescriptions[selectedKind]}
+      {description}
       fields={selectedKind === undefined ? [] : shapeParameters[selectedKind]}
-      bind:values={parameterTexts}
+      bind:texts={parameterTexts}
+      values={request?.values ?? {}}
       errors={request?.errors ?? {}}
-      parameterHint={selectedKind === undefined ? undefined : parameterHints[selectedKind]}
+      parameterHint={hint}
       {measurements}
     />
     <PreviewPanel

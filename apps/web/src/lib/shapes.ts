@@ -1,6 +1,7 @@
 import type { MeshMeasurements, Vec3 } from '@diploma-3d/engine';
-import { CUBOID_RATIO_LIMITS, DEFAULT_LONGEST_DIMENSION_MM, defaultModelSpecs, type ShapeKind } from '@diploma-3d/schema';
-import { formatDecimal, type ParameterKey } from './model/parameters.ts';
+import { CUBOID_RATIO_LIMITS, defaultModelSpecs, type PhysicalScale, type ShapeKind } from '@diploma-3d/schema';
+import { formatDecimal, type StepRange } from './decimal.ts';
+import type { ParameterKey } from './model/parameters.ts';
 
 export type ShapeOption = {
   readonly value: string;
@@ -11,11 +12,16 @@ export type ShapeOption = {
 export type MeasurementItem = {
   readonly label: string;
   readonly value: string;
+  /** The widest text the value can take for the current scale; it reserves width so that the layout never shifts. */
+  readonly widest: string;
 };
 
+/** A multiplier field: "label [value] suffix", e.g. "Ширина b [1,5] × a", with a slider over `range`. */
 export type ParameterField = {
   readonly key: ParameterKey;
   readonly label: string;
+  readonly suffix: string;
+  readonly range: StepRange;
 };
 
 const plannedShapes = [
@@ -45,26 +51,39 @@ export const formatQuantity = (value: number | undefined, unit: string): string 
 export const formatSize = (size: readonly number[] | undefined): string =>
   size === undefined ? '— мм' : `${size.map((value) => numberFormat.format(value)).join(' × ')} мм`;
 
-const longest = `${formatDecimal(DEFAULT_LONGEST_DIMENSION_MM)} мм`;
+const formatLength = (scale: PhysicalScale): string => `${formatDecimal(scale.longestDimensionMm)} мм`;
 
-export const shapeDescriptions: Readonly<Record<ShapeKind, string>> = {
-  cube: `Куб не має окремих параметрів форми: усі ребра рівні, а всі грані — квадрати. Ребро моделі — ${longest}.`,
-  cuboid: `Ребра a, b і c напрямлені вздовж осей X, Y і Z, c — висота, усі кути прямі. Найбільший вимір моделі — ${longest}.`,
-};
+export function shapeDescription(kind: ShapeKind, scale: PhysicalScale): string {
+  switch (kind) {
+    case 'cube':
+      return `Куб не має окремих параметрів форми: усі ребра рівні, а всі грані — квадрати. Ребро моделі — ${formatLength(scale)}.`;
+    case 'cuboid':
+      return 'Усі грані — прямокутники, усі кути прямі. Ребро a — довжина, b — ширина, c — висота.';
+  }
+}
+
+// Buttons, arrow keys and the slider move ratios to multiples of 0,25; typed values keep any precision.
+const ratioRange: StepRange = { ...CUBOID_RATIO_LIMITS, increment: 0.25 };
 
 export const shapeParameters: Readonly<Record<ShapeKind, readonly ParameterField[]>> = {
   cube: [],
   cuboid: [
-    { key: 'widthRatio', label: 'Ширина, b / a' },
-    { key: 'heightRatio', label: 'Висота, c / a' },
+    { key: 'widthRatio', label: 'Ширина b', suffix: '× a', range: ratioRange },
+    { key: 'heightRatio', label: 'Висота c', suffix: '× a', range: ratioRange },
   ],
 };
 
-export const parameterHints: Readonly<Partial<Record<ShapeKind, string>>> = {
-  cuboid: `Ширину й висоту задано відносно довжини a: значення 1,5 означає b = 1,5a. Допустимо від ${formatDecimal(
-    CUBOID_RATIO_LIMITS.min,
-  )} до ${formatDecimal(CUBOID_RATIO_LIMITS.max)}.`,
-};
+export function parameterHint(kind: ShapeKind, scale: PhysicalScale): string | undefined {
+  switch (kind) {
+    case 'cube':
+      return undefined;
+    case 'cuboid':
+      return (
+        'Множники задають ширину b і висоту c відносно довжини a. ' +
+        `Найбільший вимір моделі завжди дорівнює ${formatLength(scale)}, тому зміна пропорцій може змінити всі фізичні розміри.`
+      );
+  }
+}
 
 /**
  * Edge lengths follow directly from the validated parameters; area and volume are measured on the generated mesh, so
@@ -72,25 +91,32 @@ export const parameterHints: Readonly<Partial<Record<ShapeKind, string>>> = {
  */
 export function measurementItems(
   kind: ShapeKind,
+  scale: PhysicalScale,
   edges: Vec3 | undefined,
   measurements: MeshMeasurements | undefined,
 ): MeasurementItem[] {
-  const area = formatQuantity(measurements?.surfaceArea, 'мм²');
-  const volume = formatQuantity(measurements?.volume, 'мм³');
+  // A box whose longest edge is L has edges up to L, surface area up to 6L² and volume up to L³ (all reached by the
+  // cube). Formatting the bounds with one decimal gives the widest text any value can take.
+  const length = scale.longestDimensionMm;
+  const edge = (value: number | undefined) => ({ value: formatQuantity(value, 'мм'), widest: widestQuantity(length, 'мм') });
+  const area = { value: formatQuantity(measurements?.surfaceArea, 'мм²'), widest: widestQuantity(6 * length ** 2, 'мм²') };
+  const volume = { value: formatQuantity(measurements?.volume, 'мм³'), widest: widestQuantity(length ** 3, 'мм³') };
   switch (kind) {
     case 'cube':
       return [
-        { label: 'Ребро a', value: formatQuantity(edges?.[0], 'мм') },
-        { label: 'Площа поверхні 6a²', value: area },
-        { label: 'Об’єм a³', value: volume },
+        { label: 'Ребро a', ...edge(edges?.[0]) },
+        { label: 'Площа поверхні', ...area },
+        { label: 'Об’єм', ...volume },
       ];
     case 'cuboid':
       return [
-        { label: 'Довжина a', value: formatQuantity(edges?.[0], 'мм') },
-        { label: 'Ширина b', value: formatQuantity(edges?.[1], 'мм') },
-        { label: 'Висота c', value: formatQuantity(edges?.[2], 'мм') },
-        { label: 'Площа поверхні 2(ab + ac + bc)', value: area },
-        { label: 'Об’єм abc', value: volume },
+        { label: 'Довжина a', ...edge(edges?.[0]) },
+        { label: 'Ширина b', ...edge(edges?.[1]) },
+        { label: 'Висота c', ...edge(edges?.[2]) },
+        { label: 'Площа поверхні', ...area },
+        { label: 'Об’єм', ...volume },
       ];
   }
 }
+
+const widestQuantity = (bound: number, unit: string): string => formatQuantity(Math.trunc(bound) + 0.5, unit);

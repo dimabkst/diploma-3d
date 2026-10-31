@@ -1,29 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { initialParameterTexts, parseDecimal, resolveModelRequest, validateRatio } from './parameters.ts';
-
-describe('parseDecimal', () => {
-  it.each([
-    ['1,5', 1.5],
-    ['1.5', 1.5],
-    [' 2 ', 2],
-    ['0,25', 0.25],
-    [',5', 0.5],
-    ['3.', 3],
-    ['-1', -1],
-  ])('reads "%s" as %s', (text, value) => {
-    expect(parseDecimal(text)).toBe(value);
-  });
-
-  it.each(['', ' ', '-', ',', '1,2,3', '1.5.', 'abc', '1e2', 'Infinity', 'NaN', '0x10'])('rejects "%s"', (text) => {
-    expect(parseDecimal(text)).toBeUndefined();
-  });
-});
+import { initialParameterTexts, resolveModelRequest, validateRatio } from './parameters.ts';
 
 describe('validateRatio', () => {
   it.each([
     ['0,25', 0.25],
     ['4', 4],
     ['1,5', 1.5],
+    // Values between the 0,1 stepping grid are as valid as typed.
+    ['2.05', 2.05],
+    ['1,234', 1.234],
   ])('accepts %s, including the limits', (text, value) => {
     expect(validateRatio(text)).toEqual({ value });
   });
@@ -62,6 +47,22 @@ describe('resolveModelRequest', () => {
     expect(request.spec).toBeUndefined();
     expect(request.key).toBeUndefined();
     expect(request.errors).toEqual({ widthRatio: 'Введіть значення.', heightRatio: 'Допустимі значення — від 0,25 до 4.' });
+    expect(request.values).toEqual({});
+  });
+
+  it('keeps the validated value of a correct field while the other one is being corrected', () => {
+    const partial = resolveModelRequest('cuboid', { widthRatio: '1,1', heightRatio: '-' });
+    expect(partial.spec).toBeUndefined();
+    expect(partial.values).toEqual({ widthRatio: 1.1 });
+    expect(partial.errors).toEqual({ heightRatio: 'Введіть число, наприклад 1,5.' });
+    expect(partial.scale).toEqual({ longestDimensionMm: 80 });
+  });
+
+  it('uses the exact typed values between the stepping quarters for the specification', () => {
+    const request = resolveModelRequest('cuboid', { widthRatio: '2,05', heightRatio: '1.1' });
+    expect(request.values).toEqual({ widthRatio: 2.05, heightRatio: 1.1 });
+    expect(request.spec?.shape).toEqual({ kind: 'cuboid', widthRatio: 2.05, heightRatio: 1.1 });
+    expect(request.scale).toBe(request.spec?.scale);
   });
 
   it('gives equal keys to texts that denote the same model and different keys otherwise', () => {

@@ -1,9 +1,9 @@
 <script lang="ts">
-import type { ParameterErrors, ParameterTexts } from '../model/parameters.ts';
+import type { ParameterErrors, ParameterTexts, ParameterValues } from '../model/parameters.ts';
 import type { MeasurementItem, ParameterField, ShapeOption } from '../shapes.ts';
-import DecimalInput from './DecimalInput.svelte';
 import Field from './Field.svelte';
 import MeasurementList from './MeasurementList.svelte';
+import NumberField from './NumberField.svelte';
 import SectionHeading from './SectionHeading.svelte';
 
 let {
@@ -11,7 +11,8 @@ let {
   selectedShape = $bindable(),
   description,
   fields,
-  values = $bindable(),
+  texts = $bindable(),
+  values,
   errors,
   parameterHint,
   measurements,
@@ -20,7 +21,8 @@ let {
   selectedShape: string;
   description: string;
   fields: readonly ParameterField[];
-  values: ParameterTexts;
+  texts: ParameterTexts;
+  values: ParameterValues;
   errors: ParameterErrors;
   parameterHint: string | undefined;
   measurements: readonly MeasurementItem[];
@@ -48,20 +50,21 @@ let {
       {#if fields.length > 0}
         <div class="field-grid">
           {#each fields as field (field.key)}
-            {@const error = errors[field.key]}
-            <Field label={field.label} forId={field.key} {error}>
-              <DecimalInput
-                id={field.key}
-                bind:value={values[field.key]}
-                invalid={error !== undefined}
-                describedBy={error === undefined ? undefined : `${field.key}-error`}
-              />
-            </Field>
+            <NumberField
+              id={field.key}
+              label={field.label}
+              bind:text={texts[field.key]}
+              value={values[field.key]}
+              range={field.range}
+              suffix={field.suffix}
+              error={errors[field.key]}
+              describedBy={parameterHint === undefined ? undefined : 'parameter-hint'}
+            />
           {/each}
         </div>
       {/if}
       {#if parameterHint !== undefined}
-        <p class="hint">{parameterHint}</p>
+        <p class="hint" id="parameter-hint">{parameterHint}</p>
       {/if}
       <MeasurementList items={measurements} />
       <p class="hint">Розміри наведено для файлу друку. За потреби змініть масштаб у слайсері.</p>
@@ -117,8 +120,7 @@ let {
 
   .field-grid {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--space-3);
+    gap: var(--space-4);
   }
 
   .hint {
@@ -131,10 +133,6 @@ let {
   @media (max-width: 420px) {
     .controls-panel {
       padding: var(--space-4);
-    }
-
-    .field-grid {
-      grid-template-columns: 1fr;
     }
   }
 </style>
