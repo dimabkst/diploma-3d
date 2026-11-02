@@ -155,7 +155,7 @@ describe('buildModelArtifacts', () => {
   it.each([
     ['cube', { shape: { kind: 'cube' }, scale: { longestDimensionMm: -1 } }],
     ['cuboid', { shape: { kind: 'cuboid', widthRatio: 5, heightRatio: 2 }, scale: { longestDimensionMm: 80 } }],
-    ['prism', { shape: { kind: 'prism', baseSides: 8, heightRatio: 2 }, scale: { longestDimensionMm: 80 } }],
+    ['prism', { shape: { kind: 'prism', baseSides: 9, heightRatio: 2 }, scale: { longestDimensionMm: 80 } }],
   ] as const)('produces no %s artifacts for invalid input', async (_, invalid) => {
     await expect(buildModelArtifacts(kernel, invalid as unknown as ModelSpec)).rejects.toBeInstanceOf(InvalidModelSpecError);
   });

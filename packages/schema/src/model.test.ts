@@ -100,8 +100,8 @@ describe('cuboid proportions', () => {
 describe('regular prism parameters', () => {
   const { min, max } = RATIO_LIMITS;
 
-  it('supports triangular, square, pentagonal and hexagonal bases', () => {
-    expect(PRISM_BASE_SIDES).toEqual([3, 4, 5, 6]);
+  it('supports triangular, square, pentagonal, hexagonal and octagonal bases', () => {
+    expect(PRISM_BASE_SIDES).toEqual([3, 4, 5, 6, 8]);
   });
 
   it.each(PRISM_BASE_SIDES.flatMap((baseSides) => [min, 1.1, max].map((heightRatio) => [baseSides, heightRatio] as const)))(
@@ -113,7 +113,8 @@ describe('regular prism parameters', () => {
 
   it.each([
     ['too few sides', 2],
-    ['too many sides', 7],
+    ['a side count that is not offered', 7],
+    ['too many sides', 9],
     ['a non-integer side count', 3.5],
     ['a numeric string', '3'],
     ['NaN', Number.NaN],

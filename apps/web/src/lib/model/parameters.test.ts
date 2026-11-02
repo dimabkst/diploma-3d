@@ -101,7 +101,7 @@ describe('resolveModelRequest', () => {
     });
   });
 
-  it.each([3, 4, 5, 6] as const)('builds a prism with %s base sides and keeps h/a when the base changes', (prismBaseSides) => {
+  it.each([3, 4, 5, 6, 8] as const)('builds a prism with %s base sides and keeps h/a when the base changes', (prismBaseSides) => {
     const request = resolveModelRequest('prism', texts({ prismHeightRatio: '0,75' }), { prismBaseSides });
     expect(request.spec?.shape).toEqual({ kind: 'prism', baseSides: prismBaseSides, heightRatio: 0.75 });
     expect(request.values).toEqual({ prismHeightRatio: 0.75 });

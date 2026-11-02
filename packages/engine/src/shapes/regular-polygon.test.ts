@@ -7,7 +7,7 @@ const signedArea = (vertices: readonly Vec2[]) =>
     return sum + (x * nextY - nextX * y) / 2;
   }, 0);
 
-const SIDE_COUNTS = [3, 4, 5, 6, 7, 12];
+const SIDE_COUNTS = [3, 4, 5, 6, 7, 8, 12];
 
 describe('regularPolygonVertices', () => {
   it.each(SIDE_COUNTS)('builds %s equal edges, counter-clockwise around the origin', (sides) => {
@@ -65,6 +65,18 @@ describe('regularPolygonVertices', () => {
       [-0.5, h],
       [-1, 0],
     ]);
+  });
+
+  it('builds the octagon with flat edges on all four sides, (1 + √2)·a wide and deep', () => {
+    const vertices = regularPolygonVertices(8, 2);
+    const extent = 2 * (1 + Math.SQRT2);
+    for (const axis of [0, 1] as const) {
+      const coordinates = vertices.map((vertex) => vertex[axis]);
+      expect(Math.max(...coordinates) - Math.min(...coordinates)).toBeCloseTo(extent, 12);
+      // Two vertices on each extreme line form an edge parallel to the other axis.
+      expect(coordinates.filter((value) => Math.abs(value - Math.max(...coordinates)) < 1e-12)).toHaveLength(2);
+      expect(coordinates.filter((value) => Math.abs(value - Math.min(...coordinates)) < 1e-12)).toHaveLength(2);
+    }
   });
 
   it.each([2, 1, 0, -3, 3.5, Number.NaN, Number.POSITIVE_INFINITY])('rejects %s sides', (sides) => {

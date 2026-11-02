@@ -91,6 +91,7 @@ const baseNames: Readonly<Record<PrismBaseSides, string>> = {
   4: 'Квадрат',
   5: 'Правильний п’ятикутник',
   6: 'Правильний шестикутник',
+  8: 'Правильний восьмикутник',
 };
 
 export const shapeParameters: Readonly<Record<ShapeKind, readonly ParameterField[]>> = {

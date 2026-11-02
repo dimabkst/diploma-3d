@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { ratioSchema } from './ratio.ts';
 
-export const PRISM_BASE_SIDES = [3, 4, 5, 6] as const;
+export const PRISM_BASE_SIDES = [3, 4, 5, 6, 8] as const;
 
 export type PrismBaseSides = (typeof PRISM_BASE_SIDES)[number];
 

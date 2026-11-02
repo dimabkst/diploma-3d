@@ -10,7 +10,7 @@ import {
   shapeSelect,
 } from './helpers.ts';
 
-type BaseSides = 3 | 4 | 5 | 6;
+type BaseSides = 3 | 4 | 5 | 6 | 8;
 
 const NAME = 'Правильна призма';
 const baseSelect = (page: Page) => page.getByLabel('Основа', { exact: true });
@@ -24,6 +24,7 @@ const baseNames: Readonly<Record<BaseSides, string>> = {
   4: 'Квадрат',
   5: 'Правильний п’ятикутник',
   6: 'Правильний шестикутник',
+  8: 'Правильний восьмикутник',
 };
 const chooseBase = (page: Page, sides: BaseSides) => baseSelect(page).selectOption({ label: baseNames[sides] });
 
@@ -33,6 +34,7 @@ const unitBaseExtents: Readonly<Record<BaseSides, readonly [number, number]>> = 
   4: [1, 1],
   5: [(1 + Math.sqrt(5)) / 2, (1 + Math.cos(Math.PI / 5)) / (2 * Math.sin(Math.PI / 5))],
   6: [2, Math.sqrt(3)],
+  8: [1 + Math.SQRT2, 1 + Math.SQRT2],
 };
 
 /** Base edge a, height h and the bounding box for h = ratio × a, with the longest dimension at 80 mm. */
@@ -111,6 +113,13 @@ test('prism: base and height drive the preview and the downloaded 3MF', async ({
   await expect(heightSlider(page)).toHaveValue('1.1');
   await expectPreviewOf(page, summary(5, 1.1));
   await expectDownloadedPrism(page, 5, 1.1);
+
+  // The octagon is (1 + √2)·a wide and deep; the typed height ratio stays as it was.
+  await chooseBase(page, 8);
+  await expect(heightRatio(page)).toHaveValue('1.1');
+  await expectPreviewOf(page, summary(8, 1.1));
+  await expect(measurement(page, 'Сторона основи a')).toHaveText(`${sizeFormat.format(80 / (1 + Math.SQRT2))} мм`);
+  await expectDownloadedPrism(page, 8, 1.1);
 
   expect(errors).toEqual([]);
 });
@@ -234,6 +243,7 @@ for (const [layout, width] of [
       [5, 1.25],
       [4, 4],
       [6, 1],
+      [8, 0.5],
     ] as const) {
       await chooseBase(page, sides);
       await heightRatio(page).fill(String(ratio).replace('.', ','));

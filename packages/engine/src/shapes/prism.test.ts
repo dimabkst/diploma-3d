@@ -37,13 +37,15 @@ const ABSOLUTE_TOLERANCE_MM = 1e-4;
 /**
  * Width and depth of the base with edge 1, from elementary geometry rather than from the construction: the triangle is
  * 1 wide and √3/2 deep, the pentagon's width is the diagonal φ and its depth R(1 + cos 36°) with R = 1 / (2 sin 36°),
- * and the hexagon is 2 wide (two circumradii) and √3 deep.
+ * the hexagon is 2 wide (two circumradii) and √3 deep, and the octagon, with flat edges on all four sides, is the edge
+ * plus two diagonal edges' projections, 1 + 2 · (1/√2) = 1 + √2, in both directions.
  */
 const unitBaseExtents: Readonly<Record<PrismBaseSides, readonly [number, number]>> = {
   3: [1, Math.sqrt(3) / 2],
   4: [1, 1],
   5: [(1 + Math.sqrt(5)) / 2, (1 + Math.cos(Math.PI / 5)) / (2 * Math.sin(Math.PI / 5))],
   6: [2, Math.sqrt(3)],
+  8: [1 + Math.SQRT2, 1 + Math.SQRT2],
 };
 
 /** Base edge a for the longest bounding-box dimension L. */
@@ -141,6 +143,8 @@ describe('generateModel for a regular prism', () => {
     [5, 1, 160 / (1 + Math.sqrt(5)), 160 / (1 + Math.sqrt(5))],
     [3, 4, 20, 80],
     [4, 0.5, 80, 40],
+    [8, 1, 80 / (1 + Math.SQRT2), 80 / (1 + Math.SQRT2)],
+    [8, 4, 20, 80],
   ] as const)('with %s sides and h/a = %s has a = %s mm and h = %s mm', (sides, heightRatio, a, h) => {
     const spec = prism(sides, heightRatio);
     const dimensions = prismDimensionsMm(spec.shape as PrismShape, spec.scale);
@@ -168,6 +172,7 @@ describe('generateModel for a regular prism', () => {
   it.each([
     ['2 base sides', { shape: { kind: 'prism', baseSides: 2, heightRatio: 2 } }],
     ['7 base sides', { shape: { kind: 'prism', baseSides: 7, heightRatio: 2 } }],
+    ['9 base sides', { shape: { kind: 'prism', baseSides: 9, heightRatio: 2 } }],
     ['a fractional side count', { shape: { kind: 'prism', baseSides: 4.5, heightRatio: 2 } }],
     ['a string side count', { shape: { kind: 'prism', baseSides: '4', heightRatio: 2 } }],
     ['a missing side count', { shape: { kind: 'prism', heightRatio: 2 } }],
