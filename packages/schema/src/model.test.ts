@@ -5,6 +5,7 @@ import {
   defaultModelSpecs,
   MAX_LONGEST_DIMENSION_MM,
   modelSpecSchema,
+  OFFSET_LIMITS,
   PRISM_BASE_SIDES,
   PYRAMID_BASE_SIDES,
   RATIO_LIMITS,
@@ -42,7 +43,7 @@ describe('modelSpecSchema', () => {
       scale,
     });
     expect(modelSpecSchema.parse(defaultModelSpecs.prism)).toEqual({
-      shape: { kind: 'prism', baseSides: 3, heightRatio: 2 },
+      shape: { kind: 'prism', baseSides: 3, heightRatio: 2, offsetXRatio: 0, offsetYRatio: 0 },
       scale,
     });
   });
@@ -115,7 +116,7 @@ describe('right parallelepiped parameters', () => {
 
   it('defaults to a rhombus base with α = 60° and h = a, and limits α to [15°, 165°]', () => {
     expect(modelSpecSchema.parse(defaultModelSpecs.parallelepiped)).toEqual({
-      shape: { kind: 'parallelepiped', baseSideRatio: 1, heightRatio: 1, baseAngleDeg: 60 },
+      shape: { kind: 'parallelepiped', baseSideRatio: 1, heightRatio: 1, baseAngleDeg: 60, offsetXRatio: 0, offsetYRatio: 0 },
       scale,
     });
     expect(BASE_ANGLE_LIMITS).toEqual({ min: 15, max: 165 });
@@ -134,6 +135,8 @@ describe('right parallelepiped parameters', () => {
       baseSideRatio,
       heightRatio,
       baseAngleDeg,
+      offsetXRatio: 0,
+      offsetYRatio: 0,
     });
   });
 
@@ -169,7 +172,13 @@ describe('regular prism parameters', () => {
   it.each(PRISM_BASE_SIDES.flatMap((baseSides) => [min, 1.1, max].map((heightRatio) => [baseSides, heightRatio] as const)))(
     'accepts %s base sides with h/a = %s, including the ratio boundaries',
     (baseSides, heightRatio) => {
-      expect(modelSpecSchema.parse(prism(baseSides, heightRatio)).shape).toEqual({ kind: 'prism', baseSides, heightRatio });
+      expect(modelSpecSchema.parse(prism(baseSides, heightRatio)).shape).toEqual({
+        kind: 'prism',
+        baseSides,
+        heightRatio,
+        offsetXRatio: 0,
+        offsetYRatio: 0,
+      });
     },
   );
 
@@ -200,6 +209,76 @@ describe('regular prism parameters', () => {
     expect(modelSpecSchema.safeParse({ shape: { kind: 'prism', baseSides: 3, heightRatio: 2, a: 40 }, scale }).success).toBe(
       false,
     );
+  });
+});
+
+describe('prism and parallelepiped displacement of the upper base', () => {
+  const { min, max } = OFFSET_LIMITS;
+  const withOffsets = (kind: 'prism' | 'parallelepiped', offsets: Record<string, unknown>) => ({
+    shape:
+      kind === 'prism'
+        ? { kind, baseSides: 4, heightRatio: 1, ...offsets }
+        : { kind, baseSideRatio: 1, heightRatio: 1, baseAngleDeg: 60, ...offsets },
+    scale,
+  });
+  const kinds = ['prism', 'parallelepiped'] as const;
+
+  it('limits both offsets to [−2, 2]', () => {
+    expect(OFFSET_LIMITS).toEqual({ min: -2, max: 2 });
+  });
+
+  it.each(kinds)('defaults missing %s offsets to 0, so earlier specifications keep their right solid', (kind) => {
+    expect(modelSpecSchema.parse(withOffsets(kind, {})).shape).toMatchObject({ offsetXRatio: 0, offsetYRatio: 0 });
+    expect(modelSpecSchema.parse(withOffsets(kind, { offsetYRatio: 0.5 })).shape).toMatchObject({
+      offsetXRatio: 0,
+      offsetYRatio: 0.5,
+    });
+  });
+
+  it.each(
+    kinds.flatMap((kind) =>
+      [
+        [min, max],
+        [max, min],
+        [-0.1, 0],
+        [1.1, -0.75],
+        [0, -2],
+      ].map(([x, y]) => [kind, x, y] as const),
+    ),
+  )('accepts a %s with offsets (%s, %s), including the limits and negative or off-step values', (kind, x, y) => {
+    expect(modelSpecSchema.parse(withOffsets(kind, { offsetXRatio: x, offsetYRatio: y })).shape).toMatchObject({
+      offsetXRatio: x,
+      offsetYRatio: y,
+    });
+  });
+
+  it.each(
+    kinds.flatMap((kind) =>
+      [
+        ['NaN', Number.NaN],
+        ['positive infinity', Number.POSITIVE_INFINITY],
+        ['negative infinity', Number.NEGATIVE_INFINITY],
+        ['a numeric string', '0.5'],
+        ['null', null],
+        ['just below the minimum', min - 1e-9],
+        ['just above the maximum', max + 1e-9],
+      ].map(([label, value]) => [kind, label, value] as const),
+    ),
+  )('rejects a %s offset that is %s, without clamping', (kind, _, value) => {
+    expect(modelSpecSchema.safeParse(withOffsets(kind, { offsetXRatio: value })).success).toBe(false);
+    expect(modelSpecSchema.safeParse(withOffsets(kind, { offsetYRatio: value })).success).toBe(false);
+  });
+
+  it('rejects offsets on solids without a displaceable upper base and a stored oblique flag', () => {
+    for (const shape of [
+      { kind: 'cube', offsetXRatio: 1 },
+      { kind: 'cuboid', widthRatio: 1, heightRatio: 1, offsetXRatio: 1 },
+      { kind: 'pyramid', baseSides: 4, heightRatio: 1, offsetYRatio: 1 },
+      { kind: 'cylinder', heightRatio: 2, offsetXRatio: 1 },
+    ]) {
+      expect(modelSpecSchema.safeParse({ shape, scale }).success).toBe(false);
+    }
+    expect(modelSpecSchema.safeParse(withOffsets('prism', { offsetXRatio: 1, oblique: true })).success).toBe(false);
   });
 });
 

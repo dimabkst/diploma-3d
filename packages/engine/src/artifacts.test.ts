@@ -1,4 +1,4 @@
-import { defaultModelSpecs, type ModelSpec } from '@diploma-3d/schema';
+import { defaultModelSpecs, type ModelSpecInput } from '@diploma-3d/schema';
 import { type Accessor, WebIO } from '@gltf-transform/core';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { buildModelArtifacts } from './artifacts.ts';
@@ -108,7 +108,7 @@ describe('buildModelArtifacts', () => {
   describe('for a parallelepiped with b/a = 2, h/a = 0,5 and α = 120°', () => {
     // The base is 1 + |2·cos 120°| = 2 wide and 2·sin 120° = √3 deep in units of a, so a = 40 mm, b = 80 mm, h = 20 mm
     // and the base, with area a·b·sin 120° = 1600√3 mm², spans x ∈ [−40, 40] and y ∈ [−20√3, 20√3].
-    const spec: ModelSpec = {
+    const spec: ModelSpecInput = {
       shape: { kind: 'parallelepiped', baseSideRatio: 2, heightRatio: 0.5, baseAngleDeg: 120 },
       scale: { longestDimensionMm: 80 },
     };
@@ -153,6 +153,60 @@ describe('buildModelArtifacts', () => {
         expect(actualMin).toBeCloseTo(min as number, METRE_DIGITS);
         expect(actualMax).toBeCloseTo(max as number, METRE_DIGITS);
       });
+    });
+  });
+
+  describe('for an oblique square prism with h/a = 1 and (dx0, dy0) = (1, 0,5)', () => {
+    // The box is (1 + 1) × (1 + 0,5) × 1 in units of a, so a = h = 40 mm and the upper base is moved by (40, 20) mm:
+    // x ∈ [−20, 60], y ∈ [−20, 40], z ∈ [0, 40]. Each lateral face spans a base edge e and v = (40, 20, 40) mm.
+    const spec: ModelSpecInput = {
+      shape: { kind: 'prism', baseSides: 4, heightRatio: 1, offsetXRatio: 1, offsetYRatio: 0.5 },
+      scale: { longestDimensionMm: 80 },
+    };
+    const lateralArea = 2 * 40 * Math.hypot(20, 40) + 2 * 40 * Math.hypot(40, 40);
+
+    it('exports prism-4-sided.3mf in millimetres with the sheared bounds, volume a²h and area 2a² + Σ|e × v|', async () => {
+      const { printFile } = await buildModelArtifacts(kernel, spec);
+      const { model } = readThreeMf(printFile.bytes);
+      expect(printFile.fileName).toBe('prism-4-sided.3mf');
+      expect(model.unit).toBe('millimeter');
+      expect(model.objects.map(({ name }) => name)).toEqual(['prism-4-sided']);
+      const mesh = model.objects[0]?.mesh;
+      if (mesh === undefined) throw new Error('No exported mesh');
+      expect(findMeshDefects(mesh)).toEqual([]);
+      const { bounds, volume, surfaceArea } = measureMesh(mesh);
+      [-20, -20, 0].forEach((value, axis) => {
+        expect(bounds.min[axis]).toBeCloseTo(value, 4);
+      });
+      [60, 40, 40].forEach((value, axis) => {
+        expect(bounds.max[axis]).toBeCloseTo(value, 4);
+      });
+      expect(bounds.min[2]).toBe(0);
+      expect(volume / 64_000).toBeCloseTo(1, 6);
+      expect(surfaceArea / (2 * 1600 + lateralArea)).toBeCloseTo(1, 6);
+    });
+
+    it('previews the shear in glTF: +X stays, the height is +Y and the Y offset points to −Z, in metres', async () => {
+      const { previewGlb } = await buildModelArtifacts(kernel, spec);
+      const positions = await previewSurfacePositions(previewGlb);
+      const points = Array.from(
+        { length: positions.getCount() },
+        (_, index) => positions.getElement(index, []) as unknown as Vec3,
+      );
+      const extent = (axis: 0 | 1 | 2) => [Math.min(...points.map((p) => p[axis])), Math.max(...points.map((p) => p[axis]))];
+      [
+        [-0.02, 0.06],
+        [0, 0.04],
+        [-0.04, 0.02],
+      ].forEach(([min, max], axis) => {
+        const [actualMin, actualMax] = extent(axis as 0 | 1 | 2);
+        expect(actualMin).toBeCloseTo(min as number, METRE_DIGITS);
+        expect(actualMax).toBeCloseTo(max as number, METRE_DIGITS);
+      });
+      // The top face, at glTF height 0,04 m, is the bottom square moved by (0,04, −0,02) in glTF X and Z.
+      const top = points.filter((point) => point[1] > 0.04 - 1e-9);
+      expect(Math.min(...top.map((point) => point[0]))).toBeCloseTo(0.02, METRE_DIGITS);
+      expect(Math.max(...top.map((point) => point[2]))).toBeCloseTo(0, METRE_DIGITS);
     });
   });
 
@@ -203,7 +257,7 @@ describe('buildModelArtifacts', () => {
     ['cone', 1 / 3],
   ] as const)('for a %s with h/r = 4', (kind, volumeShare) => {
     // r = 80 / 4 = 20 mm and h = 80 mm; the 64-gon inscribed in the base circle has area 64·r²·sin(2π/64) / 2.
-    const spec: ModelSpec = { shape: { kind, heightRatio: 4 }, scale: { longestDimensionMm: 80 } };
+    const spec: ModelSpecInput = { shape: { kind, heightRatio: 4 }, scale: { longestDimensionMm: 80 } };
     const polygonBase = (64 * 20 ** 2 * Math.sin((2 * Math.PI) / 64)) / 2;
 
     it(`exports ${kind}.3mf as one closed 40 × 40 × 80 mm object in millimetres`, async () => {
@@ -242,7 +296,7 @@ describe('buildModelArtifacts', () => {
 
   describe('for a hexagonal pyramid with h/a = 2', () => {
     // The hexagon is two edges wide and h = 2a, so a = 40 mm and h = 80 mm.
-    const spec: ModelSpec = { shape: { kind: 'pyramid', baseSides: 6, heightRatio: 2 }, scale: { longestDimensionMm: 80 } };
+    const spec: ModelSpecInput = { shape: { kind: 'pyramid', baseSides: 6, heightRatio: 2 }, scale: { longestDimensionMm: 80 } };
     const a = 40;
     const h = 80;
     const baseArea = ((3 * Math.sqrt(3)) / 2) * a ** 2;
@@ -284,7 +338,7 @@ describe('buildModelArtifacts', () => {
 
   describe('for a hexagonal prism with h/a = 0,5', () => {
     // The hexagon is two edges wide, so a = 80 / 2 = 40 mm, h = 20 mm and the base is 40√3 mm deep.
-    const spec: ModelSpec = { shape: { kind: 'prism', baseSides: 6, heightRatio: 0.5 }, scale: { longestDimensionMm: 80 } };
+    const spec: ModelSpecInput = { shape: { kind: 'prism', baseSides: 6, heightRatio: 0.5 }, scale: { longestDimensionMm: 80 } };
     const a = 40;
     const h = 20;
     const baseArea = ((3 * Math.sqrt(3)) / 2) * a ** 2;
@@ -346,12 +400,16 @@ describe('buildModelArtifacts', () => {
       },
     ],
     ['prism', { shape: { kind: 'prism', baseSides: 9, heightRatio: 2 }, scale: { longestDimensionMm: 80 } }],
+    [
+      'oblique prism',
+      { shape: { kind: 'prism', baseSides: 4, heightRatio: 1, offsetXRatio: 2.5 }, scale: { longestDimensionMm: 80 } },
+    ],
     ['pyramid', { shape: { kind: 'pyramid', baseSides: 9, heightRatio: 1 }, scale: { longestDimensionMm: 80 } }],
     ['tetrahedron', { shape: { kind: 'tetrahedron', heightRatio: 1 }, scale: { longestDimensionMm: 80 } }],
     ['cylinder', { shape: { kind: 'cylinder', heightRatio: 0 }, scale: { longestDimensionMm: 80 } }],
     ['cone', { shape: { kind: 'cone', heightRatio: Number.NaN }, scale: { longestDimensionMm: 80 } }],
     ['ball', { shape: { kind: 'ball', radius: 40 }, scale: { longestDimensionMm: 80 } }],
   ] as const)('produces no %s artifacts for invalid input', async (_, invalid) => {
-    await expect(buildModelArtifacts(kernel, invalid as unknown as ModelSpec)).rejects.toBeInstanceOf(InvalidModelSpecError);
+    await expect(buildModelArtifacts(kernel, invalid as unknown as ModelSpecInput)).rejects.toBeInstanceOf(InvalidModelSpecError);
   });
 });

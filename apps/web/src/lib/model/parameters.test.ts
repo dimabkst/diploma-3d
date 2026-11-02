@@ -5,6 +5,7 @@ import {
   type ParameterTexts,
   resolveModelRequest,
   validateAngle,
+  validateOffset,
   validateRatio,
 } from './parameters.ts';
 
@@ -63,6 +64,29 @@ describe('validateAngle', () => {
   });
 });
 
+describe('validateOffset', () => {
+  it.each([
+    ['0', 0],
+    ['-2', -2],
+    ['2', 2],
+    ['-0,1', -0.1],
+    ['-0.75', -0.75],
+    ['1,234', 1.234],
+  ])('accepts %s, including the limits and negative values', (text, value) => {
+    expect(validateOffset(text)).toEqual({ value });
+  });
+
+  it.each([
+    ['', 'Введіть значення.'],
+    ['-', 'Введіть число, наприклад -0,5.'],
+    ['−1', 'Введіть число, наприклад -0,5.'],
+    ['-2,01', 'Допустимі значення — від -2 до 2.'],
+    ['2.5', 'Допустимі значення — від -2 до 2.'],
+  ])('reports "%s" without clamping it', (text, error) => {
+    expect(validateOffset(text)).toEqual({ error });
+  });
+});
+
 describe('resolveModelRequest', () => {
   it('starts the cuboid at b/a = 1,5 and c/a = 2 and the prism at three sides and h/a = 2, at 80 mm', () => {
     expect(initialParameterTexts()).toEqual({
@@ -71,7 +95,11 @@ describe('resolveModelRequest', () => {
       parallelepipedBaseSideRatio: '1',
       parallelepipedHeightRatio: '1',
       parallelepipedBaseAngleDeg: '60',
+      parallelepipedOffsetXRatio: '0',
+      parallelepipedOffsetYRatio: '0',
       prismHeightRatio: '2',
+      prismOffsetXRatio: '0',
+      prismOffsetYRatio: '0',
       pyramidHeightRatio: '1',
       cylinderHeightRatio: '2',
       coneHeightRatio: '2',
@@ -82,7 +110,7 @@ describe('resolveModelRequest', () => {
       scale: { longestDimensionMm: 80 },
     });
     expect(resolveModelRequest('prism', initialParameterTexts(), triangle).spec).toEqual({
-      shape: { kind: 'prism', baseSides: 3, heightRatio: 2 },
+      shape: { kind: 'prism', baseSides: 3, heightRatio: 2, offsetXRatio: 0, offsetYRatio: 0 },
       scale: { longestDimensionMm: 80 },
     });
   });
@@ -105,7 +133,13 @@ describe('resolveModelRequest', () => {
 
   it('reads only the fields of the selected shape', () => {
     const mixed = texts({ cuboidHeightRatio: 'abc', prismHeightRatio: '3' });
-    expect(resolveModelRequest('prism', mixed, triangle).spec?.shape).toEqual({ kind: 'prism', baseSides: 3, heightRatio: 3 });
+    expect(resolveModelRequest('prism', mixed, triangle).spec?.shape).toEqual({
+      kind: 'prism',
+      baseSides: 3,
+      heightRatio: 3,
+      offsetXRatio: 0,
+      offsetYRatio: 0,
+    });
     expect(resolveModelRequest('cuboid', mixed, triangle).errors).toEqual({ cuboidHeightRatio: 'Введіть число, наприклад 1,5.' });
   });
 
@@ -141,13 +175,21 @@ describe('resolveModelRequest', () => {
       kind: 'prism',
       baseSides: 3,
       heightRatio: 1.1,
+      offsetXRatio: 0,
+      offsetYRatio: 0,
     });
   });
 
   it.each([3, 4, 5, 6, 8] as const)('builds a prism with %s base sides and keeps h/a when the base changes', (prismBaseSides) => {
     const request = resolveModelRequest('prism', texts({ prismHeightRatio: '0,75' }), { ...triangle, prismBaseSides });
-    expect(request.spec?.shape).toEqual({ kind: 'prism', baseSides: prismBaseSides, heightRatio: 0.75 });
-    expect(request.values).toEqual({ prismHeightRatio: 0.75 });
+    expect(request.spec?.shape).toEqual({
+      kind: 'prism',
+      baseSides: prismBaseSides,
+      heightRatio: 0.75,
+      offsetXRatio: 0,
+      offsetYRatio: 0,
+    });
+    expect(request.values).toEqual({ prismHeightRatio: 0.75, prismOffsetXRatio: 0, prismOffsetYRatio: 0 });
   });
 
   it('gives equal keys to texts that denote the same model and different keys otherwise', () => {
@@ -176,7 +218,13 @@ describe('resolveModelRequest', () => {
 
   it('keeps the pyramid and prism parameters apart', () => {
     const mixed = texts({ prismHeightRatio: '3', pyramidHeightRatio: '' });
-    expect(resolveModelRequest('prism', mixed, triangle).spec?.shape).toEqual({ kind: 'prism', baseSides: 3, heightRatio: 3 });
+    expect(resolveModelRequest('prism', mixed, triangle).spec?.shape).toEqual({
+      kind: 'prism',
+      baseSides: 3,
+      heightRatio: 3,
+      offsetXRatio: 0,
+      offsetYRatio: 0,
+    });
     const pyramid = resolveModelRequest('pyramid', mixed, triangle);
     expect(pyramid.spec).toBeUndefined();
     expect(pyramid.errors).toEqual({ pyramidHeightRatio: 'Введіть значення.' });
@@ -209,7 +257,7 @@ describe('resolveModelRequest', () => {
 
   it('starts the parallelepiped with b = a, h = a and α = 60°', () => {
     expect(resolveModelRequest('parallelepiped', initialParameterTexts(), triangle).spec).toEqual({
-      shape: { kind: 'parallelepiped', baseSideRatio: 1, heightRatio: 1, baseAngleDeg: 60 },
+      shape: { kind: 'parallelepiped', baseSideRatio: 1, heightRatio: 1, baseAngleDeg: 60, offsetXRatio: 0, offsetYRatio: 0 },
       scale: { longestDimensionMm: 80 },
     });
   });
@@ -230,8 +278,17 @@ describe('resolveModelRequest', () => {
       parallelepipedBaseSideRatio: 2.05,
       parallelepipedHeightRatio: 1.1,
       parallelepipedBaseAngleDeg: 62,
+      parallelepipedOffsetXRatio: 0,
+      parallelepipedOffsetYRatio: 0,
     });
-    expect(request.spec?.shape).toEqual({ kind: 'parallelepiped', baseSideRatio: 2.05, heightRatio: 1.1, baseAngleDeg: 62 });
+    expect(request.spec?.shape).toEqual({
+      kind: 'parallelepiped',
+      baseSideRatio: 2.05,
+      heightRatio: 1.1,
+      baseAngleDeg: 62,
+      offsetXRatio: 0,
+      offsetYRatio: 0,
+    });
   });
 
   it('reports each invalid parallelepiped field with its own limits and keeps the valid values', () => {
@@ -242,7 +299,11 @@ describe('resolveModelRequest', () => {
     );
     expect(request.spec).toBeUndefined();
     expect(request.key).toBeUndefined();
-    expect(request.values).toEqual({ parallelepipedHeightRatio: 0.5 });
+    expect(request.values).toEqual({
+      parallelepipedHeightRatio: 0.5,
+      parallelepipedOffsetXRatio: 0,
+      parallelepipedOffsetYRatio: 0,
+    });
     expect(request.errors).toEqual({
       parallelepipedBaseSideRatio: 'Допустимі значення — від 0,25 до 4.',
       parallelepipedBaseAngleDeg: 'Допустимі значення — від 15° до 165°.',
@@ -257,6 +318,37 @@ describe('resolveModelRequest', () => {
     const obtuse = resolveModelRequest('parallelepiped', texts({ parallelepipedBaseAngleDeg: '120' }), triangle);
     expect(obtuse.key).not.toBe(acute.key);
     expect(resolveModelRequest('parallelepiped', texts({ parallelepipedBaseAngleDeg: '60,0' }), triangle).key).toBe(acute.key);
+  });
+
+  it.each([
+    ['prism', 'prismOffsetXRatio', 'prismOffsetYRatio'],
+    ['parallelepiped', 'parallelepipedOffsetXRatio', 'parallelepipedOffsetYRatio'],
+  ] as const)('displaces the upper base of the %s by its own typed offsets, negative and off-step', (kind, x, y) => {
+    const request = resolveModelRequest(kind, texts({ [x]: '-0,1', [y]: '1.35' }), triangle);
+    expect(request.errors).toEqual({});
+    expect(request.spec?.shape).toMatchObject({ kind, offsetXRatio: -0.1, offsetYRatio: 1.35 });
+    expect(request.values).toMatchObject({ [x]: -0.1, [y]: 1.35 });
+    // "0", "0,0" and "-0" all describe the right solid of the default texts.
+    const right = resolveModelRequest(kind, initialParameterTexts(), triangle);
+    expect(resolveModelRequest(kind, texts({ [x]: '0,0', [y]: '0' }), triangle).key).toBe(right.key);
+    expect(request.key).not.toBe(right.key);
+  });
+
+  it.each([
+    ['prism', 'prismOffsetXRatio', 'prismOffsetYRatio'],
+    ['parallelepiped', 'parallelepipedOffsetXRatio', 'parallelepipedOffsetYRatio'],
+  ] as const)('reports invalid %s offsets with their limits and builds no model', (kind, x, y) => {
+    const request = resolveModelRequest(kind, texts({ [x]: '2,25', [y]: '' }), triangle);
+    expect(request.spec).toBeUndefined();
+    expect(request.errors).toEqual({ [x]: 'Допустимі значення — від -2 до 2.', [y]: 'Введіть значення.' });
+  });
+
+  it('keeps the prism and parallelepiped offsets apart', () => {
+    const mixed = texts({ prismOffsetXRatio: '1', parallelepipedOffsetXRatio: 'abc' });
+    expect(resolveModelRequest('prism', mixed, triangle).spec?.shape).toMatchObject({ offsetXRatio: 1, offsetYRatio: 0 });
+    expect(resolveModelRequest('parallelepiped', mixed, triangle).errors).toEqual({
+      parallelepipedOffsetXRatio: 'Введіть число, наприклад -0,5.',
+    });
   });
 
   it('builds the ball without reading any field', () => {

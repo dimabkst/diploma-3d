@@ -1,4 +1,11 @@
-import { type ModelSpec, modelSpecSchema, type PhysicalScale, type Shape, type ShapeKind } from '@diploma-3d/schema';
+import {
+  type ModelSpec,
+  type ModelSpecInput,
+  modelSpecSchema,
+  type PhysicalScale,
+  type Shape,
+  type ShapeKind,
+} from '@diploma-3d/schema';
 import type { Manifold } from 'manifold-3d';
 import { GeometryError, InvalidModelSpecError } from './errors.ts';
 import type { GeometryKernel } from './kernel.ts';
@@ -7,7 +14,7 @@ import { type Track, withScope } from './scope.ts';
 import { buildBall } from './shapes/ball.ts';
 import { buildUnitBox } from './shapes/box.ts';
 import { buildParallelepiped } from './shapes/parallelepiped.ts';
-import { buildUnitPrism } from './shapes/prism.ts';
+import { buildRegularPrism } from './shapes/prism.ts';
 import { buildUnitPyramid, pyramidParameters } from './shapes/pyramid.ts';
 import { buildRoundSolid } from './shapes/round.ts';
 
@@ -28,8 +35,8 @@ export interface GeneratedModel {
   readonly solids: readonly Solid[];
 }
 
-/** Validates the specification, builds the shape in model units and converts it to millimetres with one uniform scale. */
-export function generateModel(kernel: GeometryKernel, input: ModelSpec): GeneratedModel {
+/** Validates the specification, filling in defaults, and builds the shape in millimetres with one uniform scale. */
+export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): GeneratedModel {
   const parsed = modelSpecSchema.safeParse(input);
   if (!parsed.success) {
     throw new InvalidModelSpecError(parsed.error.issues.map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`));
@@ -57,8 +64,8 @@ export function modelName(shape: Shape): string {
 }
 
 /**
- * The solid in millimetres: most polyhedra are built in model units and scaled once; the parallelepiped is scaled from
- * its unnormalised construction in one step, and curved solids are built at size.
+ * The solid in millimetres: boxes and pyramids are built in model units and scaled once; prisms, right or oblique, are
+ * scaled once after their complete unnormalised construction, and curved solids are built at size.
  */
 function buildShape(kernel: GeometryKernel, track: Track, shape: Shape, scale: PhysicalScale): Manifold {
   const toMillimetres = (unitSolid: Manifold) => track(unitSolid.scale(scale.longestDimensionMm));
@@ -69,7 +76,7 @@ function buildShape(kernel: GeometryKernel, track: Track, shape: Shape, scale: P
     case 'parallelepiped':
       return buildParallelepiped(kernel, track, shape, scale);
     case 'prism':
-      return toMillimetres(buildUnitPrism(kernel, track, shape));
+      return buildRegularPrism(kernel, track, shape, scale);
     case 'pyramid':
     case 'tetrahedron':
       return toMillimetres(buildUnitPyramid(kernel, track, pyramidParameters(shape)));

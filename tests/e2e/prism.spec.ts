@@ -15,7 +15,7 @@ import {
 
 type BaseSides = 3 | 4 | 5 | 6 | 8;
 
-const NAME = 'Правильна призма';
+const NAME = 'Призма';
 const baseSelect = (page: Page) => page.getByLabel('Основа', { exact: true });
 const heightRatio = (page: Page) => page.getByLabel('Висота h', { exact: true });
 const heightSlider = (page: Page) => page.getByRole('slider', { name: 'Висота h: повзунок', exact: true });
@@ -75,7 +75,16 @@ test('prism: base and height drive the preview and the downloaded 3MF', async ({
   await expect(baseSelect(page).locator('option:checked')).toHaveText(baseNames[3]);
   await expect(heightRatio(page)).toHaveValue('2');
   await expectPreviewOf(page, summary(3, 2));
-  await expect(page.getByRole('term')).toHaveText(['Сторона основи a', 'Висота h', 'Площа основи', 'Площа поверхні', 'Об’єм']);
+  await expect(page.getByRole('term')).toHaveText([
+    'Сторона основи a',
+    'Висота h',
+    'Бічне ребро l',
+    'Площа основи',
+    'Площа поверхні',
+    'Об’єм',
+  ]);
+  // A right prism: the lateral edge equals the height.
+  await expect(measurementValue(page, 'Бічне ребро l')).toHaveText('80 мм');
   await expect(measurementValue(page, 'Сторона основи a')).toHaveText('40 мм');
   await expect(measurementValue(page, 'Висота h')).toHaveText('80 мм');
   // √3/4 · 40² ≈ 692,8 mm².

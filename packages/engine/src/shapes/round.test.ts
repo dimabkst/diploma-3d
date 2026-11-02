@@ -1,4 +1,4 @@
-import type { ModelSpec, PhysicalScale } from '@diploma-3d/schema';
+import type { ModelSpecInput, PhysicalScale } from '@diploma-3d/schema';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { InvalidModelSpecError } from '../errors.ts';
 import { type GeometryKernel, loadGeometryKernel } from '../kernel.ts';
@@ -37,12 +37,12 @@ afterEach(() => {
 type Kind = RoundShape['kind'];
 const KINDS: readonly Kind[] = ['cylinder', 'cone'];
 const scale = (longestDimensionMm = 80): PhysicalScale => ({ longestDimensionMm });
-const spec = (kind: Kind, heightRatio: number, longestDimensionMm = 80): ModelSpec => ({
+const spec = (kind: Kind, heightRatio: number, longestDimensionMm = 80): ModelSpecInput => ({
   shape: { kind, heightRatio },
   scale: scale(longestDimensionMm),
 });
 
-const onlySolid = (input: ModelSpec) => {
+const onlySolid = (input: ModelSpecInput) => {
   const [solid] = generateModel(kernel, input).solids;
   if (solid === undefined) throw new Error('No solid');
   return solid;
@@ -231,7 +231,7 @@ describe('generateModel for a cylinder and a cone', () => {
     ),
   )('rejects a %s with %s before allocating geometry', (_, __, shape) => {
     const cylinder = vi.spyOn(kernel.Manifold, 'cylinder');
-    expect(() => generateModel(kernel, { shape, scale: scale() } as ModelSpec)).toThrow(InvalidModelSpecError);
+    expect(() => generateModel(kernel, { shape, scale: scale() } as ModelSpecInput)).toThrow(InvalidModelSpecError);
     expect(cylinder).not.toHaveBeenCalled();
   });
 });

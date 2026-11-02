@@ -84,6 +84,7 @@ test('parallelepiped: side ratio, height and angle drive the measurements, the p
     'Сторона основи a',
     'Сторона основи b',
     'Висота h',
+    'Бічне ребро l',
     'Площа основи',
     'Площа поверхні',
     'Об’єм',
@@ -231,7 +232,7 @@ test('parallelepiped: switching shapes keeps its values apart and never offers o
   await shapeSelect(page).selectOption('prism');
   await expect(entry(page, 'Висота h')).toHaveValue('2');
   await expect(entry(page, 'Кут α')).toHaveCount(0);
-  await expectPreviewOf(page, 'Правильна призма · 40 × 34,6 × 80 мм');
+  await expectPreviewOf(page, 'Призма · 40 × 34,6 × 80 мм');
 
   // Rapid switches end on the parallelepiped with its last values.
   for (const kind of ['cube', 'parallelepiped', 'ball', 'cuboid', 'parallelepiped']) await shapeSelect(page).selectOption(kind);

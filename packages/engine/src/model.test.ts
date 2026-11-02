@@ -1,4 +1,4 @@
-import { type CuboidShape, DEFAULT_LONGEST_DIMENSION_MM, defaultModelSpecs, type ModelSpec } from '@diploma-3d/schema';
+import { type CuboidShape, DEFAULT_LONGEST_DIMENSION_MM, defaultModelSpecs, type ModelSpecInput } from '@diploma-3d/schema';
 import type { Manifold } from 'manifold-3d';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { GeometryError, InvalidModelSpecError } from './errors.ts';
@@ -18,8 +18,8 @@ afterEach(() => {
 });
 
 const scale = (longestDimensionMm: number) => ({ longestDimensionMm });
-const cube = (longestDimensionMm: number): ModelSpec => ({ shape: { kind: 'cube' }, scale: scale(longestDimensionMm) });
-const cuboid = (widthRatio: number, heightRatio: number, longestDimensionMm = 80): ModelSpec => ({
+const cube = (longestDimensionMm: number): ModelSpecInput => ({ shape: { kind: 'cube' }, scale: scale(longestDimensionMm) });
+const cuboid = (widthRatio: number, heightRatio: number, longestDimensionMm = 80): ModelSpecInput => ({
   shape: { kind: 'cuboid', widthRatio, heightRatio },
   scale: scale(longestDimensionMm),
 });
@@ -29,7 +29,7 @@ const expectRelativelyClose = (actual: number | undefined, expected: number) => 
   expect(Math.abs((actual ?? Number.NaN) / expected - 1)).toBeLessThan(RELATIVE_TOLERANCE);
 };
 
-const onlySolid = (spec: ModelSpec) => {
+const onlySolid = (spec: ModelSpecInput) => {
   const [solid] = generateModel(kernel, spec).solids;
   if (solid === undefined) throw new Error('No solid');
   return solid;
@@ -121,7 +121,7 @@ describe('generateModel for a cube', () => {
     ['a missing scale', { shape: { kind: 'cube' } }],
   ])('rejects a %s specification before allocating geometry', (_, spec) => {
     const cubeConstructor = vi.spyOn(kernel.Manifold, 'cube');
-    expect(() => generateModel(kernel, spec as ModelSpec)).toThrow(InvalidModelSpecError);
+    expect(() => generateModel(kernel, spec as ModelSpecInput)).toThrow(InvalidModelSpecError);
     expect(cubeConstructor).not.toHaveBeenCalled();
   });
 });
@@ -181,7 +181,7 @@ describe('generateModel for a rectangular cuboid', () => {
     ['a string ratio', { shape: { kind: 'cuboid', widthRatio: '1.5', heightRatio: 2 }, scale: scale(80) }],
   ])('rejects %s before allocating geometry', (_, spec) => {
     const cubeConstructor = vi.spyOn(kernel.Manifold, 'cube');
-    expect(() => generateModel(kernel, spec as ModelSpec)).toThrow(InvalidModelSpecError);
+    expect(() => generateModel(kernel, spec as ModelSpecInput)).toThrow(InvalidModelSpecError);
     expect(cubeConstructor).not.toHaveBeenCalled();
   });
 });
@@ -203,7 +203,7 @@ describe('releases Manifold objects', () => {
     };
     const prototype = instancePrototype();
     const { cube: originalCube, extrude: originalExtrude, cylinder: originalCylinder, sphere: originalSphere } = kernel.Manifold;
-    const { translate, scale } = prototype;
+    const { translate, scale, transform } = prototype;
     vi.spyOn(kernel.Manifold, 'cube').mockImplementation((...args) => record(originalCube.apply(kernel.Manifold, args)));
     vi.spyOn(kernel.Manifold, 'extrude').mockImplementation((...args) => record(originalExtrude.apply(kernel.Manifold, args)));
     vi.spyOn(kernel.Manifold, 'cylinder').mockImplementation((...args) => record(originalCylinder.apply(kernel.Manifold, args)));
@@ -214,60 +214,85 @@ describe('releases Manifold objects', () => {
     vi.spyOn(prototype, 'scale').mockImplementation(function (this: Manifold, ...args) {
       return record(scale.apply(this, args));
     });
+    vi.spyOn(prototype, 'transform').mockImplementation(function (this: Manifold, ...args) {
+      return record(transform.apply(this, args));
+    });
     return { created, prototype };
   }
 
   const isDeleted = (manifold: Manifold) => (manifold as unknown as { isDeleted(): boolean }).isDeleted();
 
-  // Boxes: cube, translate onto the build plate, scale to millimetres. Prisms, parallelepipeds and pyramids: extrude,
-  // scale.
-  const polyhedra = [
-    ['cube', 3],
-    ['cuboid', 3],
-    ['parallelepiped', 2],
-    ['prism', 2],
-    ['pyramid', 2],
-    ['tetrahedron', 2],
-  ] as const;
+  const oblique = {
+    prism: {
+      shape: { kind: 'prism', baseSides: 5, heightRatio: 1, offsetXRatio: -0.5, offsetYRatio: 1 },
+      scale: { longestDimensionMm: 80 },
+    },
+    parallelepiped: {
+      shape: { kind: 'parallelepiped', baseSideRatio: 2, heightRatio: 1, baseAngleDeg: 60, offsetXRatio: 1, offsetYRatio: 0 },
+      scale: { longestDimensionMm: 80 },
+    },
+  } as const satisfies Record<string, ModelSpecInput>;
+  // Boxes: cube, translate onto the build plate, scale to millimetres. Right prisms, parallelepipeds and pyramids:
+  // extrude, scale. Oblique prisms and parallelepipeds: extrude, shear, scale.
+  const polyhedra: readonly (readonly [string, ModelSpecInput, number])[] = [
+    ['cube', defaultModelSpecs.cube, 3],
+    ['cuboid', defaultModelSpecs.cuboid, 3],
+    ['parallelepiped', defaultModelSpecs.parallelepiped, 2],
+    ['oblique parallelepiped', oblique.parallelepiped, 3],
+    ['prism', defaultModelSpecs.prism, 2],
+    ['oblique prism', oblique.prism, 3],
+    ['pyramid', defaultModelSpecs.pyramid, 2],
+    ['tetrahedron', defaultModelSpecs.tetrahedron, 2],
+  ];
   // Built by manifold-3d at their physical size: cylinders and cones in one step, the ball as sphere and translate.
-  const curvedSolids = [
-    ['cylinder', 1],
-    ['cone', 1],
-    ['ball', 2],
-  ] as const;
-  const kinds = [...polyhedra, ...curvedSolids];
+  const curvedSolids: readonly (readonly [string, ModelSpecInput, number])[] = [
+    ['cylinder', defaultModelSpecs.cylinder, 1],
+    ['cone', defaultModelSpecs.cone, 1],
+    ['ball', defaultModelSpecs.ball, 2],
+  ];
+  const solids = [...polyhedra, ...curvedSolids];
 
-  it.each(kinds)('after successful generation of a %s', (kind, objects) => {
+  it.each(solids)('after successful generation of a %s', (_, spec, objects) => {
     const { created } = trackCreatedManifolds();
-    generateModel(kernel, defaultModelSpecs[kind]);
+    generateModel(kernel, spec);
     expect(created).toHaveLength(objects);
     expect(created.every(isDeleted)).toBe(true);
   });
 
-  it.each(kinds)('when the kernel reports an invalid %s', (kind, objects) => {
+  it.each(solids)('when the kernel reports an invalid %s', (_, spec, objects) => {
     const { created, prototype } = trackCreatedManifolds();
     vi.spyOn(prototype, 'status').mockReturnValue('NotManifold');
-    expect(() => generateModel(kernel, defaultModelSpecs[kind])).toThrow(GeometryError);
+    expect(() => generateModel(kernel, spec)).toThrow(GeometryError);
     expect(created).toHaveLength(objects);
     expect(created.every(isDeleted)).toBe(true);
   });
 
-  it.each(polyhedra)('when a kernel operation throws midway through a %s', (kind, objects) => {
+  it.each(polyhedra)('when a kernel operation throws midway through a %s', (_, spec, objects) => {
     const { created, prototype } = trackCreatedManifolds();
     vi.spyOn(prototype, 'scale').mockImplementation(() => {
       throw new Error('out of memory');
     });
-    expect(() => generateModel(kernel, defaultModelSpecs[kind])).toThrow('out of memory');
+    expect(() => generateModel(kernel, spec)).toThrow('out of memory');
     expect(created).toHaveLength(objects - 1);
     expect(created.every(isDeleted)).toBe(true);
   });
 
-  it.each(curvedSolids)('when copying the mesh of a %s out of the kernel throws', (kind, objects) => {
+  it('when the shear of an oblique prism throws', () => {
+    const { created, prototype } = trackCreatedManifolds();
+    vi.spyOn(prototype, 'transform').mockImplementation(() => {
+      throw new Error('out of memory');
+    });
+    expect(() => generateModel(kernel, oblique.prism)).toThrow('out of memory');
+    expect(created).toHaveLength(1);
+    expect(created.every(isDeleted)).toBe(true);
+  });
+
+  it.each(curvedSolids)('when copying the mesh of a %s out of the kernel throws', (_, spec, objects) => {
     const { created, prototype } = trackCreatedManifolds();
     vi.spyOn(prototype, 'getMesh').mockImplementation(() => {
       throw new Error('out of memory');
     });
-    expect(() => generateModel(kernel, defaultModelSpecs[kind])).toThrow('out of memory');
+    expect(() => generateModel(kernel, spec)).toThrow('out of memory');
     expect(created).toHaveLength(objects);
     expect(created.every(isDeleted)).toBe(true);
   });

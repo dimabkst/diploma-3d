@@ -107,6 +107,25 @@ describe('stepDecimal', () => {
     expect(up(value, range)).toBe(above);
   });
 
+  it('steps the offset range [−2, 2] by quarters through negative values and zero', () => {
+    const offset = { min: -2, max: 2, increment: 0.25 };
+    // Off-step values move to the neighbouring quarters; zero comes out as +0, not −0.
+    expect(down(-0.1, offset)).toBe(-0.25);
+    expect(up(-0.1, offset)).toBe(0);
+    expect(down(0.1, offset)).toBe(0);
+    // From a quarter, one full step.
+    expect(down(-0.25, offset)).toBe(-0.5);
+    expect(up(-0.25, offset)).toBe(0);
+    expect(down(0, offset)).toBe(-0.25);
+    expect(up(-1.75, offset)).toBe(-1.5);
+    expect(down(-2, offset)).toBeUndefined();
+    expect(up(2, offset)).toBeUndefined();
+    expect(down(-1.9, offset)).toBe(-2);
+    expect(snapDecimal(-0.125, offset)).toBe(0);
+    expect(snapDecimal(-0.13, offset)).toBe(-0.25);
+    expect(formatSteppedDecimal(-0.25)).toBe('-0,25');
+  });
+
   it.each([0, -0.1, Number.NaN, Number.POSITIVE_INFINITY])('rejects the increment %s', (increment) => {
     expect(() => stepDecimal(1, 1, { min: 0, max: 4, increment })).toThrow(RangeError);
     expect(() => snapDecimal(1, { min: 0, max: 4, increment })).toThrow(RangeError);

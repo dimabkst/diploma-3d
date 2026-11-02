@@ -1,4 +1,4 @@
-import type { ModelSpec } from '@diploma-3d/schema';
+import type { ModelSpecInput } from '@diploma-3d/schema';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { InvalidModelSpecError } from '../errors.ts';
 import { type GeometryKernel, loadGeometryKernel } from '../kernel.ts';
@@ -28,9 +28,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const ball = (longestDimensionMm = 80): ModelSpec => ({ shape: { kind: 'ball' }, scale: { longestDimensionMm } });
+const ball = (longestDimensionMm = 80): ModelSpecInput => ({ shape: { kind: 'ball' }, scale: { longestDimensionMm } });
 
-const onlySolid = (spec: ModelSpec) => {
+const onlySolid = (spec: ModelSpecInput) => {
   const [solid] = generateModel(kernel, spec).solids;
   if (solid === undefined) throw new Error('No solid');
   return solid;
@@ -185,7 +185,9 @@ describe('generateModel for a ball', () => {
     ['a hollow shell', { kind: 'ball', hollow: true }],
   ])('rejects %s before allocating geometry', (_, shape) => {
     const sphere = vi.spyOn(kernel.Manifold, 'sphere');
-    expect(() => generateModel(kernel, { shape, scale: { longestDimensionMm: 80 } } as ModelSpec)).toThrow(InvalidModelSpecError);
+    expect(() => generateModel(kernel, { shape, scale: { longestDimensionMm: 80 } } as ModelSpecInput)).toThrow(
+      InvalidModelSpecError,
+    );
     expect(sphere).not.toHaveBeenCalled();
   });
 });

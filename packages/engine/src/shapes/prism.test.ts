@@ -1,4 +1,10 @@
-import { defaultModelSpecs, type ModelSpec, PRISM_BASE_SIDES, type PrismBaseSides, type PrismShape } from '@diploma-3d/schema';
+import {
+  defaultModelSpecs,
+  type ModelSpecInput,
+  PRISM_BASE_SIDES,
+  type PrismBaseSides,
+  type PrismShape,
+} from '@diploma-3d/schema';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { InvalidModelSpecError } from '../errors.ts';
 import { type GeometryKernel, loadGeometryKernel } from '../kernel.ts';
@@ -16,12 +22,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const prism = (baseSides: PrismBaseSides, heightRatio: number, longestDimensionMm = 80): ModelSpec => ({
+const prism = (baseSides: PrismBaseSides, heightRatio: number, longestDimensionMm = 80): ModelSpecInput => ({
   shape: { kind: 'prism', baseSides, heightRatio },
   scale: { longestDimensionMm },
 });
 
-const onlySolid = (spec: ModelSpec) => {
+const onlySolid = (spec: ModelSpecInput) => {
   const [solid] = generateModel(kernel, spec).solids;
   if (solid === undefined) throw new Error('No solid');
   return solid;
@@ -188,7 +194,7 @@ describe('generateModel for a regular prism', () => {
   ])('rejects %s before allocating geometry', (_, input) => {
     const extrude = vi.spyOn(kernel.Manifold, 'extrude');
     const spec = { ...input, scale: { longestDimensionMm: 80 } };
-    expect(() => generateModel(kernel, spec as ModelSpec)).toThrow(InvalidModelSpecError);
+    expect(() => generateModel(kernel, spec as ModelSpecInput)).toThrow(InvalidModelSpecError);
     expect(extrude).not.toHaveBeenCalled();
   });
 });

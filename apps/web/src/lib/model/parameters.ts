@@ -3,7 +3,10 @@ import {
   baseAngleSchema,
   defaultModelSpecs,
   type ModelSpec,
+  type ModelSpecInput,
   modelSpecSchema,
+  OFFSET_LIMITS,
+  offsetRatioSchema,
   type PhysicalScale,
   type PrismBaseSides,
   type PyramidBaseSides,
@@ -20,7 +23,11 @@ export type ParameterKey =
   | 'parallelepipedBaseSideRatio'
   | 'parallelepipedHeightRatio'
   | 'parallelepipedBaseAngleDeg'
+  | 'parallelepipedOffsetXRatio'
+  | 'parallelepipedOffsetYRatio'
   | 'prismHeightRatio'
+  | 'prismOffsetXRatio'
+  | 'prismOffsetYRatio'
   | 'pyramidHeightRatio'
   | 'cylinderHeightRatio'
   | 'coneHeightRatio';
@@ -50,7 +57,11 @@ export const initialParameterTexts = (): ParameterTexts => ({
   parallelepipedBaseSideRatio: formatDecimal(defaultModelSpecs.parallelepiped.shape.baseSideRatio),
   parallelepipedHeightRatio: formatDecimal(defaultModelSpecs.parallelepiped.shape.heightRatio),
   parallelepipedBaseAngleDeg: formatDecimal(defaultModelSpecs.parallelepiped.shape.baseAngleDeg),
+  parallelepipedOffsetXRatio: formatDecimal(defaultModelSpecs.parallelepiped.shape.offsetXRatio),
+  parallelepipedOffsetYRatio: formatDecimal(defaultModelSpecs.parallelepiped.shape.offsetYRatio),
   prismHeightRatio: formatDecimal(defaultModelSpecs.prism.shape.heightRatio),
+  prismOffsetXRatio: formatDecimal(defaultModelSpecs.prism.shape.offsetXRatio),
+  prismOffsetYRatio: formatDecimal(defaultModelSpecs.prism.shape.offsetYRatio),
   pyramidHeightRatio: formatDecimal(defaultModelSpecs.pyramid.shape.heightRatio),
   cylinderHeightRatio: formatDecimal(defaultModelSpecs.cylinder.shape.heightRatio),
   coneHeightRatio: formatDecimal(defaultModelSpecs.cone.shape.heightRatio),
@@ -84,13 +95,19 @@ export const validateRatio = (text: string): Validation => validateNumber(text, 
 
 export const validateAngle = (text: string): Validation => validateNumber(text, baseAngleSchema, BASE_ANGLE_LIMITS, '60', '°');
 
+export const validateOffset = (text: string): Validation => validateNumber(text, offsetRatioSchema, OFFSET_LIMITS, '-0,5');
+
 const validators: Readonly<Record<ParameterKey, (text: string) => Validation>> = {
   cuboidWidthRatio: validateRatio,
   cuboidHeightRatio: validateRatio,
   parallelepipedBaseSideRatio: validateRatio,
   parallelepipedHeightRatio: validateRatio,
   parallelepipedBaseAngleDeg: validateAngle,
+  parallelepipedOffsetXRatio: validateOffset,
+  parallelepipedOffsetYRatio: validateOffset,
   prismHeightRatio: validateRatio,
+  prismOffsetXRatio: validateOffset,
+  prismOffsetYRatio: validateOffset,
   pyramidHeightRatio: validateRatio,
   cylinderHeightRatio: validateRatio,
   coneHeightRatio: validateRatio,
@@ -130,23 +147,39 @@ export function resolveModelRequest(kind: ShapeKind, texts: ParameterTexts, choi
     }
     case 'parallelepiped': {
       const { values, errors } = validateFields(
-        ['parallelepipedBaseSideRatio', 'parallelepipedHeightRatio', 'parallelepipedBaseAngleDeg'],
+        [
+          'parallelepipedBaseSideRatio',
+          'parallelepipedHeightRatio',
+          'parallelepipedBaseAngleDeg',
+          'parallelepipedOffsetXRatio',
+          'parallelepipedOffsetYRatio',
+        ],
         texts,
       );
       const {
         parallelepipedBaseSideRatio: baseSideRatio,
         parallelepipedHeightRatio: heightRatio,
         parallelepipedBaseAngleDeg: baseAngleDeg,
+        parallelepipedOffsetXRatio: offsetXRatio,
+        parallelepipedOffsetYRatio: offsetYRatio,
       } = values;
-      if (baseSideRatio === undefined || heightRatio === undefined || baseAngleDeg === undefined)
+      if (
+        baseSideRatio === undefined ||
+        heightRatio === undefined ||
+        baseAngleDeg === undefined ||
+        offsetXRatio === undefined ||
+        offsetYRatio === undefined
+      )
         return { scale, values, errors, spec: undefined, key: undefined };
-      return withKey({ shape: { kind, baseSideRatio, heightRatio, baseAngleDeg }, scale }, values);
+      return withKey({ shape: { kind, baseSideRatio, heightRatio, baseAngleDeg, offsetXRatio, offsetYRatio }, scale }, values);
     }
     case 'prism': {
-      const { values, errors } = validateFields(['prismHeightRatio'], texts);
-      const { prismHeightRatio: heightRatio } = values;
-      if (heightRatio === undefined) return { scale, values, errors, spec: undefined, key: undefined };
-      return withKey({ shape: { kind, baseSides: choices.prismBaseSides, heightRatio }, scale }, values);
+      const { values, errors } = validateFields(['prismHeightRatio', 'prismOffsetXRatio', 'prismOffsetYRatio'], texts);
+      const { prismHeightRatio: heightRatio, prismOffsetXRatio: offsetXRatio, prismOffsetYRatio: offsetYRatio } = values;
+      if (heightRatio === undefined || offsetXRatio === undefined || offsetYRatio === undefined)
+        return { scale, values, errors, spec: undefined, key: undefined };
+      const baseSides = choices.prismBaseSides;
+      return withKey({ shape: { kind, baseSides, heightRatio, offsetXRatio, offsetYRatio }, scale }, values);
     }
     case 'pyramid': {
       const { values, errors } = validateFields(['pyramidHeightRatio'], texts);
@@ -165,7 +198,7 @@ export function resolveModelRequest(kind: ShapeKind, texts: ParameterTexts, choi
   }
 }
 
-function withKey(candidate: ModelSpec, values: ParameterValues): ModelRequest {
+function withKey(candidate: ModelSpecInput, values: ParameterValues): ModelRequest {
   const spec = modelSpecSchema.parse(candidate);
   return { scale: spec.scale, values, errors: {}, spec, key: JSON.stringify(spec) };
 }

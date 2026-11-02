@@ -1,4 +1,4 @@
-import { defaultModelSpecs, type ModelSpec } from '@diploma-3d/schema';
+import { defaultModelSpecs, type ModelSpecInput } from '@diploma-3d/schema';
 import { type Accessor, type Document, type Primitive, WebIO } from '@gltf-transform/core';
 import { strFromU8 } from 'fflate';
 import { describe, expect, it } from 'vitest';
@@ -174,7 +174,7 @@ describe('createPreviewGlb', () => {
 });
 
 describe('createPreviewGlb shading', () => {
-  async function shadedCorners(spec: ModelSpec, smoothShading?: boolean) {
+  async function shadedCorners(spec: ModelSpecInput, smoothShading?: boolean) {
     const kernel = await loadGeometryKernel();
     const solid = generateModel(kernel, spec).solids[0];
     if (solid === undefined) throw new Error('No solid');
@@ -190,8 +190,8 @@ describe('createPreviewGlb shading', () => {
     return { positions, normals, faces, edgeSegments: vectors(edges?.getAttribute('POSITION') ?? null).length / 2 };
   }
 
-  const cylinder: ModelSpec = { shape: { kind: 'cylinder', heightRatio: 2 }, scale: { longestDimensionMm: 80 } };
-  const cone: ModelSpec = { shape: { kind: 'cone', heightRatio: 2 }, scale: { longestDimensionMm: 80 } };
+  const cylinder: ModelSpecInput = { shape: { kind: 'cylinder', heightRatio: 2 }, scale: { longestDimensionMm: 80 } };
+  const cone: ModelSpecInput = { shape: { kind: 'cone', heightRatio: 2 }, scale: { longestDimensionMm: 80 } };
 
   it('shades the cylinder side smoothly along the radius while caps stay flat and rims stay sharp', async () => {
     const { positions, normals, faces, edgeSegments } = await shadedCorners(cylinder);
@@ -232,7 +232,7 @@ describe('createPreviewGlb shading', () => {
   });
 
   it('shades the whole ball smoothly, with radial normals and no outlined edges', async () => {
-    const ball: ModelSpec = { shape: { kind: 'ball' }, scale: { longestDimensionMm: 80 } };
+    const ball: ModelSpecInput = { shape: { kind: 'ball' }, scale: { longestDimensionMm: 80 } };
     const { positions, normals, faces, edgeSegments } = await shadedCorners(ball);
     // The centre (0, 0, 40) mm lies at (0, 0,04, 0) m in glTF.
     let closerThanFacet = 0;
@@ -255,8 +255,25 @@ describe('createPreviewGlb shading', () => {
     // Adjacent lateral faces meet at about 9°: 8 base edges and 8 lateral edges.
     ['a low octagonal pyramid', { kind: 'pyramid', baseSides: 8, heightRatio: 0.25 }, 16],
   ])('outlines every edge of %s, also between faces meeting at a small angle, but no face diagonal', async (_, shape, count) => {
-    const { edgeSegments } = await shadedCorners({ shape, scale: { longestDimensionMm: 80 } } as ModelSpec);
+    const { edgeSegments } = await shadedCorners({ shape, scale: { longestDimensionMm: 80 } } as ModelSpecInput);
     expect(edgeSegments).toBe(count);
+  });
+
+  it('gives an oblique prism the normals of its sheared faces, not those of the right prism', async () => {
+    // Square base, h = a, upper base moved by a along X: the faces through the base edges along Y lean by 45°, with
+    // outward normals (±1, 0, ∓1)/√2 in Z-up, that is (±1, ∓1, 0)/√2 in glTF.
+    const spec: ModelSpecInput = {
+      shape: { kind: 'prism', baseSides: 4, heightRatio: 1, offsetXRatio: 1, offsetYRatio: 0 },
+      scale: { longestDimensionMm: 80 },
+    };
+    const { normals, faces, edgeSegments } = await shadedCorners(spec);
+    normals.forEach((normal, corner) => {
+      expect(dot(normal, faces[Math.floor(corner / 3)] as Vec3)).toBeGreaterThan(1 - 1e-6);
+    });
+    const leaning = normals.filter((normal) => Math.abs(Math.abs(normal[0]) - Math.SQRT1_2) < 1e-6);
+    expect(leaning).toHaveLength(2 * 2 * 3);
+    for (const normal of leaning) expect(normal[1]).toBeCloseTo(-normal[0], 6);
+    expect(edgeSegments).toBe(12);
   });
 
   it('keeps exactly flat normals for polyhedra and when smooth shading is off', async () => {
@@ -266,7 +283,7 @@ describe('createPreviewGlb shading', () => {
       [defaultModelSpecs.parallelepiped, undefined],
       [cylinder, false],
     ] as const) {
-      const { normals, faces } = await shadedCorners(spec as ModelSpec, smoothShading);
+      const { normals, faces } = await shadedCorners(spec as ModelSpecInput, smoothShading);
       normals.forEach((normal, corner) => {
         expect(dot(normal, faces[Math.floor(corner / 3)] as Vec3)).toBeGreaterThan(1 - 1e-6);
       });

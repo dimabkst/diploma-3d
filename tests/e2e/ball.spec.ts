@@ -68,10 +68,11 @@ test('ball: switching to and from parameterised shapes shows their own controls 
 
   // Rapid switches end on a prism, whose own controls and file return.
   for (const label of ['Куб', BALL, 'Циліндр', BALL]) await shapeSelect(page).selectOption({ label });
-  await shapeSelect(page).selectOption({ label: 'Правильна призма' });
+  await shapeSelect(page).selectOption({ label: 'Призма' });
   await expect(page.getByLabel('Основа', { exact: true })).toBeVisible();
-  await expect(page.getByRole('slider')).toHaveCount(1);
-  await expectPreviewOf(page, 'Правильна призма · 40 × 34,6 × 80 мм');
+  // The height and the two offsets of the upper base.
+  await expect(page.getByRole('slider')).toHaveCount(3);
+  await expectPreviewOf(page, 'Призма · 40 × 34,6 × 80 мм');
   await expect(downloadButton(page)).toBeEnabled();
   expect((await downloadThreeMf(page)).fileName).toBe('prism-3-sided.3mf');
 

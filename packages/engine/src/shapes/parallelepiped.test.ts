@@ -1,4 +1,4 @@
-import { defaultModelSpecs, type ModelSpec, type ParallelepipedShape } from '@diploma-3d/schema';
+import { defaultModelSpecs, type ModelSpecInput, type ParallelepipedShape } from '@diploma-3d/schema';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { InvalidModelSpecError } from '../errors.ts';
 import { type GeometryKernel, loadGeometryKernel } from '../kernel.ts';
@@ -6,6 +6,7 @@ import { findMeshDefects, type TriangleMesh, triangleAreaVector, triangleCount, 
 import { generateModel } from '../model.ts';
 import { parallelepipedDimensionsMm, parallelepipedProportions } from './parallelepiped.ts';
 import { polygonSize } from './polygon.ts';
+import { prismScaleMm } from './prism-geometry.ts';
 
 let kernel: GeometryKernel;
 
@@ -22,11 +23,13 @@ const shapeOf = (baseSideRatio: number, heightRatio: number, baseAngleDeg: numbe
   baseSideRatio,
   heightRatio,
   baseAngleDeg,
+  offsetXRatio: 0,
+  offsetYRatio: 0,
 });
 
-const spec = (shape: ParallelepipedShape, longestDimensionMm = 80): ModelSpec => ({ shape, scale: { longestDimensionMm } });
+const spec = (shape: ParallelepipedShape, longestDimensionMm = 80): ModelSpecInput => ({ shape, scale: { longestDimensionMm } });
 
-const onlySolid = (input: ModelSpec) => {
+const onlySolid = (input: ModelSpecInput) => {
   const [solid] = generateModel(kernel, input).solids;
   if (solid === undefined) throw new Error('No solid');
   return solid;
@@ -91,18 +94,20 @@ describe('parallelepipedProportions', () => {
     [2.05, 1.1, 62],
     [1.5, 2, 90],
   ])('takes the bounding box of the base with b/a = %s, h/a = %s and α = %s°', (b0, h0, angle) => {
-    const { base, height, scale } = parallelepipedProportions(shapeOf(b0, h0, angle));
+    const proportions = parallelepipedProportions(shapeOf(b0, h0, angle));
+    const { base, height, offset } = proportions;
     const [width, depth] = polygonSize(base);
     expect(width).toBeCloseTo(1 + Math.abs(b0 * Math.cos(radians(angle))), 14);
     expect(depth).toBeCloseTo(b0 * Math.sin(radians(angle)), 14);
     expect(height).toBe(h0);
-    expect(scale).toBe(1 / Math.max(width, depth, h0));
+    expect(offset).toEqual([0, 0]);
+    expect(prismScaleMm(proportions, { longestDimensionMm: 1 })).toBe(1 / Math.max(width, depth, h0));
   });
 
   it('normalises by the bounding box, not by the longest edge max(a0, b0, h0)', () => {
     // Every edge is 1, yet the base is 1 + cos 60° = 1,5 wide: a = 80 / 1,5 mm, not 80 mm.
     const dimensions = parallelepipedDimensionsMm(shapeOf(1, 1, 60), { longestDimensionMm: 80 });
-    expect(dimensions.baseSideA).toBeCloseTo(160 / 3, 12);
+    expect(dimensions.edge).toBeCloseTo(160 / 3, 12);
     expect(dimensions.baseSideB).toBeCloseTo(160 / 3, 12);
     expect(dimensions.height).toBeCloseTo(160 / 3, 12);
   });
@@ -134,7 +139,7 @@ describe('generateModel for a right parallelepiped', () => {
     const ideal = expected(b0, h0, angle);
 
     const dimensions = parallelepipedDimensionsMm(shape, { longestDimensionMm: 80 });
-    expectRelativelyClose(dimensions.baseSideA, ideal.a);
+    expectRelativelyClose(dimensions.edge, ideal.a);
     expectRelativelyClose(dimensions.baseSideB, ideal.b);
     expectRelativelyClose(dimensions.height, ideal.h);
     expectRelativelyClose(dimensions.baseArea, ideal.baseArea);
@@ -253,7 +258,7 @@ describe('generateModel for a right parallelepiped', () => {
     [165, 40.69, 10.53],
   ])('at the supported limit α = %s° has a ≈ %s mm and a base depth of ≈ %s mm', (angle, a, depth) => {
     const { measurements } = onlySolid(spec(shapeOf(1, 1, angle)));
-    expect(parallelepipedDimensionsMm(shapeOf(1, 1, angle), { longestDimensionMm: 80 }).baseSideA).toBeCloseTo(a, 2);
+    expect(parallelepipedDimensionsMm(shapeOf(1, 1, angle), { longestDimensionMm: 80 }).edge).toBeCloseTo(a, 2);
     expect(measurements.size[0]).toBeCloseTo(80, 4);
     expect(measurements.size[1]).toBeCloseTo(depth, 2);
   });
@@ -278,7 +283,7 @@ describe('generateModel for a right parallelepiped', () => {
   ])('rejects %s before allocating geometry', (_, override) => {
     const extrude = vi.spyOn(kernel.Manifold, 'extrude');
     const input = { shape: { ...defaultModelSpecs.parallelepiped.shape, ...override }, scale: { longestDimensionMm: 80 } };
-    expect(() => generateModel(kernel, input as ModelSpec)).toThrow(InvalidModelSpecError);
+    expect(() => generateModel(kernel, input as ModelSpecInput)).toThrow(InvalidModelSpecError);
     expect(extrude).not.toHaveBeenCalled();
   });
 });

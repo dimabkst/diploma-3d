@@ -23,12 +23,20 @@ export {
 export { type BoxShape, boxEdgeLengthsMm, boxProportions } from './shapes/box.ts';
 export {
   type ParallelepipedDimensions,
-  type ParallelepipedProportions,
   parallelepipedDimensionsMm,
   parallelepipedProportions,
 } from './shapes/parallelepiped.ts';
 export { cosSinDeg, parallelogramArea, parallelogramVertices } from './shapes/parallelogram.ts';
 export { baseContours, polygonSize, signedPolygonArea, type Vec2 } from './shapes/polygon.ts';
+export { regularPrismDimensionsMm, regularPrismProportions } from './shapes/prism.ts';
+export {
+  isOblique,
+  type PrismDimensions,
+  type PrismProportions,
+  prismBoundingSize,
+  prismDimensionsMm,
+  prismScaleMm,
+} from './shapes/prism-geometry.ts';
 export { pyramidParameters } from './shapes/pyramid.ts';
 export {
   type RegularBaseParameters,

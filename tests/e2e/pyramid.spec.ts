@@ -230,10 +230,10 @@ test('pyramid: switching shapes keeps the pyramid and prism parameters apart', a
   await heightRatio(page).fill('0,5');
   await expectPreviewOf(page, pyramidSummary(6, 0.5));
 
-  await shapeSelect(page).selectOption({ label: 'Правильна призма' });
+  await shapeSelect(page).selectOption({ label: 'Призма' });
   await expect(baseSelect(page).locator('option:checked')).toHaveText(baseNames[3]);
   await expect(heightRatio(page)).toHaveValue('2');
-  await expectPreviewOf(page, 'Правильна призма · 40 × 34,6 × 80 мм');
+  await expectPreviewOf(page, 'Призма · 40 × 34,6 × 80 мм');
 
   await shapeSelect(page).selectOption({ label: TETRAHEDRON });
   await expectPreviewOf(page, `${TETRAHEDRON} · 80 × 69,3 × 65,3 мм`);

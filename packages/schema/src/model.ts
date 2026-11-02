@@ -29,7 +29,11 @@ export const modelSpecSchema = z.strictObject({
   scale: physicalScaleSchema,
 });
 
+/** A validated specification, with every default filled in. */
 export type ModelSpec = z.infer<typeof modelSpecSchema>;
+
+/** A specification as accepted before validation: fields with defaults, such as prism offsets, may be omitted. */
+export type ModelSpecInput = z.input<typeof modelSpecSchema>;
 
 const defaultScale = { longestDimensionMm: DEFAULT_LONGEST_DIMENSION_MM } as const;
 
@@ -37,10 +41,10 @@ export const defaultModelSpecs = {
   cube: { shape: { kind: 'cube' }, scale: defaultScale },
   cuboid: { shape: { kind: 'cuboid', widthRatio: 1.5, heightRatio: 2 }, scale: defaultScale },
   parallelepiped: {
-    shape: { kind: 'parallelepiped', baseSideRatio: 1, heightRatio: 1, baseAngleDeg: 60 },
+    shape: { kind: 'parallelepiped', baseSideRatio: 1, heightRatio: 1, baseAngleDeg: 60, offsetXRatio: 0, offsetYRatio: 0 },
     scale: defaultScale,
   },
-  prism: { shape: { kind: 'prism', baseSides: 3, heightRatio: 2 }, scale: defaultScale },
+  prism: { shape: { kind: 'prism', baseSides: 3, heightRatio: 2, offsetXRatio: 0, offsetYRatio: 0 }, scale: defaultScale },
   pyramid: { shape: { kind: 'pyramid', baseSides: 4, heightRatio: 1 }, scale: defaultScale },
   tetrahedron: { shape: { kind: 'tetrahedron' }, scale: defaultScale },
   cylinder: { shape: { kind: 'cylinder', heightRatio: 2 }, scale: defaultScale },

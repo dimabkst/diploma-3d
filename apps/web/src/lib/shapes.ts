@@ -7,11 +7,13 @@ import {
   pyramidParameters,
   regularBaseDimensionsMm,
   regularPolygonArea,
+  regularPrismDimensionsMm,
   roundSolidMeasurements,
 } from '@diploma-3d/engine';
 import {
   BASE_ANGLE_LIMITS,
   defaultModelSpecs,
+  OFFSET_LIMITS,
   type PhysicalScale,
   PRISM_BASE_SIDES,
   type PrismBaseSides,
@@ -55,13 +57,26 @@ export type ChoiceField = {
   readonly options: readonly { readonly value: PrismBaseSides; readonly label: string }[];
 };
 
-export type ParameterField = NumericField | ChoiceField;
+/**
+ * The displacement of a prism's upper base: two numeric fields under one legend, with a reset to the right prism. Whether
+ * the solid is right or oblique follows from the two values; nothing else stores it.
+ */
+export type OffsetGroup = {
+  readonly type: 'offset';
+  readonly key: string;
+  readonly legend: string;
+  readonly fields: readonly [NumericField, NumericField];
+  /** The solid's name in the status line, such as "пряма призма" and "похила призма". */
+  readonly solidName: { readonly right: string; readonly oblique: string };
+};
+
+export type ParameterField = NumericField | ChoiceField | OffsetGroup;
 
 export const shapeOptions: readonly ShapeOption[] = [
   { value: 'cube', label: 'Куб' },
   { value: 'cuboid', label: 'Прямокутний паралелепіпед' },
   { value: 'parallelepiped', label: 'Паралелепіпед' },
-  { value: 'prism', label: 'Правильна призма' },
+  { value: 'prism', label: 'Призма' },
   { value: 'pyramid', label: 'Правильна піраміда' },
   { value: 'tetrahedron', label: 'Правильний тетраедр' },
   { value: 'cylinder', label: 'Циліндр' },
@@ -90,9 +105,17 @@ export function shapeDescription(kind: ShapeKind, scale: PhysicalScale): string 
     case 'cuboid':
       return 'Усі грані — прямокутники, усі кути прямі. Ребро a — довжина, b — ширина, c — висота.';
     case 'parallelepiped':
-      return 'Основа — паралелограм зі сторонами a і b та кутом α між ними. Бічні ребра перпендикулярні до основи та дорівнюють висоті h.';
+      return (
+        'Основа — паралелограм зі сторонами a і b та кутом α між ними. Без зміщення паралелепіпед прямий: бічні ребра ' +
+        'перпендикулярні до основи й дорівнюють висоті h. Зі зміщенням він похилий: бічні грані — паралелограми, а бічне ' +
+        'ребро l довше за h.'
+      );
     case 'prism':
-      return 'Основи — рівні правильні многокутники, бічні ребра перпендикулярні до основ, а бічні грані — прямокутники.';
+      return (
+        'Основи — рівні правильні многокутники; верхня — це нижня, паралельно перенесена. Без зміщення призма пряма ' +
+        '(правильна): бічні ребра перпендикулярні до основ, бічні грані — прямокутники. Зі зміщенням вона похила: бічні ' +
+        'грані — паралелограми, а бічне ребро l довше за висоту h.'
+      );
     case 'pyramid':
       return 'Основа — правильний многокутник, вершина лежить точно над її центром, а бічні грані — рівні рівнобедрені трикутники.';
     case 'tetrahedron': {
@@ -115,6 +138,14 @@ export function shapeDescription(kind: ShapeKind, scale: PhysicalScale): string 
   }
 }
 
+const obliqueSizeNote = (scale: PhysicalScale): string =>
+  `Найбільший габаритний вимір моделі (ширина, глибина чи висота, а не ребро) завжди ${formatLength(scale)}. ` +
+  'Зміщення розширює габарит, тому за тих самих множників модель меншає: змінюються всі розміри, зокрема об’єм.';
+
+export const offsetHint =
+  'X — уздовж сторони основи a, Y — перпендикулярно до неї в площині основи. Напрямки прив’язані до моделі, а не до ' +
+  'камери. Обидва нулі дають пряме тіло, будь-яке інше значення — похиле.';
+
 const idealRoundNote =
   'Розміри нижче — для ідеального тіла; у файлі друку коло наближено многокутником, ' +
   `що відходить від нього не більше ніж на ${formatDecimal(MAX_CIRCLE_DEVIATION_MM)} мм.`;
@@ -123,6 +154,22 @@ const idealRoundNote =
 const ratioRange: StepRange = { ...RATIO_LIMITS, increment: 0.25 };
 // The base angle moves in whole multiples of 5°.
 const angleRange: StepRange = { ...BASE_ANGLE_LIMITS, increment: 5 };
+const offsetRange: StepRange = { ...OFFSET_LIMITS, increment: 0.25 };
+
+const offsetGroup = (
+  x: ParameterKey,
+  y: ParameterKey,
+  solidName: { readonly right: string; readonly oblique: string },
+): OffsetGroup => ({
+  type: 'offset',
+  key: `${x}-${y}`,
+  legend: 'Зміщення верхньої основи',
+  fields: [
+    { type: 'number', key: x, label: 'Зміщення X', suffix: '× a', range: offsetRange },
+    { type: 'number', key: y, label: 'Зміщення Y', suffix: '× a', range: offsetRange },
+  ],
+  solidName,
+});
 
 const baseNames: Readonly<Record<PrismBaseSides, string>> = {
   3: 'Рівносторонній трикутник',
@@ -142,6 +189,10 @@ export const shapeParameters: Readonly<Record<ShapeKind, readonly ParameterField
     { type: 'number', key: 'parallelepipedBaseSideRatio', label: 'Сторона основи b', suffix: '× a', range: ratioRange },
     { type: 'number', key: 'parallelepipedHeightRatio', label: 'Висота h', suffix: '× a', range: ratioRange },
     { type: 'number', key: 'parallelepipedBaseAngleDeg', label: 'Кут α', suffix: '°', range: angleRange },
+    offsetGroup('parallelepipedOffsetXRatio', 'parallelepipedOffsetYRatio', {
+      right: 'прямий паралелепіпед',
+      oblique: 'похилий паралелепіпед',
+    }),
   ],
   prism: [
     {
@@ -151,6 +202,7 @@ export const shapeParameters: Readonly<Record<ShapeKind, readonly ParameterField
       options: PRISM_BASE_SIDES.map((sides) => ({ value: sides, label: baseNames[sides] })),
     },
     { type: 'number', key: 'prismHeightRatio', label: 'Висота h', suffix: '× a', range: ratioRange },
+    offsetGroup('prismOffsetXRatio', 'prismOffsetYRatio', { right: 'пряма призма', oblique: 'похила призма' }),
   ],
   pyramid: [
     {
@@ -181,14 +233,14 @@ export function parameterHint(kind: ShapeKind, scale: PhysicalScale): string | u
       );
     case 'parallelepiped':
       return (
-        'Множники задають сторону b і висоту h відносно сторони a; α — кут між сторонами a і b, у градусах. ' +
-        `Найбільший габаритний вимір моделі (ширина, глибина чи висота, а не ребро) завжди ${formatLength(scale)}, ` +
-        'тому зміна будь-якого параметра може змінити всі розміри.'
+        'Множники задають сторону b, висоту h і зміщення відносно сторони a; α — кут між сторонами a і b, у градусах. ' +
+        `Висота h — відстань між площинами основ, а не бічне ребро l. ${obliqueSizeNote(scale)}`
       );
     case 'prism':
       return (
-        'a — сторона основи, h — висота призми, перпендикулярна до основи. ' +
-        `Найбільший габаритний вимір завжди ${formatLength(scale)}, тому зміна основи чи висоти може змінити всі розміри.`
+        'a — сторона основи; висота h — відстань між площинами основ, а не бічне ребро l. ' +
+        'Висоту й зміщення задано відносно a. ' +
+        obliqueSizeNote(scale)
       );
     case 'pyramid':
       return (
@@ -242,18 +294,25 @@ export function measurementItems(
         { label: 'Об’єм', ...volume },
       ];
     }
-    case 'parallelepiped': {
-      const dimensions = shape?.kind === 'parallelepiped' ? parallelepipedDimensionsMm(shape, scale) : undefined;
+    case 'parallelepiped':
+    case 'prism': {
+      const parallelepiped = shape?.kind === 'parallelepiped' ? parallelepipedDimensionsMm(shape, scale) : undefined;
+      const dimensions = parallelepiped ?? (shape?.kind === 'prism' ? regularPrismDimensionsMm(shape, scale) : undefined);
       // The slanted side b lies in a base face of at most L × L, so it is at most its diagonal √2·L: for b/a = 4 and
-      // α ≈ 55° it is about 1,22·L.
+      // α ≈ 55° it is about 1,22·L. A lateral edge lies in the bounding box, so it is at most its diagonal √3·L.
       const slantedSide = {
-        value: formatQuantity(dimensions?.baseSideB, 'мм'),
+        value: formatQuantity(parallelepiped?.baseSideB, 'мм'),
         widest: widestQuantity(Math.SQRT2 * length, 'мм'),
       };
       return [
-        { label: 'Сторона основи a', ...edge(dimensions?.baseSideA) },
-        { label: 'Сторона основи b', ...slantedSide },
+        { label: 'Сторона основи a', ...edge(dimensions?.edge) },
+        ...(kind === 'parallelepiped' ? [{ label: 'Сторона основи b', ...slantedSide }] : []),
         { label: 'Висота h', ...edge(dimensions?.height) },
+        {
+          label: 'Бічне ребро l',
+          value: formatQuantity(dimensions?.lateralEdge, 'мм'),
+          widest: widestQuantity(Math.sqrt(3) * length, 'мм'),
+        },
         {
           label: 'Площа основи',
           value: formatQuantity(dimensions?.baseArea, 'мм²'),
@@ -263,15 +322,9 @@ export function measurementItems(
         { label: 'Об’єм', ...volume },
       ];
     }
-    case 'prism':
     case 'pyramid':
     case 'tetrahedron': {
-      const parameters =
-        shape?.kind === 'prism'
-          ? shape
-          : shape?.kind === 'pyramid' || shape?.kind === 'tetrahedron'
-            ? pyramidParameters(shape)
-            : undefined;
+      const parameters = shape?.kind === 'pyramid' || shape?.kind === 'tetrahedron' ? pyramidParameters(shape) : undefined;
       const dimensions = parameters === undefined ? undefined : regularBaseDimensionsMm(parameters, scale);
       const baseArea =
         parameters === undefined || dimensions === undefined

@@ -1,6 +1,6 @@
 import {
   defaultModelSpecs,
-  type ModelSpec,
+  type ModelSpecInput,
   PYRAMID_BASE_SIDES,
   type PyramidBaseSides,
   TETRAHEDRON_HEIGHT_RATIO,
@@ -35,17 +35,17 @@ afterEach(() => {
 });
 
 const scale = { longestDimensionMm: 80 };
-const pyramid = (baseSides: PyramidBaseSides, heightRatio: number): ModelSpec => ({
+const pyramid = (baseSides: PyramidBaseSides, heightRatio: number): ModelSpecInput => ({
   shape: { kind: 'pyramid', baseSides, heightRatio },
   scale,
 });
-const prism = (baseSides: PyramidBaseSides, heightRatio: number): ModelSpec => ({
+const prism = (baseSides: PyramidBaseSides, heightRatio: number): ModelSpecInput => ({
   shape: { kind: 'prism', baseSides, heightRatio },
   scale,
 });
-const tetrahedron: ModelSpec = { shape: { kind: 'tetrahedron' }, scale };
+const tetrahedron: ModelSpecInput = { shape: { kind: 'tetrahedron' }, scale };
 
-const onlySolid = (spec: ModelSpec) => {
+const onlySolid = (spec: ModelSpecInput) => {
   const [solid] = generateModel(kernel, spec).solids;
   if (solid === undefined) throw new Error('No solid');
   return solid;
@@ -183,7 +183,10 @@ describe('generateModel for a regular pyramid', () => {
     (sides, ratio) => {
       const pyramidSolid = onlySolid(pyramid(sides, ratio)).measurements;
       const prismSolid = onlySolid(prism(sides, ratio)).measurements;
-      expect(pyramidSolid.size).toEqual(prismSolid.size);
+      // Equal up to float32 rounding: the prism is scaled once from its unnormalised extrusion, the pyramid from model units.
+      pyramidSolid.size.forEach((size, axis) => {
+        expectRelativelyClose(size, prismSolid.size[axis] as number);
+      });
       expectRelativelyClose(pyramidSolid.volume, prismSolid.volume / 3);
     },
   );
@@ -206,7 +209,7 @@ describe('generateModel for a regular pyramid', () => {
     ['a tetrahedron with a base', { kind: 'tetrahedron', baseSides: 4 }],
   ])('rejects %s before allocating geometry', (_, shape) => {
     const extrude = vi.spyOn(kernel.Manifold, 'extrude');
-    expect(() => generateModel(kernel, { shape, scale } as ModelSpec)).toThrow(InvalidModelSpecError);
+    expect(() => generateModel(kernel, { shape, scale } as ModelSpecInput)).toThrow(InvalidModelSpecError);
     expect(extrude).not.toHaveBeenCalled();
   });
 });

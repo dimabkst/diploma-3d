@@ -1,0 +1,104 @@
+import type { PhysicalScale } from '@diploma-3d/schema';
+import type { Manifold, Mat4 } from 'manifold-3d';
+import type { GeometryKernel } from '../kernel.ts';
+import { cross, length, type Vec3 } from '../mesh.ts';
+import type { Track } from '../scope.ts';
+import { baseContours, polygonSize, signedPolygonArea, type Vec2 } from './polygon.ts';
+
+/**
+ * A prism over any base polygon, before scaling: the base in z = 0 with a0 = 1, counter-clockwise seen from +Z, the
+ * height h0 = h/a and the displacement (dx0, dy0) = (dx/a, dy/a) of the upper base. Zero displacement is a right prism.
+ */
+export interface PrismProportions {
+  readonly base: readonly Vec2[];
+  readonly height: number;
+  readonly offset: Vec2;
+}
+
+export const isOblique = ({ offset: [dx, dy] }: PrismProportions): boolean => dx !== 0 || dy !== 0;
+
+/**
+ * The unscaled bounding box. Its vertices are those of the lower base and of the upper base, the same polygon moved by
+ * (dx0, dy0), so it is the base's box widened by |dx0| and |dy0|; its height is h0.
+ */
+export function prismBoundingSize({ base, height, offset: [dx, dy] }: PrismProportions): Vec3 {
+  const top = base.map(([x, y]): Vec2 => [x + dx, y + dy]);
+  const [width, depth] = polygonSize([...base, ...top]);
+  return [width, depth, height];
+}
+
+/** Millimetres per unit of a0: the longest bounding-box dimension of the complete, displaced solid becomes L. */
+export const prismScaleMm = (prism: PrismProportions, scale: PhysicalScale): number =>
+  scale.longestDimensionMm / Math.max(...prismBoundingSize(prism));
+
+export interface PrismDimensions {
+  /** Base edge a. */
+  readonly edge: number;
+  /** Height h: the perpendicular distance between the base planes, not the lateral edge. */
+  readonly height: number;
+  /** Displacement (dx, dy) of the upper base. */
+  readonly offset: Vec2;
+  /** Length of every lateral edge, |(dx, dy, h)|; equal to h only for a right prism. */
+  readonly lateralEdge: number;
+  readonly baseArea: number;
+  readonly basePerimeter: number;
+  readonly lateralArea: number;
+  readonly surfaceArea: number;
+  readonly volume: number;
+}
+
+/**
+ * Physical dimensions. Each lateral face is the parallelogram spanned by a base edge e and the lateral edge
+ * v = (dx, dy, h), with area |e × v|. For a right prism this is |e|·h, so the sum reduces to perimeter × h; for an
+ * oblique one neither perimeter × h nor perimeter × |v| is correct in general. The volume is base area × h.
+ */
+export function prismDimensionsMm(prism: PrismProportions, scale: PhysicalScale): PrismDimensions {
+  const s = prismScaleMm(prism, scale);
+  const base = prism.base.map(([x, y]): Vec2 => [x * s, y * s]);
+  const height = prism.height * s;
+  const offset: Vec2 = [prism.offset[0] * s, prism.offset[1] * s];
+  const lateral: Vec3 = [offset[0], offset[1], height];
+  let basePerimeter = 0;
+  let lateralArea = 0;
+  base.forEach(([x, y], index) => {
+    const [nextX, nextY] = base[(index + 1) % base.length] as Vec2;
+    const edge: Vec3 = [nextX - x, nextY - y, 0];
+    basePerimeter += length(edge);
+    lateralArea += length(cross(edge, lateral));
+  });
+  const baseArea = signedPolygonArea(base);
+  return {
+    edge: s,
+    height,
+    offset,
+    lateralEdge: length(lateral),
+    baseArea,
+    basePerimeter,
+    lateralArea,
+    surfaceArea: 2 * baseArea + lateralArea,
+    volume: baseArea * height,
+  };
+}
+
+/**
+ * The shear x' = x + (dx0/h0)·z, y' = y + (dy0/h0)·z, z' = z as manifold-3d's column-major 4 × 4 matrix: elements 8
+ * and 9 are rows 0 and 1 of the third (z) column. It keeps z = 0 fixed, moves z = h0 by (dx0, dy0) and every horizontal
+ * section in proportion to its height, and has determinant 1, so it preserves volume and orientation.
+ */
+export function shearMatrix({ height, offset: [dx, dy] }: PrismProportions): Mat4 {
+  return [1, 0, 0, 0, 0, 1, 0, 0, dx / height, dy / height, 1, 0, 0, 0, 0, 1];
+}
+
+/** The unscaled prism: the right prism extruded from the base, sheared when the upper base is displaced. */
+export function buildUnscaledPrism(kernel: GeometryKernel, track: Track, prism: PrismProportions): Manifold {
+  const right = track(kernel.Manifold.extrude(baseContours(prism.base), prism.height));
+  return isOblique(prism) ? track(right.transform(shearMatrix(prism))) : right;
+}
+
+/**
+ * The prism in millimetres, uniformly scaled after the displacement so that the longest dimension of its actual
+ * bounding box is L. The lower base keeps its position in z = 0.
+ */
+export function buildPrism(kernel: GeometryKernel, track: Track, prism: PrismProportions, scale: PhysicalScale): Manifold {
+  return track(buildUnscaledPrism(kernel, track, prism).scale(prismScaleMm(prism, scale)));
+}

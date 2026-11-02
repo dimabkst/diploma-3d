@@ -1,7 +1,16 @@
 <script lang="ts">
 import type { ParameterChoices, ParameterErrors, ParameterTexts, ParameterValues } from '../model/parameters.ts';
-import type { MeasurementItem, ParameterField, ShapeOption } from '../shapes.ts';
+import {
+  type MeasurementItem,
+  type NumericField,
+  type OffsetGroup,
+  offsetHint,
+  type ParameterField,
+  type ShapeOption,
+} from '../shapes.ts';
+import Button from './Button.svelte';
 import Field from './Field.svelte';
+import FieldGroup from './FieldGroup.svelte';
 import MeasurementList from './MeasurementList.svelte';
 import NumberField from './NumberField.svelte';
 import SectionHeading from './SectionHeading.svelte';
@@ -29,7 +38,34 @@ let {
   parameterHint: string | undefined;
   measurements: readonly MeasurementItem[];
 } = $props();
+
+const describedBy = (...ids: (string | undefined)[]) => ids.filter((id) => id !== undefined).join(' ') || undefined;
+const hintId = $derived(parameterHint === undefined ? undefined : 'parameter-hint');
+
+/** Right when both offsets are zero, oblique otherwise; undefined while either is not valid. */
+function offsetState(group: OffsetGroup): 'right' | 'oblique' | undefined {
+  const [x, y] = group.fields.map((field) => values[field.key]);
+  if (x === undefined || y === undefined) return undefined;
+  return x === 0 && y === 0 ? 'right' : 'oblique';
+}
+
+function removeTilt(group: OffsetGroup) {
+  for (const field of group.fields) texts[field.key] = '0';
+}
 </script>
+
+{#snippet numberField(field: NumericField, description: string | undefined)}
+  <NumberField
+    id={field.key}
+    label={field.label}
+    bind:text={texts[field.key]}
+    value={values[field.key]}
+    range={field.range}
+    suffix={field.suffix}
+    error={errors[field.key]}
+    describedBy={description}
+  />
+{/snippet}
 
 <aside class="controls-panel" aria-label="Налаштування моделі">
   <section aria-labelledby="shape-heading">
@@ -58,17 +94,23 @@ let {
                   {/each}
                 </select>
               </Field>
+            {:else if field.type === 'offset'}
+              {@const state = offsetState(field)}
+              <FieldGroup id={field.key} legend={field.legend} description={offsetHint}>
+                {#each field.fields as offsetField (offsetField.key)}
+                  {@render numberField(offsetField, describedBy(`${field.key}-description`, hintId))}
+                {/each}
+                <div class="offset-footer">
+                  <p class="offset-status" aria-live="polite">
+                    {#if state !== undefined}Зараз: {field.solidName[state]}{/if}
+                  </p>
+                  <Button variant="secondary" disabled={state === 'right'} onclick={() => removeTilt(field)}>
+                    Прибрати нахил
+                  </Button>
+                </div>
+              </FieldGroup>
             {:else}
-              <NumberField
-                id={field.key}
-                label={field.label}
-                bind:text={texts[field.key]}
-                value={values[field.key]}
-                range={field.range}
-                suffix={field.suffix}
-                error={errors[field.key]}
-                describedBy={parameterHint === undefined ? undefined : 'parameter-hint'}
-              />
+              {@render numberField(field, hintId)}
             {/if}
           {/each}
         </div>
@@ -131,6 +173,20 @@ let {
   .field-grid {
     display: grid;
     gap: var(--space-4);
+  }
+
+  .offset-footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2) var(--space-4);
+  }
+
+  .offset-status {
+    margin: 0;
+    color: var(--color-text-muted);
+    font-size: var(--text-small);
   }
 
   .hint {
