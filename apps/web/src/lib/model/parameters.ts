@@ -86,6 +86,7 @@ export function resolveModelRequest(kind: ShapeKind, texts: ParameterTexts, choi
   switch (kind) {
     case 'cube':
     case 'tetrahedron':
+    case 'ball':
       return withKey({ shape: { kind }, scale }, {});
     case 'cuboid': {
       const { values, errors } = validateRatios(['cuboidWidthRatio', 'cuboidHeightRatio'], texts);

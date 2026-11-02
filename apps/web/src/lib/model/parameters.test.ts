@@ -176,4 +176,12 @@ describe('resolveModelRequest', () => {
     expect(resolveModelRequest('cylinder', mixed, triangle).spec?.shape).toEqual({ kind: 'cylinder', heightRatio: 1.1 });
     expect(resolveModelRequest('cone', mixed, triangle).errors).toEqual({ coneHeightRatio: 'Введіть значення.' });
   });
+
+  it('builds the ball without reading any field', () => {
+    const empty = Object.fromEntries(Object.keys(initialParameterTexts()).map((key) => [key, 'abc'])) as ParameterTexts;
+    const request = resolveModelRequest('ball', empty, triangle);
+    expect(request.spec).toEqual({ shape: { kind: 'ball' }, scale: { longestDimensionMm: 80 } });
+    expect(request.errors).toEqual({});
+    expect(request.values).toEqual({});
+  });
 });

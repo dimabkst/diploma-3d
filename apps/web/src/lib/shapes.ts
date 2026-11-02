@@ -1,4 +1,5 @@
 import {
+  ballMeasurements,
   boxEdgeLengthsMm,
   MAX_CIRCLE_DEVIATION_MM,
   type MeshMeasurements,
@@ -21,9 +22,8 @@ import { formatDecimal, type StepRange } from './decimal.ts';
 import type { ChoiceKey, ParameterKey } from './model/parameters.ts';
 
 export type ShapeOption = {
-  readonly value: string;
+  readonly value: ShapeKind;
   readonly label: string;
-  readonly available: boolean;
 };
 
 export type MeasurementItem = {
@@ -52,17 +52,15 @@ export type ChoiceField = {
 
 export type ParameterField = RatioField | ChoiceField;
 
-const plannedShapes = [{ value: 'sphere', label: 'Сфера' }] as const;
-
 export const shapeOptions: readonly ShapeOption[] = [
-  { value: 'cube', label: 'Куб', available: true },
-  { value: 'cuboid', label: 'Прямокутний паралелепіпед', available: true },
-  { value: 'prism', label: 'Правильна призма', available: true },
-  { value: 'pyramid', label: 'Правильна піраміда', available: true },
-  { value: 'tetrahedron', label: 'Правильний тетраедр', available: true },
-  { value: 'cylinder', label: 'Циліндр', available: true },
-  { value: 'cone', label: 'Конус', available: true },
-  ...plannedShapes.map((shape) => ({ ...shape, available: false })),
+  { value: 'cube', label: 'Куб' },
+  { value: 'cuboid', label: 'Прямокутний паралелепіпед' },
+  { value: 'prism', label: 'Правильна призма' },
+  { value: 'pyramid', label: 'Правильна піраміда' },
+  { value: 'tetrahedron', label: 'Правильний тетраедр' },
+  { value: 'cylinder', label: 'Циліндр' },
+  { value: 'cone', label: 'Конус' },
+  { value: 'ball', label: 'Куля' },
 ];
 
 export const isAvailableShape = (value: string): value is ShapeKind => Object.hasOwn(defaultModelSpecs, value);
@@ -100,6 +98,12 @@ export function shapeDescription(kind: ShapeKind, scale: PhysicalScale): string 
       return `Прямий круговий циліндр: основи — рівні круги, твірні перпендикулярні до них. ${idealRoundNote}`;
     case 'cone':
       return `Прямий круговий конус: основа — круг, вершина лежить точно над її центром. ${idealRoundNote}`;
+    case 'ball':
+      return (
+        'Суцільна куля, обмежена сферою: усі точки поверхні рівновіддалені від центра. ' +
+        `Діаметр моделі — ${formatLength(scale)}. Розміри нижче — для ідеальної кулі; у файлі друку поверхню наближено ` +
+        `многогранником, що відходить від неї не більше ніж на ${formatDecimal(MAX_CIRCLE_DEVIATION_MM)} мм.`
+      );
   }
 }
 
@@ -144,6 +148,7 @@ export const shapeParameters: Readonly<Record<ShapeKind, readonly ParameterField
   ],
   // Fixed proportions: nothing to adjust.
   tetrahedron: [],
+  ball: [],
   cylinder: [{ type: 'ratio', key: 'cylinderHeightRatio', label: 'Висота h', suffix: '× r', range: ratioRange }],
   cone: [{ type: 'ratio', key: 'coneHeightRatio', label: 'Висота h', suffix: '× r', range: ratioRange }],
 };
@@ -152,6 +157,7 @@ export function parameterHint(kind: ShapeKind, scale: PhysicalScale): string | u
   switch (kind) {
     case 'cube':
     case 'tetrahedron':
+    case 'ball':
       return undefined;
     case 'cuboid':
       return (
@@ -180,7 +186,7 @@ export function parameterHint(kind: ShapeKind, scale: PhysicalScale): string | u
 /**
  * Edge lengths and the base area follow directly from the validated parameters (`shape` is undefined while they are
  * not valid); for polyhedra, surface area and volume are measured on the generated mesh, so they describe exactly the
- * geometry that is previewed and exported. For the cylinder and cone every value is that of the ideal curved solid,
+ * geometry that is previewed and exported. For the cylinder, cone and ball every value is that of the ideal curved solid,
  * which the exported polygonal approximation undershoots slightly.
  */
 export function measurementItems(
@@ -252,6 +258,15 @@ export function measurementItems(
         { label: 'Висота h', ...edge(ideal?.height) },
         ...(kind === 'cone' ? [slantHeight] : []),
         { label: 'Площа основи', value: formatQuantity(ideal?.baseArea, 'мм²'), widest: widestQuantity(length ** 2, 'мм²') },
+        { label: 'Площа поверхні', ...area, value: formatQuantity(ideal?.surfaceArea, 'мм²') },
+        { label: 'Об’єм', ...volume, value: formatQuantity(ideal?.volume, 'мм³') },
+      ];
+    }
+    case 'ball': {
+      const ideal = shape?.kind === 'ball' ? ballMeasurements(scale) : undefined;
+      return [
+        { label: 'Радіус r', ...edge(ideal?.radius) },
+        { label: 'Діаметр d', ...edge(ideal?.diameter) },
         { label: 'Площа поверхні', ...area, value: formatQuantity(ideal?.surfaceArea, 'мм²') },
         { label: 'Об’єм', ...volume, value: formatQuantity(ideal?.volume, 'мм³') },
       ];

@@ -37,9 +37,7 @@ let {
     <Field label="Геометричне тіло" forId="shape">
       <select id="shape" bind:value={selectedShape}>
         {#each shapes as shape (shape.value)}
-          <option value={shape.value} disabled={!shape.available}>
-            {shape.available ? shape.label : `${shape.label} — незабаром`}
-          </option>
+          <option value={shape.value}>{shape.label}</option>
         {/each}
       </select>
     </Field>

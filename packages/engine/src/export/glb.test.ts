@@ -231,6 +231,23 @@ describe('createPreviewGlb shading', () => {
     });
   });
 
+  it('shades the whole ball smoothly, with radial normals and no outlined edges', async () => {
+    const ball: ModelSpec = { shape: { kind: 'ball' }, scale: { longestDimensionMm: 80 } };
+    const { positions, normals, faces, edgeSegments } = await shadedCorners(ball);
+    // The centre (0, 0, 40) mm lies at (0, 0,04, 0) m in glTF.
+    let closerThanFacet = 0;
+    positions.forEach((position, corner) => {
+      const radial = subtract(position, [0, 0.04, 0]);
+      const unitRadial = radial.map((component) => component / Math.hypot(...radial)) as unknown as Vec3;
+      const normal = normals[corner] as Vec3;
+      expect(dot(normal, unitRadial)).toBeGreaterThan(0.9999);
+      if (dot(faces[Math.floor(corner / 3)] as Vec3, unitRadial) < dot(normal, unitRadial)) closerThanFacet += 1;
+    });
+    // The smoothed normals follow the sphere more closely than the facet normals at almost every corner.
+    expect(closerThanFacet / positions.length).toBeGreaterThan(0.99);
+    expect(edgeSegments).toBe(0);
+  });
+
   it('keeps exactly flat normals for polyhedra and when smooth shading is off', async () => {
     for (const [spec, smoothShading] of [
       [{ shape: { kind: 'prism', baseSides: 8, heightRatio: 0.25 }, scale: { longestDimensionMm: 80 } }, undefined],

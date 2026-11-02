@@ -33,6 +33,7 @@ describe('buildModelArtifacts', () => {
     ['tetrahedron', 'tetrahedron.3mf'],
     ['cylinder', 'cylinder.3mf'],
     ['cone', 'cone.3mf'],
+    ['ball', 'ball.3mf'],
   ] as const)('derives the %s preview and print file %s from the same geometry', async (kind, fileName) => {
     const { model, previewGlb, printFile } = await buildModelArtifacts(kernel, defaultModelSpecs[kind]);
     expect(printFile.fileName).toBe(fileName);
@@ -100,6 +101,48 @@ describe('buildModelArtifacts', () => {
         sixfoldVolume += dot(a, cross(b, c));
       }
       expect(sixfoldVolume / 6).toBeCloseTo(0.04 * 0.06 * 0.08, 9);
+    });
+  });
+
+  describe('for the default ball', () => {
+    it('exports ball.3mf as one closed 80 mm object in millimetres resting on the build plate', async () => {
+      const { printFile } = await buildModelArtifacts(kernel, defaultModelSpecs.ball);
+      const { model } = readThreeMf(printFile.bytes);
+      expect(printFile.fileName).toBe('ball.3mf');
+      expect(model.unit).toBe('millimeter');
+      expect(model.objects.map(({ name }) => name)).toEqual(['ball']);
+      const mesh = model.objects[0]?.mesh;
+      if (mesh === undefined) throw new Error('No exported mesh');
+      expect(findMeshDefects(mesh)).toEqual([]);
+      const { bounds, volume } = measureMesh(mesh);
+      [-40, -40, 0].forEach((value, axis) => {
+        expect(bounds.min[axis]).toBeCloseTo(value, 4);
+      });
+      [40, 40, 80].forEach((value, axis) => {
+        expect(bounds.max[axis]).toBeCloseTo(value, 4);
+      });
+      // Inscribed in the ideal ball and at most 0,05 mm inside it: between the balls of radius 39,95 and 40 mm.
+      expect(volume).toBeLessThan((4 / 3) * Math.PI * 40 ** 3);
+      expect(volume).toBeGreaterThan((4 / 3) * Math.PI * 39.95 ** 3);
+    });
+
+    it('previews the ball centred on the glTF up axis, from 0 to 0,08 m', async () => {
+      const { previewGlb } = await buildModelArtifacts(kernel, defaultModelSpecs.ball);
+      const positions = await previewSurfacePositions(previewGlb);
+      const points = Array.from(
+        { length: positions.getCount() },
+        (_, index) => positions.getElement(index, []) as unknown as Vec3,
+      );
+      const extent = (axis: 0 | 1 | 2) => [Math.min(...points.map((p) => p[axis])), Math.max(...points.map((p) => p[axis]))];
+      [
+        [-0.04, 0.04],
+        [0, 0.08],
+        [-0.04, 0.04],
+      ].forEach(([min, max], axis) => {
+        const [actualMin, actualMax] = extent(axis as 0 | 1 | 2);
+        expect(actualMin).toBeCloseTo(min as number, METRE_DIGITS);
+        expect(actualMax).toBeCloseTo(max as number, METRE_DIGITS);
+      });
     });
   });
 
@@ -248,6 +291,7 @@ describe('buildModelArtifacts', () => {
     ['tetrahedron', { shape: { kind: 'tetrahedron', heightRatio: 1 }, scale: { longestDimensionMm: 80 } }],
     ['cylinder', { shape: { kind: 'cylinder', heightRatio: 0 }, scale: { longestDimensionMm: 80 } }],
     ['cone', { shape: { kind: 'cone', heightRatio: Number.NaN }, scale: { longestDimensionMm: 80 } }],
+    ['ball', { shape: { kind: 'ball', radius: 40 }, scale: { longestDimensionMm: 80 } }],
   ] as const)('produces no %s artifacts for invalid input', async (_, invalid) => {
     await expect(buildModelArtifacts(kernel, invalid as unknown as ModelSpec)).rejects.toBeInstanceOf(InvalidModelSpecError);
   });

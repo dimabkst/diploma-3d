@@ -232,3 +232,19 @@ describe('right circular cylinder and cone parameters', () => {
     }
   });
 });
+
+describe('solid ball', () => {
+  it('has no independent parameters', () => {
+    expect(modelSpecSchema.parse(defaultModelSpecs.ball)).toEqual({ shape: { kind: 'ball' }, scale });
+    for (const extra of [{ radius: 40 }, { heightRatio: 1 }, { segments: 128 }, { hollow: true }]) {
+      expect(modelSpecSchema.safeParse({ shape: { kind: 'ball', ...extra }, scale }).success).toBe(false);
+    }
+  });
+
+  it.each([...invalidNumbers, ['above the maximum', MAX_LONGEST_DIMENSION_MM + 0.001] as const])(
+    'rejects a ball whose longest dimension is %s',
+    (_, longestDimensionMm) => {
+      expect(modelSpecSchema.safeParse({ shape: { kind: 'ball' }, scale: { longestDimensionMm } }).success).toBe(false);
+    },
+  );
+});

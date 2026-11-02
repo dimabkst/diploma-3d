@@ -4,6 +4,7 @@ import { GeometryError, InvalidModelSpecError } from './errors.ts';
 import type { GeometryKernel } from './kernel.ts';
 import { assertValidSolidMesh, type MeshMeasurements, measureMesh, meshFromManifold, type TriangleMesh } from './mesh.ts';
 import { type Track, withScope } from './scope.ts';
+import { buildBall } from './shapes/ball.ts';
 import { buildUnitBox } from './shapes/box.ts';
 import { buildUnitPrism } from './shapes/prism.ts';
 import { buildUnitPyramid, pyramidParameters } from './shapes/pyramid.ts';
@@ -45,7 +46,7 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpec): Generat
   assertValidSolidMesh(mesh);
 
   const name = modelName(spec.shape);
-  const smoothShading = spec.shape.kind === 'cylinder' || spec.shape.kind === 'cone';
+  const smoothShading = spec.shape.kind === 'cylinder' || spec.shape.kind === 'cone' || spec.shape.kind === 'ball';
   return { kind: spec.shape.kind, name, spec, solids: [{ name, mesh, measurements: measureMesh(mesh), smoothShading }] };
 }
 
@@ -54,7 +55,7 @@ export function modelName(shape: Shape): string {
   return shape.kind === 'prism' || shape.kind === 'pyramid' ? `${shape.kind}-${shape.baseSides}-sided` : shape.kind;
 }
 
-/** The solid in millimetres: polyhedra are built in model units and scaled once; round solids are built at size. */
+/** The solid in millimetres: polyhedra are built in model units and scaled once; curved solids are built at size. */
 function buildShape(kernel: GeometryKernel, track: Track, shape: Shape, scale: PhysicalScale): Manifold {
   const toMillimetres = (unitSolid: Manifold) => track(unitSolid.scale(scale.longestDimensionMm));
   switch (shape.kind) {
@@ -69,5 +70,7 @@ function buildShape(kernel: GeometryKernel, track: Track, shape: Shape, scale: P
     case 'cylinder':
     case 'cone':
       return buildRoundSolid(kernel, track, shape, scale);
+    case 'ball':
+      return buildBall(kernel, track, scale);
   }
 }

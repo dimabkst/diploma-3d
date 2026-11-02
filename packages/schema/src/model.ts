@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ballShapeSchema } from './ball.ts';
 import { cubeShapeSchema } from './cube.ts';
 import { cuboidShapeSchema } from './cuboid.ts';
 import { prismShapeSchema } from './prism.ts';
@@ -15,6 +16,7 @@ export const shapeSchema = z.discriminatedUnion('kind', [
   tetrahedronShapeSchema,
   cylinderShapeSchema,
   coneShapeSchema,
+  ballShapeSchema,
 ]);
 
 export type Shape = z.infer<typeof shapeSchema>;
@@ -37,4 +39,5 @@ export const defaultModelSpecs = {
   tetrahedron: { shape: { kind: 'tetrahedron' }, scale: defaultScale },
   cylinder: { shape: { kind: 'cylinder', heightRatio: 2 }, scale: defaultScale },
   cone: { shape: { kind: 'cone', heightRatio: 2 }, scale: defaultScale },
+  ball: { shape: { kind: 'ball' }, scale: defaultScale },
 } as const satisfies { readonly [Kind in ShapeKind]: ModelSpec & { shape: { kind: Kind } } };

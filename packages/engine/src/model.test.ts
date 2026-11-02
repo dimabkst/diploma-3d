@@ -202,11 +202,12 @@ describe('releases Manifold objects', () => {
       return manifold;
     };
     const prototype = instancePrototype();
-    const { cube: originalCube, extrude: originalExtrude, cylinder: originalCylinder } = kernel.Manifold;
+    const { cube: originalCube, extrude: originalExtrude, cylinder: originalCylinder, sphere: originalSphere } = kernel.Manifold;
     const { translate, scale } = prototype;
     vi.spyOn(kernel.Manifold, 'cube').mockImplementation((...args) => record(originalCube.apply(kernel.Manifold, args)));
     vi.spyOn(kernel.Manifold, 'extrude').mockImplementation((...args) => record(originalExtrude.apply(kernel.Manifold, args)));
     vi.spyOn(kernel.Manifold, 'cylinder').mockImplementation((...args) => record(originalCylinder.apply(kernel.Manifold, args)));
+    vi.spyOn(kernel.Manifold, 'sphere').mockImplementation((...args) => record(originalSphere.apply(kernel.Manifold, args)));
     vi.spyOn(prototype, 'translate').mockImplementation(function (this: Manifold, ...args) {
       return record(translate.apply(this, args));
     });
@@ -226,12 +227,13 @@ describe('releases Manifold objects', () => {
     ['pyramid', 2],
     ['tetrahedron', 2],
   ] as const;
-  // Built by manifold-3d at their physical size in one step.
-  const roundSolids = [
+  // Built by manifold-3d at their physical size: cylinders and cones in one step, the ball as sphere and translate.
+  const curvedSolids = [
     ['cylinder', 1],
     ['cone', 1],
+    ['ball', 2],
   ] as const;
-  const kinds = [...polyhedra, ...roundSolids];
+  const kinds = [...polyhedra, ...curvedSolids];
 
   it.each(kinds)('after successful generation of a %s', (kind, objects) => {
     const { created } = trackCreatedManifolds();
@@ -258,7 +260,7 @@ describe('releases Manifold objects', () => {
     expect(created.every(isDeleted)).toBe(true);
   });
 
-  it.each(roundSolids)('when copying the mesh of a %s out of the kernel throws', (kind, objects) => {
+  it.each(curvedSolids)('when copying the mesh of a %s out of the kernel throws', (kind, objects) => {
     const { created, prototype } = trackCreatedManifolds();
     vi.spyOn(prototype, 'getMesh').mockImplementation(() => {
       throw new Error('out of memory');

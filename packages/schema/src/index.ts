@@ -1,3 +1,4 @@
+export { type BallShape, ballShapeSchema } from './ball.ts';
 export { type CubeShape, cubeShapeSchema } from './cube.ts';
 export { type CuboidShape, cuboidShapeSchema } from './cuboid.ts';
 export { defaultModelSpecs, type ModelSpec, modelSpecSchema, type Shape, type ShapeKind, shapeSchema } from './model.ts';

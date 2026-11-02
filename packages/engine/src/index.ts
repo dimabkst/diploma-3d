@@ -13,6 +13,13 @@ export {
   type Vec3,
 } from './mesh.ts';
 export { type GeneratedModel, generateModel, modelName, type Solid } from './model.ts';
+export {
+  BALL_SEGMENTS,
+  type BallMeasurements,
+  ballMeasurements,
+  ballRadiusMm,
+  ballSegments,
+} from './shapes/ball.ts';
 export { type BoxShape, boxEdgeLengthsMm, boxProportions } from './shapes/box.ts';
 export { pyramidParameters } from './shapes/pyramid.ts';
 export {
