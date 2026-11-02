@@ -231,7 +231,8 @@ test('pyramid: switching shapes keeps the pyramid and prism parameters apart', a
   await expectPreviewOf(page, pyramidSummary(6, 0.5));
 
   await shapeSelect(page).selectOption({ label: 'Призма' });
-  await expect(baseSelect(page).locator('option:checked')).toHaveText(baseNames[3]);
+  // The prism's regular polygon is chosen in its own field.
+  await expect(page.getByLabel('Багатокутник', { exact: true }).locator('option:checked')).toHaveText(baseNames[3]);
   await expect(heightRatio(page)).toHaveValue('2');
   await expectPreviewOf(page, 'Призма · 40 × 34,6 × 80 мм');
 

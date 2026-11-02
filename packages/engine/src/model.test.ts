@@ -232,6 +232,24 @@ describe('releases Manifold objects', () => {
       scale: { longestDimensionMm: 80 },
     },
   } as const satisfies Record<string, ModelSpecInput>;
+  const triangle = {
+    right: {
+      shape: { kind: 'prism', baseType: 'triangle', baseSideRatio: 0.75, baseAngleDeg: 90, heightRatio: 1 },
+      scale: { longestDimensionMm: 80 },
+    },
+    oblique: {
+      shape: {
+        kind: 'prism',
+        baseType: 'triangle',
+        baseSideRatio: 2,
+        baseAngleDeg: 120,
+        heightRatio: 1,
+        offsetXRatio: -1,
+        offsetYRatio: 0.5,
+      },
+      scale: { longestDimensionMm: 80 },
+    },
+  } as const satisfies Record<string, ModelSpecInput>;
   // Boxes: cube, translate onto the build plate, scale to millimetres. Right prisms, parallelepipeds and pyramids:
   // extrude, scale. Oblique prisms and parallelepipeds: extrude, shear, scale.
   const polyhedra: readonly (readonly [string, ModelSpecInput, number])[] = [
@@ -241,6 +259,8 @@ describe('releases Manifold objects', () => {
     ['oblique parallelepiped', oblique.parallelepiped, 3],
     ['prism', defaultModelSpecs.prism, 2],
     ['oblique prism', oblique.prism, 3],
+    ['triangle prism', triangle.right, 2],
+    ['oblique triangle prism', triangle.oblique, 3],
     ['pyramid', defaultModelSpecs.pyramid, 2],
     ['tetrahedron', defaultModelSpecs.tetrahedron, 2],
   ];

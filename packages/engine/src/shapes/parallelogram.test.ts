@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { cosSinDeg, parallelogramArea, parallelogramVertices } from './parallelogram.ts';
+import { cosSinDeg } from './angle.ts';
+import { parallelogramArea, parallelogramVertices } from './parallelogram.ts';
 import { signedPolygonArea, type Vec2 } from './polygon.ts';
 
 const distance = (p: Vec2, q: Vec2) => Math.hypot(q[0] - p[0], q[1] - p[1]);

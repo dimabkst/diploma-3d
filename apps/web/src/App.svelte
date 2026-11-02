@@ -12,11 +12,11 @@ import { initialParameterChoices, initialParameterTexts, resolveModelRequest } f
 import {
   isAvailableShape,
   measurementItems,
+  parameterFields,
   parameterHint,
   shapeDescription,
   shapeLabel,
   shapeOptions,
-  shapeParameters,
 } from './lib/shapes.ts';
 
 // Parameter edits are coalesced briefly so that typing "1,75" does not rebuild the model for every keystroke.
@@ -40,12 +40,18 @@ const description = $derived(
   selectedKind === undefined || request === undefined ? '' : shapeDescription(selectedKind, request.scale),
 );
 const hint = $derived(
-  selectedKind === undefined || request === undefined ? undefined : parameterHint(selectedKind, request.scale),
+  selectedKind === undefined || request === undefined ? undefined : parameterHint(selectedKind, request.scale, parameterChoices),
 );
 const measurements = $derived.by(() => {
   if (selectedKind === undefined || request === undefined) return [];
   const ready = model.status === 'ready' && model.key === requestKey ? model.artifacts : undefined;
-  return measurementItems(selectedKind, request.scale, request.spec?.shape, ready?.model.solids[0]?.measurements);
+  return measurementItems(
+    selectedKind,
+    request.scale,
+    request.spec?.shape,
+    ready?.model.solids[0]?.measurements,
+    parameterChoices,
+  );
 });
 
 let latestRequest = 0;
@@ -112,7 +118,7 @@ function downloadPrintFile() {
       shapes={shapeOptions}
       bind:selectedShape
       {description}
-      fields={selectedKind === undefined ? [] : shapeParameters[selectedKind]}
+      fields={selectedKind === undefined ? [] : parameterFields(selectedKind, parameterChoices)}
       bind:texts={parameterTexts}
       bind:choices={parameterChoices}
       values={request?.values ?? {}}

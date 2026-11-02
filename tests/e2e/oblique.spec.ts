@@ -68,7 +68,7 @@ test('oblique prism: offsets tilt the square prism, change the measurements and 
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Призма' });
-  await page.getByLabel('Основа', { exact: true }).selectOption({ label: 'Квадрат' });
+  await page.getByLabel('Багатокутник', { exact: true }).selectOption({ label: 'Квадрат' });
   await entry(page, 'Висота h').fill('1');
 
   // Right by default: both offsets 0, nothing to remove.
@@ -129,7 +129,7 @@ test('oblique prism: offsets tilt the square prism, change the measurements and 
   await expect(offsetX).toHaveValue('0');
   await expect(entry(page, 'Зміщення Y')).toHaveValue('0');
   await expect(entry(page, 'Висота h')).toHaveValue('1');
-  await expect(page.getByLabel('Основа', { exact: true }).locator('option:checked')).toHaveText('Квадрат');
+  await expect(page.getByLabel('Багатокутник', { exact: true }).locator('option:checked')).toHaveText('Квадрат');
   await expect(status(page)).toHaveText('Зараз: пряма призма');
   await expect(resetButton(page)).toBeDisabled();
   await expectPreviewOf(page, 'Призма · 80 × 80 × 80 мм');
@@ -214,7 +214,7 @@ test('oblique prism: offsets belong to each shape and a change never offers outd
   await shapeSelect(page).selectOption({ label: 'Призма' });
   await entry(page, 'Зміщення X').fill('1');
   const prism = geometry(1, 90, 1, 1, 0);
-  await page.getByLabel('Основа', { exact: true }).selectOption({ label: 'Квадрат' });
+  await page.getByLabel('Багатокутник', { exact: true }).selectOption({ label: 'Квадрат' });
   await entry(page, 'Висота h').fill('1');
   await expectPreviewOf(page, summaryOf('Призма', prism));
 

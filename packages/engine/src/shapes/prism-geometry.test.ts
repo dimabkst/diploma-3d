@@ -1,4 +1,10 @@
-import type { ModelSpecInput, ParallelepipedShape, PrismBaseSides, PrismShape } from '@diploma-3d/schema';
+import type {
+  ModelSpecInput,
+  ParallelepipedShape,
+  PrismBaseSides,
+  RegularPrismShape,
+  TrianglePrismShape,
+} from '@diploma-3d/schema';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { type GeometryKernel, loadGeometryKernel } from '../kernel.ts';
 import {
@@ -16,7 +22,12 @@ import { generateModel } from '../model.ts';
 import { withScope } from '../scope.ts';
 import { parallelepipedDimensionsMm, parallelepipedProportions } from './parallelepiped.ts';
 import { polygonSize, signedPolygonArea, type Vec2 } from './polygon.ts';
-import { regularPrismDimensionsMm, regularPrismProportions } from './prism.ts';
+import {
+  regularPrismDimensionsMm,
+  regularPrismProportions,
+  trianglePrismDimensionsMm,
+  trianglePrismProportions,
+} from './prism.ts';
 import {
   buildUnscaledPrism,
   isOblique,
@@ -41,8 +52,9 @@ afterEach(() => {
 
 const L80 = { longestDimensionMm: 80 };
 
-const prismShape = (baseSides: PrismBaseSides, heightRatio: number, offsetXRatio = 0, offsetYRatio = 0): PrismShape => ({
+const prismShape = (baseSides: PrismBaseSides, heightRatio: number, offsetXRatio = 0, offsetYRatio = 0): RegularPrismShape => ({
   kind: 'prism',
+  baseType: 'regular',
   baseSides,
   heightRatio,
   offsetXRatio,
@@ -343,5 +355,123 @@ describe('generateModel for a parallelepiped with a displaced upper base', () =>
       expect(measurements.bounds.max[axis]).toBeCloseTo(max, 4);
     }
     expectRelativelyClose(measurements.volume, 40 * 60 * 80);
+  });
+});
+
+describe('generateModel for a prism over a configurable triangle', () => {
+  const triangleShape = (
+    baseSideRatio: number,
+    baseAngleDeg: number,
+    heightRatio: number,
+    offsetXRatio = 0,
+    offsetYRatio = 0,
+  ): TrianglePrismShape => ({
+    kind: 'prism',
+    baseType: 'triangle',
+    baseSideRatio,
+    baseAngleDeg,
+    heightRatio,
+    offsetXRatio,
+    offsetYRatio,
+  });
+
+  const cases = (
+    [
+      [1, 60],
+      [0.75, 90],
+      [1, 120],
+      [0.25, 15],
+      [4, 15],
+      [4, 165],
+      [2.05, 62],
+    ] as const
+  ).flatMap(([b0, angle]) =>
+    [0.25, 1.1, 4].flatMap((h0) =>
+      (
+        [
+          [0, 0],
+          [1, 0],
+          [0, -1.5],
+          [-0.75, 1.25],
+          [2, -2],
+        ] as const
+      ).map((offset) => [b0, angle, h0, offset] as const),
+    ),
+  );
+
+  it.each(cases)('with b/a = %s, α = %s°, h/a = %s and the offset %j matches its definition', (b0, angle, h0, [dx0, dy0]) => {
+    const shape = triangleShape(b0, angle, h0, dx0, dy0);
+    expectPrismGeometry({ shape, scale: L80 }, trianglePrismProportions(shape));
+
+    // The base's width from its vertices P0 = (0, 0), P1 = (1, 0) and P2 = b0·(cos α, sin α): for an obtuse α or a long
+    // b it is not a.
+    const p2x = b0 * Math.cos((angle * Math.PI) / 180);
+    const width0 = Math.max(1, p2x) - Math.min(0, p2x) + Math.abs(dx0);
+    const depth0 = b0 * Math.sin((angle * Math.PI) / 180) + Math.abs(dy0);
+    const s = 80 / Math.max(width0, depth0, h0);
+    const dimensions = trianglePrismDimensionsMm(shape, L80);
+    expectRelativelyClose(dimensions.edge, s);
+    expectRelativelyClose(dimensions.baseSideB, b0 * s);
+    expectRelativelyClose(dimensions.baseSideC, s * Math.sqrt(1 + b0 ** 2 - 2 * b0 * Math.cos((angle * Math.PI) / 180)));
+    expectRelativelyClose(dimensions.basePerimeter, s + dimensions.baseSideB + dimensions.baseSideC);
+    expectRelativelyClose(dimensions.baseArea, (s * dimensions.baseSideB * Math.sin((angle * Math.PI) / 180)) / 2);
+  });
+
+  it('builds the right-triangle reference: a = 80, b = 60, c = 100, h = 80 mm, S = 24 000 mm², V = 192 000 mm³', () => {
+    const shape = triangleShape(0.75, 90, 1);
+    const dimensions = trianglePrismDimensionsMm(shape, L80);
+    expect(dimensions.edge).toBeCloseTo(80, 12);
+    expect(dimensions.baseSideB).toBeCloseTo(60, 12);
+    expect(dimensions.baseSideC).toBeCloseTo(100, 12);
+    expect(dimensions.height).toBeCloseTo(80, 12);
+    expect(dimensions.lateralEdge).toBeCloseTo(80, 12);
+    expect(dimensions.baseArea).toBeCloseTo(2400, 9);
+    expect(dimensions.volume).toBeCloseTo(192_000, 7);
+    expect(dimensions.lateralArea).toBeCloseTo(240 * 80, 9);
+    expect(dimensions.surfaceArea).toBeCloseTo(24_000, 9);
+
+    const { mesh, measurements } = onlySolid({ shape, scale: L80 });
+    expect(findMeshDefects(mesh)).toEqual([]);
+    expect(triangleCount(mesh)).toBe(8);
+    // The centroid (80/3, 20) mm of the legs' triangle is at the origin.
+    for (const [axis, min, max] of [
+      [0, -80 / 3, 160 / 3],
+      [1, -20, 40],
+      [2, 0, 80],
+    ] as const) {
+      expect(measurements.bounds.min[axis]).toBeCloseTo(min, 4);
+      expect(measurements.bounds.max[axis]).toBeCloseTo(max, 4);
+    }
+    expectRelativelyClose(measurements.volume, 192_000);
+    expectRelativelyClose(measurements.surfaceArea, 24_000);
+  });
+
+  it.each([
+    [1, 0, 0],
+    [2, 0, 0],
+    [0.5, -0.75, 1.25],
+  ])('with b = a and α = 60° matches the regular triangular prism for h/a = %s and the offset (%s, %s)', (h0, dx0, dy0) => {
+    const configurable = onlySolid({ shape: triangleShape(1, 60, h0, dx0, dy0), scale: L80 });
+    const regular = onlySolid({ shape: prismShape(3, h0, dx0, dy0), scale: L80 });
+    const sorted = (mesh: TriangleMesh) => verticesOf(mesh).sort((p, q) => p[0] - q[0] || p[1] - q[1] || p[2] - q[2]);
+    const regularVertices = sorted(regular.mesh);
+    sorted(configurable.mesh).forEach((vertex, index) => {
+      vertex.forEach((component, axis) => {
+        expect(Math.abs(component - (regularVertices[index]?.[axis] ?? Number.NaN))).toBeLessThan(ABSOLUTE_TOLERANCE_MM);
+      });
+    });
+    expectRelativelyClose(configurable.measurements.volume, regular.measurements.volume);
+    expectRelativelyClose(configurable.measurements.surfaceArea, regular.measurements.surfaceArea);
+    const dimensions = trianglePrismDimensionsMm(triangleShape(1, 60, h0, dx0, dy0), L80);
+    expectRelativelyClose(dimensions.baseSideC, dimensions.edge);
+  });
+
+  it('keeps the 80 mm limit on the bounding box, so a slanted side may be longer', () => {
+    // b/a = 4 and α = 60°: the base is 2a wide and 2√3·a deep, so a = 80 / (2√3) mm and b = 4a ≈ 92,4 mm.
+    const shape = triangleShape(4, 60, 1);
+    const dimensions = trianglePrismDimensionsMm(shape, L80);
+    expect(dimensions.baseSideB).toBeCloseTo(160 / Math.sqrt(3), 9);
+    expect(dimensions.baseSideB).toBeGreaterThan(80);
+    expectRelativelyClose(Math.max(...onlySolid({ shape, scale: L80 }).measurements.size), 80);
   });
 });

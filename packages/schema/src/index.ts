@@ -1,4 +1,5 @@
 export { type BallShape, ballShapeSchema } from './ball.ts';
+export { BASE_ANGLE_LIMITS, baseAngleSchema } from './base-angle.ts';
 export { type CubeShape, cubeShapeSchema } from './cube.ts';
 export { type CuboidShape, cuboidShapeSchema } from './cuboid.ts';
 export {
@@ -11,13 +12,20 @@ export {
   shapeSchema,
 } from './model.ts';
 export { OFFSET_LIMITS, offsetRatioSchema } from './offset.ts';
+export { type ParallelepipedShape, parallelepipedShapeSchema } from './parallelepiped.ts';
 export {
-  BASE_ANGLE_LIMITS,
-  baseAngleSchema,
-  type ParallelepipedShape,
-  parallelepipedShapeSchema,
-} from './parallelepiped.ts';
-export { PRISM_BASE_SIDES, type PrismBaseSides, type PrismShape, prismShapeSchema } from './prism.ts';
+  DEFAULT_TRIANGLE_BASE,
+  PRISM_BASE_SIDES,
+  PRISM_BASE_TYPES,
+  type PrismBaseSides,
+  type PrismBaseType,
+  type PrismShape,
+  prismShapeSchema,
+  type RegularPrismShape,
+  regularPrismShapeSchema,
+  type TrianglePrismShape,
+  trianglePrismShapeSchema,
+} from './prism.ts';
 export { PYRAMID_BASE_SIDES, type PyramidBaseSides, type PyramidShape, pyramidShapeSchema } from './pyramid.ts';
 export { RATIO_LIMITS, ratioSchema } from './ratio.ts';
 export { type ConeShape, type CylinderShape, coneShapeSchema, cylinderShapeSchema } from './round.ts';

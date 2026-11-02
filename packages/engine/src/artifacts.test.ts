@@ -210,6 +210,53 @@ describe('buildModelArtifacts', () => {
     });
   });
 
+  describe('for the right-triangle prism with b/a = 0,75, α = 90° and h/a = 1', () => {
+    // a = 80, b = 60 and c = 100 mm, h = 80 mm; the centroid (80/3, 20) mm of the legs' triangle is at the origin.
+    const spec: ModelSpecInput = {
+      shape: { kind: 'prism', baseType: 'triangle', baseSideRatio: 0.75, baseAngleDeg: 90, heightRatio: 1 },
+      scale: { longestDimensionMm: 80 },
+    };
+
+    it('exports prism-triangle.3mf as one closed 80 × 60 × 80 mm object with V = 192 000 mm³ and S = 24 000 mm²', async () => {
+      const { printFile } = await buildModelArtifacts(kernel, spec);
+      const { model } = readThreeMf(printFile.bytes);
+      expect(printFile.fileName).toBe('prism-triangle.3mf');
+      expect(model.unit).toBe('millimeter');
+      expect(model.objects.map(({ name }) => name)).toEqual(['prism-triangle']);
+      const mesh = model.objects[0]?.mesh;
+      if (mesh === undefined) throw new Error('No exported mesh');
+      expect(findMeshDefects(mesh)).toEqual([]);
+      const { bounds, size, volume, surfaceArea } = measureMesh(mesh);
+      [80, 60, 80].forEach((value, axis) => {
+        expect(size[axis]).toBeCloseTo(value, 4);
+      });
+      [-80 / 3, -20, 0].forEach((value, axis) => {
+        expect(bounds.min[axis]).toBeCloseTo(value, 4);
+      });
+      expect(volume / 192_000).toBeCloseTo(1, 6);
+      expect(surfaceArea / 24_000).toBeCloseTo(1, 6);
+    });
+
+    it('previews the legs along glTF X and −Z and the height along glTF Y, in metres', async () => {
+      const { previewGlb } = await buildModelArtifacts(kernel, spec);
+      const positions = await previewSurfacePositions(previewGlb);
+      const points = Array.from(
+        { length: positions.getCount() },
+        (_, index) => positions.getElement(index, []) as unknown as Vec3,
+      );
+      const extent = (axis: 0 | 1 | 2) => [Math.min(...points.map((p) => p[axis])), Math.max(...points.map((p) => p[axis]))];
+      [
+        [-0.08 / 3, 0.16 / 3],
+        [0, 0.08],
+        [-0.04, 0.02],
+      ].forEach(([min, max], axis) => {
+        const [actualMin, actualMax] = extent(axis as 0 | 1 | 2);
+        expect(actualMin).toBeCloseTo(min as number, METRE_DIGITS);
+        expect(actualMax).toBeCloseTo(max as number, METRE_DIGITS);
+      });
+    });
+  });
+
   describe('for the default ball', () => {
     it('exports ball.3mf as one closed 80 mm object in millimetres resting on the build plate', async () => {
       const { printFile } = await buildModelArtifacts(kernel, defaultModelSpecs.ball);
@@ -400,6 +447,13 @@ describe('buildModelArtifacts', () => {
       },
     ],
     ['prism', { shape: { kind: 'prism', baseSides: 9, heightRatio: 2 }, scale: { longestDimensionMm: 80 } }],
+    [
+      'triangle prism',
+      {
+        shape: { kind: 'prism', baseType: 'triangle', baseSideRatio: 1, baseAngleDeg: 170, heightRatio: 1 },
+        scale: { longestDimensionMm: 80 },
+      },
+    ],
     [
       'oblique prism',
       { shape: { kind: 'prism', baseSides: 4, heightRatio: 1, offsetXRatio: 2.5 }, scale: { longestDimensionMm: 80 } },

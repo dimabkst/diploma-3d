@@ -13,6 +13,7 @@ export {
   type Vec3,
 } from './mesh.ts';
 export { type GeneratedModel, generateModel, modelName, type Solid } from './model.ts';
+export { cosSinDeg } from './shapes/angle.ts';
 export {
   BALL_SEGMENTS,
   type BallMeasurements,
@@ -26,9 +27,16 @@ export {
   parallelepipedDimensionsMm,
   parallelepipedProportions,
 } from './shapes/parallelepiped.ts';
-export { cosSinDeg, parallelogramArea, parallelogramVertices } from './shapes/parallelogram.ts';
+export { parallelogramArea, parallelogramVertices } from './shapes/parallelogram.ts';
 export { baseContours, polygonSize, signedPolygonArea, type Vec2 } from './shapes/polygon.ts';
-export { regularPrismDimensionsMm, regularPrismProportions } from './shapes/prism.ts';
+export {
+  prismShapeProportions,
+  regularPrismDimensionsMm,
+  regularPrismProportions,
+  type TrianglePrismDimensions,
+  trianglePrismDimensionsMm,
+  trianglePrismProportions,
+} from './shapes/prism.ts';
 export {
   isOblique,
   type PrismDimensions,
@@ -54,3 +62,4 @@ export {
   roundDimensionsMm,
   roundSolidMeasurements,
 } from './shapes/round.ts';
+export { triangleArea, triangleThirdSide, triangleVertices } from './shapes/triangle.ts';

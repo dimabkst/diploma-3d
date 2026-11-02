@@ -14,7 +14,7 @@ import { type Track, withScope } from './scope.ts';
 import { buildBall } from './shapes/ball.ts';
 import { buildUnitBox } from './shapes/box.ts';
 import { buildParallelepiped } from './shapes/parallelepiped.ts';
-import { buildRegularPrism } from './shapes/prism.ts';
+import { buildPrismShape } from './shapes/prism.ts';
 import { buildUnitPyramid, pyramidParameters } from './shapes/pyramid.ts';
 import { buildRoundSolid } from './shapes/round.ts';
 
@@ -58,8 +58,12 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
   return { kind: spec.shape.kind, name, spec, solids: [{ name, mesh, measurements: measureMesh(mesh), smoothShading }] };
 }
 
-/** The shape kind, with the number of base sides for prisms and pyramids, e.g. "prism-6-sided". */
+/**
+ * The shape kind, with the number of sides of a regular base for prisms and pyramids, e.g. "prism-6-sided", or the base
+ * type otherwise, e.g. "prism-triangle".
+ */
 export function modelName(shape: Shape): string {
+  if (shape.kind === 'prism' && shape.baseType === 'triangle') return 'prism-triangle';
   return shape.kind === 'prism' || shape.kind === 'pyramid' ? `${shape.kind}-${shape.baseSides}-sided` : shape.kind;
 }
 
@@ -76,7 +80,7 @@ function buildShape(kernel: GeometryKernel, track: Track, shape: Shape, scale: P
     case 'parallelepiped':
       return buildParallelepiped(kernel, track, shape, scale);
     case 'prism':
-      return buildRegularPrism(kernel, track, shape, scale);
+      return buildPrismShape(kernel, track, shape, scale);
     case 'pyramid':
     case 'tetrahedron':
       return toMillimetres(buildUnitPyramid(kernel, track, pyramidParameters(shape)));

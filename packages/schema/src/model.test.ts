@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   BASE_ANGLE_LIMITS,
   DEFAULT_LONGEST_DIMENSION_MM,
+  DEFAULT_TRIANGLE_BASE,
   defaultModelSpecs,
   MAX_LONGEST_DIMENSION_MM,
   modelSpecSchema,
   OFFSET_LIMITS,
   PRISM_BASE_SIDES,
+  PRISM_BASE_TYPES,
   PYRAMID_BASE_SIDES,
   RATIO_LIMITS,
   TETRAHEDRON_HEIGHT_RATIO,
@@ -43,7 +45,7 @@ describe('modelSpecSchema', () => {
       scale,
     });
     expect(modelSpecSchema.parse(defaultModelSpecs.prism)).toEqual({
-      shape: { kind: 'prism', baseSides: 3, heightRatio: 2, offsetXRatio: 0, offsetYRatio: 0 },
+      shape: { kind: 'prism', baseType: 'regular', baseSides: 3, heightRatio: 2, offsetXRatio: 0, offsetYRatio: 0 },
       scale,
     });
   });
@@ -172,8 +174,10 @@ describe('regular prism parameters', () => {
   it.each(PRISM_BASE_SIDES.flatMap((baseSides) => [min, 1.1, max].map((heightRatio) => [baseSides, heightRatio] as const)))(
     'accepts %s base sides with h/a = %s, including the ratio boundaries',
     (baseSides, heightRatio) => {
+      // Without a base type the prism keeps its earlier meaning: a regular polygon base.
       expect(modelSpecSchema.parse(prism(baseSides, heightRatio)).shape).toEqual({
         kind: 'prism',
+        baseType: 'regular',
         baseSides,
         heightRatio,
         offsetXRatio: 0,
@@ -209,6 +213,84 @@ describe('regular prism parameters', () => {
     expect(modelSpecSchema.safeParse({ shape: { kind: 'prism', baseSides: 3, heightRatio: 2, a: 40 }, scale }).success).toBe(
       false,
     );
+  });
+});
+
+describe('prism over a configurable triangle', () => {
+  const { min, max } = RATIO_LIMITS;
+  const triangle = (baseSideRatio: unknown, baseAngleDeg: unknown, extra: Record<string, unknown> = {}) => ({
+    shape: { kind: 'prism', baseType: 'triangle', baseSideRatio, baseAngleDeg, heightRatio: 1, ...extra },
+    scale,
+  });
+
+  it('shares the angle limits of the parallelogram and defaults to an equilateral triangle', () => {
+    expect(BASE_ANGLE_LIMITS).toEqual({ min: 15, max: 165 });
+    expect(DEFAULT_TRIANGLE_BASE).toEqual({ baseSideRatio: 1, baseAngleDeg: 60 });
+    expect(PRISM_BASE_TYPES).toEqual(['regular', 'triangle']);
+  });
+
+  it.each([
+    [min, BASE_ANGLE_LIMITS.min],
+    [max, BASE_ANGLE_LIMITS.max],
+    [1, 60],
+    [0.75, 90],
+    [2.05, 62],
+    [1.1, 72.5],
+  ])('accepts b/a = %s and α = %s°, including the limits and off-step values', (baseSideRatio, baseAngleDeg) => {
+    expect(modelSpecSchema.parse(triangle(baseSideRatio, baseAngleDeg)).shape).toEqual({
+      kind: 'prism',
+      baseType: 'triangle',
+      baseSideRatio,
+      baseAngleDeg,
+      heightRatio: 1,
+      offsetXRatio: 0,
+      offsetYRatio: 0,
+    });
+  });
+
+  it.each([
+    ['NaN', Number.NaN],
+    ['infinite', Number.POSITIVE_INFINITY],
+    ['a numeric string', '1'],
+    ['missing', undefined],
+    ['below the minimum', min - 1e-9],
+    ['above the maximum', max + 1e-9],
+  ])('rejects a side ratio that is %s', (_, ratio) => {
+    expect(modelSpecSchema.safeParse(triangle(ratio, 60)).success).toBe(false);
+  });
+
+  it.each([
+    ['NaN', Number.NaN],
+    ['infinite', Number.NEGATIVE_INFINITY],
+    ['missing', undefined],
+    ['below the minimum', BASE_ANGLE_LIMITS.min - 1e-9],
+    ['above the maximum', BASE_ANGLE_LIMITS.max + 1e-9],
+    ['flat', 180],
+  ])('rejects an angle that is %s', (_, angle) => {
+    expect(modelSpecSchema.safeParse(triangle(1, angle)).success).toBe(false);
+  });
+
+  it('validates only the fields of the selected base type', () => {
+    // A triangle with a regular polygon's side count, or a regular base with triangle fields, is rejected.
+    expect(modelSpecSchema.safeParse(triangle(1, 60, { baseSides: 3 })).success).toBe(false);
+    expect(
+      modelSpecSchema.safeParse({
+        shape: { kind: 'prism', baseType: 'regular', baseSides: 3, heightRatio: 1, baseSideRatio: 1 },
+        scale,
+      }).success,
+    ).toBe(false);
+    expect(
+      modelSpecSchema.safeParse({ shape: { kind: 'prism', baseSides: 3, heightRatio: 1, baseAngleDeg: 60 }, scale }).success,
+    ).toBe(false);
+    expect(modelSpecSchema.safeParse({ shape: { kind: 'prism', baseType: 'trapezoid', heightRatio: 1 }, scale }).success).toBe(
+      false,
+    );
+    // The triangle keeps the shared height and displacement fields.
+    expect(modelSpecSchema.parse(triangle(1, 60, { offsetXRatio: -0.5, offsetYRatio: 1.25 })).shape).toMatchObject({
+      offsetXRatio: -0.5,
+      offsetYRatio: 1.25,
+    });
+    expect(modelSpecSchema.safeParse(triangle(1, 60, { heightRatio: 0 })).success).toBe(false);
   });
 });
 

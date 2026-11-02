@@ -9,6 +9,7 @@ import {
   regularPolygonArea,
   regularPrismDimensionsMm,
   roundSolidMeasurements,
+  trianglePrismDimensionsMm,
 } from '@diploma-3d/engine';
 import {
   BASE_ANGLE_LIMITS,
@@ -16,14 +17,16 @@ import {
   OFFSET_LIMITS,
   type PhysicalScale,
   PRISM_BASE_SIDES,
+  PRISM_BASE_TYPES,
   type PrismBaseSides,
+  type PrismBaseType,
   PYRAMID_BASE_SIDES,
   RATIO_LIMITS,
   type Shape,
   type ShapeKind,
 } from '@diploma-3d/schema';
 import { formatDecimal, type StepRange } from './decimal.ts';
-import type { ChoiceKey, ParameterKey } from './model/parameters.ts';
+import type { ChoiceKey, ParameterChoices, ParameterKey } from './model/parameters.ts';
 
 export type ShapeOption = {
   readonly value: ShapeKind;
@@ -49,12 +52,12 @@ export type NumericField = {
   readonly range: StepRange;
 };
 
-/** A parameter picked from fixed options, such as the base polygon. */
+/** A parameter picked from fixed options, such as the base type or the regular polygon. */
 export type ChoiceField = {
   readonly type: 'choice';
   readonly key: ChoiceKey;
   readonly label: string;
-  readonly options: readonly { readonly value: PrismBaseSides; readonly label: string }[];
+  readonly options: readonly { readonly value: ParameterChoices[ChoiceKey]; readonly label: string }[];
 };
 
 /**
@@ -112,9 +115,9 @@ export function shapeDescription(kind: ShapeKind, scale: PhysicalScale): string 
       );
     case 'prism':
       return (
-        'Основи — рівні правильні многокутники; верхня — це нижня, паралельно перенесена. Без зміщення призма пряма ' +
-        '(правильна): бічні ребра перпендикулярні до основ, бічні грані — прямокутники. Зі зміщенням вона похила: бічні ' +
-        'грані — паралелограми, а бічне ребро l довше за висоту h.'
+        'Основа — правильний багатокутник або трикутник; верхня основа — це нижня, паралельно перенесена. Без зміщення ' +
+        'призма пряма: бічні ребра перпендикулярні до основ, бічні грані — прямокутники; пряма призма з правильною ' +
+        'основою — правильна. Зі зміщенням призма похила: бічні грані — паралелограми, а бічне ребро l довше за висоту h.'
       );
     case 'pyramid':
       return 'Основа — правильний многокутник, вершина лежить точно над її центром, а бічні грані — рівні рівнобедрені трикутники.';
@@ -171,6 +174,11 @@ const offsetGroup = (
   solidName,
 });
 
+const baseTypeNames: Readonly<Record<PrismBaseType, string>> = {
+  regular: 'Правильний багатокутник',
+  triangle: 'Трикутник',
+};
+
 const baseNames: Readonly<Record<PrismBaseSides, string>> = {
   3: 'Рівносторонній трикутник',
   4: 'Квадрат',
@@ -179,7 +187,38 @@ const baseNames: Readonly<Record<PrismBaseSides, string>> = {
   8: 'Правильний восьмикутник',
 };
 
-export const shapeParameters: Readonly<Record<ShapeKind, readonly ParameterField[]>> = {
+const prismBaseFields: Readonly<Record<PrismBaseType, readonly ParameterField[]>> = {
+  regular: [
+    {
+      type: 'choice',
+      key: 'prismBaseSides',
+      label: 'Багатокутник',
+      options: PRISM_BASE_SIDES.map((sides) => ({ value: sides, label: baseNames[sides] })),
+    },
+  ],
+  triangle: [
+    { type: 'number', key: 'prismTriangleSideRatio', label: 'Сторона основи b', suffix: '× a', range: ratioRange },
+    { type: 'number', key: 'prismTriangleAngleDeg', label: 'Кут α', suffix: '°', range: angleRange },
+  ],
+};
+
+/** The fields of the selected shape; for a prism, only those of the selected base type besides the shared ones. */
+export function parameterFields(kind: ShapeKind, choices: ParameterChoices): readonly ParameterField[] {
+  if (kind !== 'prism') return shapeParameters[kind];
+  return [
+    {
+      type: 'choice',
+      key: 'prismBaseType',
+      label: 'Основа',
+      options: PRISM_BASE_TYPES.map((type) => ({ value: type, label: baseTypeNames[type] })),
+    },
+    ...prismBaseFields[choices.prismBaseType],
+    { type: 'number', key: 'prismHeightRatio', label: 'Висота h', suffix: '× a', range: ratioRange },
+    offsetGroup('prismOffsetXRatio', 'prismOffsetYRatio', { right: 'пряма призма', oblique: 'похила призма' }),
+  ];
+}
+
+const shapeParameters: Readonly<Record<Exclude<ShapeKind, 'prism'>, readonly ParameterField[]>> = {
   cube: [],
   cuboid: [
     { type: 'number', key: 'cuboidWidthRatio', label: 'Ширина b', suffix: '× a', range: ratioRange },
@@ -193,16 +232,6 @@ export const shapeParameters: Readonly<Record<ShapeKind, readonly ParameterField
       right: 'прямий паралелепіпед',
       oblique: 'похилий паралелепіпед',
     }),
-  ],
-  prism: [
-    {
-      type: 'choice',
-      key: 'prismBaseSides',
-      label: 'Основа',
-      options: PRISM_BASE_SIDES.map((sides) => ({ value: sides, label: baseNames[sides] })),
-    },
-    { type: 'number', key: 'prismHeightRatio', label: 'Висота h', suffix: '× a', range: ratioRange },
-    offsetGroup('prismOffsetXRatio', 'prismOffsetYRatio', { right: 'пряма призма', oblique: 'похила призма' }),
   ],
   pyramid: [
     {
@@ -220,7 +249,7 @@ export const shapeParameters: Readonly<Record<ShapeKind, readonly ParameterField
   cone: [{ type: 'number', key: 'coneHeightRatio', label: 'Висота h', suffix: '× r', range: ratioRange }],
 };
 
-export function parameterHint(kind: ShapeKind, scale: PhysicalScale): string | undefined {
+export function parameterHint(kind: ShapeKind, scale: PhysicalScale, choices: ParameterChoices): string | undefined {
   switch (kind) {
     case 'cube':
     case 'tetrahedron':
@@ -238,6 +267,9 @@ export function parameterHint(kind: ShapeKind, scale: PhysicalScale): string | u
       );
     case 'prism':
       return (
+        (choices.prismBaseType === 'triangle'
+          ? 'Трикутник задається сторонами a і b та кутом α між ними. Довжина третьої сторони c обчислюється автоматично. '
+          : '') +
         'a — сторона основи; висота h — відстань між площинами основ, а не бічне ребро l. ' +
         'Висоту й зміщення задано відносно a. ' +
         obliqueSizeNote(scale)
@@ -267,6 +299,7 @@ export function measurementItems(
   scale: PhysicalScale,
   shape: Shape | undefined,
   measurements: MeshMeasurements | undefined,
+  choices: ParameterChoices,
 ): MeasurementItem[] {
   // Every solid here fits in its bounding box with longest side L: an axis-aligned edge is at most L, a face at most L²,
   // the surface area at most 6L² and the volume at most L³ (convex solids inside a cube). Formatting these bounds with
@@ -297,16 +330,29 @@ export function measurementItems(
     case 'parallelepiped':
     case 'prism': {
       const parallelepiped = shape?.kind === 'parallelepiped' ? parallelepipedDimensionsMm(shape, scale) : undefined;
-      const dimensions = parallelepiped ?? (shape?.kind === 'prism' ? regularPrismDimensionsMm(shape, scale) : undefined);
-      // The slanted side b lies in a base face of at most L × L, so it is at most its diagonal √2·L: for b/a = 4 and
-      // α ≈ 55° it is about 1,22·L. A lateral edge lies in the bounding box, so it is at most its diagonal √3·L.
-      const slantedSide = {
-        value: formatQuantity(parallelepiped?.baseSideB, 'мм'),
+      const triangle =
+        shape?.kind === 'prism' && shape.baseType === 'triangle' ? trianglePrismDimensionsMm(shape, scale) : undefined;
+      const regular =
+        shape?.kind === 'prism' && shape.baseType === 'regular' ? regularPrismDimensionsMm(shape, scale) : undefined;
+      const dimensions = parallelepiped ?? triangle ?? regular;
+      // A slanted base side lies in a base face of at most L × L, so it is at most its diagonal √2·L: for a
+      // parallelogram with b/a = 4 and α ≈ 55° it is about 1,22·L. A lateral edge lies in the bounding box, so it is
+      // at most its diagonal √3·L.
+      const slantedSide = (label: string, value: number | undefined) => ({
+        label,
+        value: formatQuantity(value, 'мм'),
         widest: widestQuantity(Math.SQRT2 * length, 'мм'),
-      };
+      });
+      // The rows follow the selected base type even while its fields are being corrected.
+      const otherSides =
+        kind === 'parallelepiped'
+          ? [slantedSide('Сторона основи b', parallelepiped?.baseSideB)]
+          : choices.prismBaseType === 'triangle'
+            ? [slantedSide('Сторона основи b', triangle?.baseSideB), slantedSide('Сторона основи c', triangle?.baseSideC)]
+            : [];
       return [
         { label: 'Сторона основи a', ...edge(dimensions?.edge) },
-        ...(kind === 'parallelepiped' ? [{ label: 'Сторона основи b', ...slantedSide }] : []),
+        ...otherSides,
         { label: 'Висота h', ...edge(dimensions?.height) },
         {
           label: 'Бічне ребро l',

@@ -3,7 +3,7 @@ import {
   type ModelSpecInput,
   PRISM_BASE_SIDES,
   type PrismBaseSides,
-  type PrismShape,
+  type RegularPrismShape,
 } from '@diploma-3d/schema';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { InvalidModelSpecError } from '../errors.ts';
@@ -105,7 +105,7 @@ describe('generateModel for a regular prism', () => {
     const { mesh, measurements } = onlySolid(spec);
     const a = expectedEdge(sides, heightRatio);
     const h = heightRatio * a;
-    const dimensions = regularBaseDimensionsMm(spec.shape as PrismShape, spec.scale);
+    const dimensions = regularBaseDimensionsMm(spec.shape as RegularPrismShape, spec.scale);
     expectRelativelyClose(dimensions.edge, a);
     expectRelativelyClose(dimensions.height, h);
 
@@ -156,7 +156,7 @@ describe('generateModel for a regular prism', () => {
     [8, 4, 20, 80],
   ] as const)('with %s sides and h/a = %s has a = %s mm and h = %s mm', (sides, heightRatio, a, h) => {
     const spec = prism(sides, heightRatio);
-    const dimensions = regularBaseDimensionsMm(spec.shape as PrismShape, spec.scale);
+    const dimensions = regularBaseDimensionsMm(spec.shape as RegularPrismShape, spec.scale);
     expectRelativelyClose(dimensions.edge, a);
     expectRelativelyClose(dimensions.height, h);
     expectRelativelyClose(onlySolid(spec).measurements.size[2], h);

@@ -100,17 +100,19 @@ describe('resolveModelRequest', () => {
       prismHeightRatio: '2',
       prismOffsetXRatio: '0',
       prismOffsetYRatio: '0',
+      prismTriangleSideRatio: '1',
+      prismTriangleAngleDeg: '60',
       pyramidHeightRatio: '1',
       cylinderHeightRatio: '2',
       coneHeightRatio: '2',
     });
-    expect(initialParameterChoices()).toEqual({ prismBaseSides: 3, pyramidBaseSides: 4 });
+    expect(initialParameterChoices()).toEqual({ prismBaseType: 'regular', prismBaseSides: 3, pyramidBaseSides: 4 });
     expect(resolveModelRequest('cuboid', initialParameterTexts(), triangle).spec).toEqual({
       shape: { kind: 'cuboid', widthRatio: 1.5, heightRatio: 2 },
       scale: { longestDimensionMm: 80 },
     });
     expect(resolveModelRequest('prism', initialParameterTexts(), triangle).spec).toEqual({
-      shape: { kind: 'prism', baseSides: 3, heightRatio: 2, offsetXRatio: 0, offsetYRatio: 0 },
+      shape: { kind: 'prism', baseType: 'regular', baseSides: 3, heightRatio: 2, offsetXRatio: 0, offsetYRatio: 0 },
       scale: { longestDimensionMm: 80 },
     });
   });
@@ -135,6 +137,7 @@ describe('resolveModelRequest', () => {
     const mixed = texts({ cuboidHeightRatio: 'abc', prismHeightRatio: '3' });
     expect(resolveModelRequest('prism', mixed, triangle).spec?.shape).toEqual({
       kind: 'prism',
+      baseType: 'regular',
       baseSides: 3,
       heightRatio: 3,
       offsetXRatio: 0,
@@ -173,6 +176,7 @@ describe('resolveModelRequest', () => {
     expect(request.scale).toBe(request.spec?.scale);
     expect(resolveModelRequest('prism', texts({ prismHeightRatio: '1,1' }), triangle).spec?.shape).toEqual({
       kind: 'prism',
+      baseType: 'regular',
       baseSides: 3,
       heightRatio: 1.1,
       offsetXRatio: 0,
@@ -184,6 +188,7 @@ describe('resolveModelRequest', () => {
     const request = resolveModelRequest('prism', texts({ prismHeightRatio: '0,75' }), { ...triangle, prismBaseSides });
     expect(request.spec?.shape).toEqual({
       kind: 'prism',
+      baseType: 'regular',
       baseSides: prismBaseSides,
       heightRatio: 0.75,
       offsetXRatio: 0,
@@ -220,6 +225,7 @@ describe('resolveModelRequest', () => {
     const mixed = texts({ prismHeightRatio: '3', pyramidHeightRatio: '' });
     expect(resolveModelRequest('prism', mixed, triangle).spec?.shape).toEqual({
       kind: 'prism',
+      baseType: 'regular',
       baseSides: 3,
       heightRatio: 3,
       offsetXRatio: 0,
@@ -348,6 +354,77 @@ describe('resolveModelRequest', () => {
     expect(resolveModelRequest('prism', mixed, triangle).spec?.shape).toMatchObject({ offsetXRatio: 1, offsetYRatio: 0 });
     expect(resolveModelRequest('parallelepiped', mixed, triangle).errors).toEqual({
       parallelepipedOffsetXRatio: 'Введіть число, наприклад -0,5.',
+    });
+  });
+
+  describe('prism over a configurable triangle', () => {
+    const triangleBase = { ...triangle, prismBaseType: 'triangle' } as const;
+
+    it('starts the triangle at b = a and α = 60° with the shared height and offsets of the prism', () => {
+      expect(resolveModelRequest('prism', initialParameterTexts(), triangleBase).spec?.shape).toEqual({
+        kind: 'prism',
+        baseType: 'triangle',
+        baseSideRatio: 1,
+        baseAngleDeg: 60,
+        heightRatio: 2,
+        offsetXRatio: 0,
+        offsetYRatio: 0,
+      });
+    });
+
+    it('reads typed off-step values and keeps the height and offsets when the base type changes', () => {
+      const typed = texts({
+        prismTriangleSideRatio: '0.8',
+        prismTriangleAngleDeg: '97,5',
+        prismHeightRatio: '1,1',
+        prismOffsetXRatio: '-0,6',
+      });
+      expect(resolveModelRequest('prism', typed, triangleBase).spec?.shape).toEqual({
+        kind: 'prism',
+        baseType: 'triangle',
+        baseSideRatio: 0.8,
+        baseAngleDeg: 97.5,
+        heightRatio: 1.1,
+        offsetXRatio: -0.6,
+        offsetYRatio: 0,
+      });
+      expect(resolveModelRequest('prism', typed, triangle).spec?.shape).toEqual({
+        kind: 'prism',
+        baseType: 'regular',
+        baseSides: 3,
+        heightRatio: 1.1,
+        offsetXRatio: -0.6,
+        offsetYRatio: 0,
+      });
+    });
+
+    it('validates only the fields of the selected base type', () => {
+      const broken = texts({ prismTriangleSideRatio: '5', prismTriangleAngleDeg: '' });
+      const regular = resolveModelRequest('prism', broken, triangle);
+      expect(regular.errors).toEqual({});
+      expect(regular.spec?.shape).toMatchObject({ baseType: 'regular' });
+      const configurable = resolveModelRequest('prism', broken, triangleBase);
+      expect(configurable.spec).toBeUndefined();
+      expect(configurable.errors).toEqual({
+        prismTriangleSideRatio: 'Допустимі значення — від 0,25 до 4.',
+        prismTriangleAngleDeg: 'Введіть значення.',
+      });
+      expect(resolveModelRequest('prism', texts({ prismTriangleAngleDeg: '170' }), triangleBase).errors).toEqual({
+        prismTriangleAngleDeg: 'Допустимі значення — від 15° до 165°.',
+      });
+    });
+
+    it('gives the equilateral triangle a key of its own: it does not become the regular base', () => {
+      const configurable = resolveModelRequest('prism', initialParameterTexts(), triangleBase);
+      const regular = resolveModelRequest('prism', initialParameterTexts(), triangle);
+      expect(configurable.key).not.toBe(regular.key);
+      expect(configurable.spec?.shape).toMatchObject({ baseType: 'triangle' });
+    });
+
+    it('keeps the triangle and parallelepiped fields apart', () => {
+      const mixed = texts({ prismTriangleSideRatio: '2', parallelepipedBaseSideRatio: 'abc' });
+      expect(resolveModelRequest('prism', mixed, triangleBase).spec?.shape).toMatchObject({ baseSideRatio: 2 });
+      expect(resolveModelRequest('parallelepiped', mixed, triangleBase).spec).toBeUndefined();
     });
   });
 

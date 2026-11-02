@@ -16,7 +16,7 @@ import {
 type BaseSides = 3 | 4 | 5 | 6 | 8;
 
 const NAME = 'Призма';
-const baseSelect = (page: Page) => page.getByLabel('Основа', { exact: true });
+const baseSelect = (page: Page) => page.getByLabel('Багатокутник', { exact: true });
 const heightRatio = (page: Page) => page.getByLabel('Висота h', { exact: true });
 const heightSlider = (page: Page) => page.getByRole('slider', { name: 'Висота h: повзунок', exact: true });
 const stepButton = (page: Page, action: 'зменшити' | 'збільшити') =>

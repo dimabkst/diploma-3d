@@ -1,6 +1,7 @@
 import {
   BASE_ANGLE_LIMITS,
   baseAngleSchema,
+  DEFAULT_TRIANGLE_BASE,
   defaultModelSpecs,
   type ModelSpec,
   type ModelSpecInput,
@@ -9,6 +10,7 @@ import {
   offsetRatioSchema,
   type PhysicalScale,
   type PrismBaseSides,
+  type PrismBaseType,
   type PyramidBaseSides,
   RATIO_LIMITS,
   ratioSchema,
@@ -28,6 +30,8 @@ export type ParameterKey =
   | 'prismHeightRatio'
   | 'prismOffsetXRatio'
   | 'prismOffsetYRatio'
+  | 'prismTriangleSideRatio'
+  | 'prismTriangleAngleDeg'
   | 'pyramidHeightRatio'
   | 'cylinderHeightRatio'
   | 'coneHeightRatio';
@@ -36,7 +40,11 @@ export type ParameterKey =
 export type ParameterTexts = Record<ParameterKey, string>;
 
 /** Parameters picked from fixed options. */
-export type ParameterChoices = { prismBaseSides: PrismBaseSides; pyramidBaseSides: PyramidBaseSides };
+export type ParameterChoices = {
+  prismBaseType: PrismBaseType;
+  prismBaseSides: PrismBaseSides;
+  pyramidBaseSides: PyramidBaseSides;
+};
 
 export type ChoiceKey = keyof ParameterChoices;
 
@@ -62,12 +70,15 @@ export const initialParameterTexts = (): ParameterTexts => ({
   prismHeightRatio: formatDecimal(defaultModelSpecs.prism.shape.heightRatio),
   prismOffsetXRatio: formatDecimal(defaultModelSpecs.prism.shape.offsetXRatio),
   prismOffsetYRatio: formatDecimal(defaultModelSpecs.prism.shape.offsetYRatio),
+  prismTriangleSideRatio: formatDecimal(DEFAULT_TRIANGLE_BASE.baseSideRatio),
+  prismTriangleAngleDeg: formatDecimal(DEFAULT_TRIANGLE_BASE.baseAngleDeg),
   pyramidHeightRatio: formatDecimal(defaultModelSpecs.pyramid.shape.heightRatio),
   cylinderHeightRatio: formatDecimal(defaultModelSpecs.cylinder.shape.heightRatio),
   coneHeightRatio: formatDecimal(defaultModelSpecs.cone.shape.heightRatio),
 });
 
 export const initialParameterChoices = (): ParameterChoices => ({
+  prismBaseType: defaultModelSpecs.prism.shape.baseType,
   prismBaseSides: defaultModelSpecs.prism.shape.baseSides,
   pyramidBaseSides: defaultModelSpecs.pyramid.shape.baseSides,
 });
@@ -108,6 +119,8 @@ const validators: Readonly<Record<ParameterKey, (text: string) => Validation>> =
   prismHeightRatio: validateRatio,
   prismOffsetXRatio: validateOffset,
   prismOffsetYRatio: validateOffset,
+  prismTriangleSideRatio: validateRatio,
+  prismTriangleAngleDeg: validateAngle,
   pyramidHeightRatio: validateRatio,
   cylinderHeightRatio: validateRatio,
   coneHeightRatio: validateRatio,
@@ -174,12 +187,27 @@ export function resolveModelRequest(kind: ShapeKind, texts: ParameterTexts, choi
       return withKey({ shape: { kind, baseSideRatio, heightRatio, baseAngleDeg, offsetXRatio, offsetYRatio }, scale }, values);
     }
     case 'prism': {
-      const { values, errors } = validateFields(['prismHeightRatio', 'prismOffsetXRatio', 'prismOffsetYRatio'], texts);
+      // The height and the displacement are shared by every base; only the selected base's own fields are read.
+      const triangle = choices.prismBaseType === 'triangle';
+      const { values, errors } = validateFields(
+        [
+          'prismHeightRatio',
+          'prismOffsetXRatio',
+          'prismOffsetYRatio',
+          ...(triangle ? (['prismTriangleSideRatio', 'prismTriangleAngleDeg'] as const) : []),
+        ],
+        texts,
+      );
       const { prismHeightRatio: heightRatio, prismOffsetXRatio: offsetXRatio, prismOffsetYRatio: offsetYRatio } = values;
+      const { prismTriangleSideRatio: baseSideRatio, prismTriangleAngleDeg: baseAngleDeg } = values;
       if (heightRatio === undefined || offsetXRatio === undefined || offsetYRatio === undefined)
         return { scale, values, errors, spec: undefined, key: undefined };
-      const baseSides = choices.prismBaseSides;
-      return withKey({ shape: { kind, baseSides, heightRatio, offsetXRatio, offsetYRatio }, scale }, values);
+      const shared = { kind, heightRatio, offsetXRatio, offsetYRatio } as const;
+      if (!triangle)
+        return withKey({ shape: { ...shared, baseType: 'regular', baseSides: choices.prismBaseSides }, scale }, values);
+      if (baseSideRatio === undefined || baseAngleDeg === undefined)
+        return { scale, values, errors, spec: undefined, key: undefined };
+      return withKey({ shape: { ...shared, baseType: 'triangle', baseSideRatio, baseAngleDeg }, scale }, values);
     }
     case 'pyramid': {
       const { values, errors } = validateFields(['pyramidHeightRatio'], texts);
