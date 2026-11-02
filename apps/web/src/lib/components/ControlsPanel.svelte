@@ -1,5 +1,13 @@
 <script lang="ts">
-import type { ParameterChoices, ParameterErrors, ParameterTexts, ParameterValues } from '../model/parameters.ts';
+import { formatSteppedDecimal } from '../decimal.ts';
+import {
+  alignedTrapezoidShift,
+  type ParameterChoices,
+  type ParameterErrors,
+  type ParameterTexts,
+  type ParameterValues,
+  type TrapezoidAlignment,
+} from '../model/parameters.ts';
 import {
   type MeasurementItem,
   type NumericField,
@@ -7,6 +15,9 @@ import {
   offsetHint,
   type ParameterField,
   type ShapeOption,
+  type TrapezoidGroup,
+  trapezoidHint,
+  trapezoidKindName,
 } from '../shapes.ts';
 import Button from './Button.svelte';
 import Field from './Field.svelte';
@@ -52,6 +63,20 @@ function offsetState(group: OffsetGroup): 'right' | 'oblique' | undefined {
 function removeTilt(group: OffsetGroup) {
   for (const field of group.fields) texts[field.key] = '0';
 }
+
+function alignSideB(group: TrapezoidGroup, alignment: TrapezoidAlignment) {
+  const [side, , shift] = group.fields;
+  const sideRatio = values[side.key];
+  if (alignment === 'centre' || sideRatio !== undefined) {
+    texts[shift.key] = formatSteppedDecimal(alignedTrapezoidShift(sideRatio ?? 1, alignment));
+  }
+}
+
+const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly label: string }[] = [
+  { alignment: 'left', label: 'Вирівняти зліва' },
+  { alignment: 'centre', label: 'По центру' },
+  { alignment: 'right', label: 'Вирівняти справа' },
+];
 </script>
 
 {#snippet numberField(field: NumericField, description: string | undefined)}
@@ -101,13 +126,33 @@ function removeTilt(group: OffsetGroup) {
                   {@render numberField(offsetField, describedBy(`${field.key}-description`, hintId))}
                 {/each}
                 <div class="offset-footer">
-                  <p class="offset-status" aria-live="polite">
+                  <p class="group-status" aria-live="polite">
                     {#if state !== undefined}Зараз: {field.solidName[state]}{/if}
                   </p>
                   <Button variant="secondary" disabled={state === 'right'} onclick={() => removeTilt(field)}>
                     Прибрати нахил
                   </Button>
                 </div>
+              </FieldGroup>
+            {:else if field.type === 'trapezoid'}
+              {@const sideRatio = values[field.fields[0].key]}
+              {@const kindName = trapezoidKindName(sideRatio, values[field.fields[2].key])}
+              <FieldGroup id={field.key} legend={field.legend} description={trapezoidHint}>
+                {#each field.fields as trapezoidField (trapezoidField.key)}
+                  {@render numberField(trapezoidField, describedBy(`${field.key}-description`, hintId))}
+                {/each}
+                <div class="actions" role="group" aria-label="Вирівнювання сторони b">
+                  {#each alignments as { alignment, label } (alignment)}
+                    <Button
+                      variant="secondary"
+                      disabled={alignment !== 'centre' && sideRatio === undefined}
+                      onclick={() => alignSideB(field, alignment)}
+                    >
+                      {label}
+                    </Button>
+                  {/each}
+                </div>
+                <p class="group-status" aria-live="polite">{#if kindName !== undefined}Зараз: {kindName}{/if}</p>
               </FieldGroup>
             {:else}
               {@render numberField(field, hintId)}
@@ -183,7 +228,13 @@ function removeTilt(group: OffsetGroup) {
     gap: var(--space-2) var(--space-4);
   }
 
-  .offset-status {
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .group-status {
     margin: 0;
     color: var(--color-text-muted);
     font-size: var(--text-small);

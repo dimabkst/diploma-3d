@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   BASE_ANGLE_LIMITS,
+  BASE_SHIFT_LIMITS,
   DEFAULT_LONGEST_DIMENSION_MM,
+  DEFAULT_TRAPEZOID_BASE,
   DEFAULT_TRIANGLE_BASE,
   defaultModelSpecs,
   MAX_LONGEST_DIMENSION_MM,
@@ -226,7 +228,7 @@ describe('prism over a configurable triangle', () => {
   it('shares the angle limits of the parallelogram and defaults to an equilateral triangle', () => {
     expect(BASE_ANGLE_LIMITS).toEqual({ min: 15, max: 165 });
     expect(DEFAULT_TRIANGLE_BASE).toEqual({ baseSideRatio: 1, baseAngleDeg: 60 });
-    expect(PRISM_BASE_TYPES).toEqual(['regular', 'triangle']);
+    expect(PRISM_BASE_TYPES).toEqual(['regular', 'triangle', 'trapezoid']);
   });
 
   it.each([
@@ -291,6 +293,69 @@ describe('prism over a configurable triangle', () => {
       offsetYRatio: 1.25,
     });
     expect(modelSpecSchema.safeParse(triangle(1, 60, { heightRatio: 0 })).success).toBe(false);
+  });
+});
+
+describe('prism over a configurable trapezoid', () => {
+  const { min, max } = RATIO_LIMITS;
+  const trapezoid = (parallelSideRatio: unknown, baseHeightRatio: unknown, baseShiftRatio: unknown, extra = {}) => ({
+    shape: { kind: 'prism', baseType: 'trapezoid', parallelSideRatio, baseHeightRatio, baseShiftRatio, heightRatio: 1, ...extra },
+    scale,
+  });
+
+  it('defaults to b = t = a/2 with b centred and limits the shift to [−2, 2]', () => {
+    expect(DEFAULT_TRAPEZOID_BASE).toEqual({ parallelSideRatio: 0.5, baseHeightRatio: 0.5, baseShiftRatio: 0 });
+    expect(BASE_SHIFT_LIMITS).toEqual({ min: -2, max: 2 });
+    expect(PRISM_BASE_TYPES).toContain('trapezoid');
+  });
+
+  it.each([
+    [min, min, BASE_SHIFT_LIMITS.min],
+    [max, max, BASE_SHIFT_LIMITS.max],
+    [0.5, 0.375, -0.25],
+    // b = a is a parallelogram, still a valid trapezoid base.
+    [1, 0.5, 0],
+    [1, 0.5, 0.6],
+    [2.05, 1.1, -0.35],
+  ])('accepts b/a = %s, t/a = %s and δ/a = %s, including the limits, b = a and off-step values', (b, t, delta) => {
+    expect(modelSpecSchema.parse(trapezoid(b, t, delta)).shape).toEqual({
+      kind: 'prism',
+      baseType: 'trapezoid',
+      parallelSideRatio: b,
+      baseHeightRatio: t,
+      baseShiftRatio: delta,
+      heightRatio: 1,
+      offsetXRatio: 0,
+      offsetYRatio: 0,
+    });
+  });
+
+  it.each([
+    ['NaN', Number.NaN],
+    ['infinite', Number.POSITIVE_INFINITY],
+    ['a numeric string', '0.5'],
+    ['missing', undefined],
+    ['below the minimum', min - 1e-9],
+    ['above the maximum', max + 1e-9],
+  ])('rejects a side or base height ratio that is %s', (_, ratio) => {
+    expect(modelSpecSchema.safeParse(trapezoid(ratio, 0.5, 0)).success).toBe(false);
+    expect(modelSpecSchema.safeParse(trapezoid(0.5, ratio, 0)).success).toBe(false);
+  });
+
+  it.each([
+    ['NaN', Number.NaN],
+    ['infinite', Number.NEGATIVE_INFINITY],
+    ['missing', undefined],
+    ['below the minimum', BASE_SHIFT_LIMITS.min - 1e-9],
+    ['above the maximum', BASE_SHIFT_LIMITS.max + 1e-9],
+  ])('rejects a shift that is %s', (_, shift) => {
+    expect(modelSpecSchema.safeParse(trapezoid(0.5, 0.5, shift)).success).toBe(false);
+  });
+
+  it('rejects fields of other base types and keeps the shared prism fields', () => {
+    expect(modelSpecSchema.safeParse(trapezoid(0.5, 0.5, 0, { baseAngleDeg: 60 })).success).toBe(false);
+    expect(modelSpecSchema.safeParse(trapezoid(0.5, 0.5, 0, { baseSides: 4 })).success).toBe(false);
+    expect(modelSpecSchema.parse(trapezoid(0.5, 0.5, 0, { offsetXRatio: 1 })).shape).toMatchObject({ offsetXRatio: 1 });
   });
 });
 

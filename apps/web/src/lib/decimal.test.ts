@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatSteppedDecimal, parseDecimal, type StepRange, snapDecimal, stepDecimal } from './decimal.ts';
+import { formatSteppedDecimal, halfSumDecimal, parseDecimal, type StepRange, snapDecimal, stepDecimal } from './decimal.ts';
 
 describe('parseDecimal', () => {
   it.each([
@@ -178,5 +178,21 @@ describe('formatSteppedDecimal', () => {
     [-0.4, '-0,4'],
   ])('writes %s as "%s"', (value, text) => {
     expect(formatSteppedDecimal(value)).toBe(text);
+  });
+});
+
+describe('halfSumDecimal', () => {
+  it.each([
+    [0.5, -1, -0.25],
+    [1, -0.5, 0.25],
+    [1.1, -1, 0.05],
+    [1, -1.1, -0.05],
+    [4, -1, 1.5],
+    [0.25, -1, -0.375],
+    [1, -1, 0],
+    [2.05, -1, 0.525],
+    [1.234, -1, 0.117],
+  ])('gives (%s + %s) / 2 = %s exactly', (x, y, half) => {
+    expect(halfSumDecimal(x, y)).toBe(half);
   });
 });

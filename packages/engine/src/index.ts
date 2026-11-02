@@ -28,12 +28,15 @@ export {
   parallelepipedProportions,
 } from './shapes/parallelepiped.ts';
 export { parallelogramArea, parallelogramVertices } from './shapes/parallelogram.ts';
-export { baseContours, polygonSize, signedPolygonArea, type Vec2 } from './shapes/polygon.ts';
+export { baseContours, polygonAreaCentroid, polygonSize, signedPolygonArea, type Vec2 } from './shapes/polygon.ts';
 export {
   prismShapeProportions,
   regularPrismDimensionsMm,
   regularPrismProportions,
+  type TrapezoidPrismDimensions,
   type TrianglePrismDimensions,
+  trapezoidPrismDimensionsMm,
+  trapezoidPrismProportions,
   trianglePrismDimensionsMm,
   trianglePrismProportions,
 } from './shapes/prism.ts';
@@ -62,4 +65,11 @@ export {
   roundDimensionsMm,
   roundSolidMeasurements,
 } from './shapes/round.ts';
+export {
+  type TrapezoidKind,
+  trapezoidArea,
+  trapezoidKind,
+  trapezoidLegs,
+  trapezoidVertices,
+} from './shapes/trapezoid.ts';
 export { triangleArea, triangleThirdSide, triangleVertices } from './shapes/triangle.ts';

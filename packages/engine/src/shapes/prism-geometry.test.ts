@@ -3,6 +3,7 @@ import type {
   ParallelepipedShape,
   PrismBaseSides,
   RegularPrismShape,
+  TrapezoidPrismShape,
   TrianglePrismShape,
 } from '@diploma-3d/schema';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -25,6 +26,8 @@ import { polygonSize, signedPolygonArea, type Vec2 } from './polygon.ts';
 import {
   regularPrismDimensionsMm,
   regularPrismProportions,
+  trapezoidPrismDimensionsMm,
+  trapezoidPrismProportions,
   trianglePrismDimensionsMm,
   trianglePrismProportions,
 } from './prism.ts';
@@ -473,5 +476,146 @@ describe('generateModel for a prism over a configurable triangle', () => {
     expect(dimensions.baseSideB).toBeCloseTo(160 / Math.sqrt(3), 9);
     expect(dimensions.baseSideB).toBeGreaterThan(80);
     expectRelativelyClose(Math.max(...onlySolid({ shape, scale: L80 }).measurements.size), 80);
+  });
+});
+
+describe('generateModel for a prism over a configurable trapezoid', () => {
+  const trapezoidShape = (
+    parallelSideRatio: number,
+    baseHeightRatio: number,
+    baseShiftRatio: number,
+    heightRatio: number,
+    offsetXRatio = 0,
+    offsetYRatio = 0,
+  ): TrapezoidPrismShape => ({
+    kind: 'prism',
+    baseType: 'trapezoid',
+    parallelSideRatio,
+    baseHeightRatio,
+    baseShiftRatio,
+    heightRatio,
+    offsetXRatio,
+    offsetYRatio,
+  });
+
+  const cases = (
+    [
+      [0.5, 0.5, 0],
+      [0.5, 0.375, -0.25],
+      [0.5, 0.375, 0.25],
+      [1, 0.5, 0],
+      [1, 0.75, 0.6],
+      [4, 0.25, -1.5],
+      [0.25, 4, 2],
+      [0.25, 0.25, -2],
+      [2.05, 1.1, 0.35],
+    ] as const
+  ).flatMap(([b0, t0, delta0]) =>
+    [0.25, 1, 4].flatMap((h0) =>
+      (
+        [
+          [0, 0],
+          [1, 0],
+          [-0.75, 1.25],
+          [2, -2],
+        ] as const
+      ).map((offset) => [b0, t0, delta0, h0, offset] as const),
+    ),
+  );
+
+  it.each(cases)(
+    'with b/a = %s, t/a = %s, δ/a = %s, h/a = %s and the offset %j matches its definition',
+    (b0, t0, delta0, h0, [dx0, dy0]) => {
+      const shape = trapezoidShape(b0, t0, delta0, h0, dx0, dy0);
+      expectPrismGeometry({ shape, scale: L80 }, trapezoidPrismProportions(shape));
+
+      // The base's box from P0 = (−1/2, 0), P1 = (1/2, 0), P2 = (δ0 + b0/2, t0), P3 = (δ0 − b0/2, t0): side a is not
+      // necessarily the width.
+      const width0 = Math.max(0.5, delta0 + b0 / 2) - Math.min(-0.5, delta0 - b0 / 2) + Math.abs(dx0);
+      const s = 80 / Math.max(width0, t0 + Math.abs(dy0), h0);
+      const dimensions = trapezoidPrismDimensionsMm(shape, L80);
+      expectRelativelyClose(dimensions.edge, s);
+      expectRelativelyClose(dimensions.baseSideB, b0 * s);
+      expectRelativelyClose(dimensions.baseHeight, t0 * s);
+      expect(dimensions.baseShift).toBeCloseTo(delta0 * s, 9);
+      expectRelativelyClose(dimensions.baseSideC, s * Math.hypot(t0, delta0 + (b0 - 1) / 2));
+      expectRelativelyClose(dimensions.baseSideD, s * Math.hypot(t0, delta0 + (1 - b0) / 2));
+      expectRelativelyClose(dimensions.basePerimeter, s + dimensions.baseSideB + dimensions.baseSideC + dimensions.baseSideD);
+      expectRelativelyClose(dimensions.baseArea, ((s + dimensions.baseSideB) * dimensions.baseHeight) / 2);
+    },
+  );
+
+  it('builds the right-trapezoid reference: a = 80, b = 40, t = 30, c = 50, d = 30, h = 40 mm', () => {
+    const shape = trapezoidShape(0.5, 0.375, -0.25, 0.5);
+    const dimensions = trapezoidPrismDimensionsMm(shape, L80);
+    for (const [value, expected] of [
+      [dimensions.edge, 80],
+      [dimensions.baseSideB, 40],
+      [dimensions.baseHeight, 30],
+      [dimensions.baseShift, -20],
+      [dimensions.baseSideC, 50],
+      [dimensions.baseSideD, 30],
+      [dimensions.height, 40],
+      [dimensions.lateralEdge, 40],
+      [dimensions.baseArea, 1800],
+      [dimensions.volume, 72_000],
+      [dimensions.lateralArea, 200 * 40],
+      [dimensions.surfaceArea, 11_600],
+    ] as const) {
+      expect(value).toBeCloseTo(expected, 9);
+    }
+
+    const { mesh, measurements } = onlySolid({ shape, scale: L80 });
+    expect(findMeshDefects(mesh)).toEqual([]);
+    expect(triangleCount(mesh)).toBe(12);
+    [80, 30, 40].forEach((size, axis) => {
+      expectRelativelyClose(measurements.size[axis], size);
+    });
+    expect(measurements.bounds.min[2]).toBe(0);
+    expectRelativelyClose(measurements.volume, 72_000);
+    expectRelativelyClose(measurements.surfaceArea, 11_600);
+  });
+
+  it('with b = a and δ = 0 reproduces the rectangular box, and with b = a a right parallelepiped', () => {
+    // b/a = 1, t/a = 0,75, h/a = 0,5: the 80 × 60 × 40 mm box.
+    const rectangle = onlySolid({ shape: trapezoidShape(1, 0.75, 0, 0.5), scale: L80 });
+    const cuboid = onlySolid({ shape: { kind: 'cuboid', widthRatio: 0.75, heightRatio: 0.5 }, scale: L80 });
+    for (const axis of [0, 1, 2] as const) {
+      expect(rectangle.measurements.bounds.min[axis]).toBeCloseTo(cuboid.measurements.bounds.min[axis], 4);
+      expect(rectangle.measurements.bounds.max[axis]).toBeCloseTo(cuboid.measurements.bounds.max[axis], 4);
+    }
+    expectRelativelyClose(rectangle.measurements.volume, cuboid.measurements.volume);
+
+    // A parallelogram with sides a and b = a, height t and the shift δ: the parallelepiped with b' = √(t² + δ²) and
+    // cos α = δ/b' has the same volume and area.
+    const [t0, delta0] = [0.75, 0.6];
+    const parallelogram = onlySolid({ shape: trapezoidShape(1, t0, delta0, 1), scale: L80 });
+    const side = Math.hypot(t0, delta0);
+    const angle = (Math.acos(delta0 / side) * 180) / Math.PI;
+    const parallelepiped = onlySolid({
+      shape: { kind: 'parallelepiped', baseSideRatio: side, baseAngleDeg: angle, heightRatio: 1 },
+      scale: L80,
+    });
+    parallelogram.measurements.size.forEach((size, axis) => {
+      expectRelativelyClose(size, parallelepiped.measurements.size[axis] as number);
+    });
+    expectRelativelyClose(parallelogram.measurements.volume, parallelepiped.measurements.volume);
+    expectRelativelyClose(parallelogram.measurements.surfaceArea, parallelepiped.measurements.surfaceArea);
+  });
+
+  it('mirrors the shift: δ and −δ swap c and d and keep the area, volume and size', () => {
+    const plus = trapezoidPrismDimensionsMm(trapezoidShape(0.5, 0.5, 0.6, 1), L80);
+    const minus = trapezoidPrismDimensionsMm(trapezoidShape(0.5, 0.5, -0.6, 1), L80);
+    expect(minus.baseSideC).toBeCloseTo(plus.baseSideD, 12);
+    expect(minus.baseSideD).toBeCloseTo(plus.baseSideC, 12);
+    expect(minus.baseArea).toBeCloseTo(plus.baseArea, 12);
+    expect(minus.surfaceArea).toBeCloseTo(plus.surfaceArea, 9);
+    const [first, second] = [0.6, -0.6].map(
+      (delta) => onlySolid({ shape: trapezoidShape(0.5, 0.5, delta, 1), scale: L80 }).measurements,
+    );
+    first?.size.forEach((size, axis) => {
+      expectRelativelyClose(second?.size[axis], size);
+    });
+    expectRelativelyClose(second?.volume, first?.volume as number);
   });
 });

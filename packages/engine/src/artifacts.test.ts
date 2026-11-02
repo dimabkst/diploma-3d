@@ -257,6 +257,59 @@ describe('buildModelArtifacts', () => {
     });
   });
 
+  describe('for the oblique right-trapezoid prism with b/a = 0,5, t/a = 0,375, δ/a = −0,25 and h/a = 0,5', () => {
+    // Right: a = 80, b = 40, t = 30, h = 40 mm, the box 80 × 30 × 40 mm. With (dx0, dy0) = (0,25, −0,25) the box grows
+    // to (1 + 0,25) × (0,375 + 0,25) × 0,5 in units of a, so a = 64 mm, t = 24 mm, h = 32 mm and V = 1152·32 mm³.
+    const rightShape = {
+      kind: 'prism',
+      baseType: 'trapezoid',
+      parallelSideRatio: 0.5,
+      baseHeightRatio: 0.375,
+      baseShiftRatio: -0.25,
+      heightRatio: 0.5,
+    } as const;
+    const scale = { longestDimensionMm: 80 };
+    const right: ModelSpecInput = { shape: rightShape, scale };
+    const oblique: ModelSpecInput = { shape: { ...rightShape, offsetXRatio: 0.25, offsetYRatio: -0.25 }, scale };
+
+    it.each([
+      ['right', right, [80, 30, 40], 72_000],
+      ['oblique', oblique, [80, 40, 32], 1152 * 32],
+    ] as const)(
+      'exports the %s prism as prism-trapezoid.3mf in millimetres with its size and volume',
+      async (_, spec, size, volume) => {
+        const { printFile } = await buildModelArtifacts(kernel, spec);
+        const { model } = readThreeMf(printFile.bytes);
+        expect(printFile.fileName).toBe('prism-trapezoid.3mf');
+        expect(model.unit).toBe('millimeter');
+        expect(model.objects.map(({ name }) => name)).toEqual(['prism-trapezoid']);
+        const mesh = model.objects[0]?.mesh;
+        if (mesh === undefined) throw new Error('No exported mesh');
+        expect(findMeshDefects(mesh)).toEqual([]);
+        const measurements = measureMesh(mesh);
+        size.forEach((value, axis) => {
+          expect(measurements.size[axis]).toBeCloseTo(value, 4);
+        });
+        expect(measurements.bounds.min[2]).toBe(0);
+        expect(measurements.volume / volume).toBeCloseTo(1, 6);
+      },
+    );
+
+    it('previews the right prism with the base depth t along glTF Z and the height along glTF Y, in metres', async () => {
+      const { previewGlb } = await buildModelArtifacts(kernel, right);
+      const positions = await previewSurfacePositions(previewGlb);
+      const points = Array.from(
+        { length: positions.getCount() },
+        (_, index) => positions.getElement(index, []) as unknown as Vec3,
+      );
+      const extent = (axis: 0 | 1 | 2) => Math.max(...points.map((p) => p[axis])) - Math.min(...points.map((p) => p[axis]));
+      [0.08, 0.04, 0.03].forEach((size, axis) => {
+        expect(extent(axis as 0 | 1 | 2)).toBeCloseTo(size, METRE_DIGITS);
+      });
+      expect(Math.min(...points.map((p) => p[1]))).toBeCloseTo(0, METRE_DIGITS);
+    });
+  });
+
   describe('for the default ball', () => {
     it('exports ball.3mf as one closed 80 mm object in millimetres resting on the build plate', async () => {
       const { printFile } = await buildModelArtifacts(kernel, defaultModelSpecs.ball);
@@ -447,6 +500,20 @@ describe('buildModelArtifacts', () => {
       },
     ],
     ['prism', { shape: { kind: 'prism', baseSides: 9, heightRatio: 2 }, scale: { longestDimensionMm: 80 } }],
+    [
+      'trapezoid prism',
+      {
+        shape: {
+          kind: 'prism',
+          baseType: 'trapezoid',
+          parallelSideRatio: 0.5,
+          baseHeightRatio: 0.5,
+          baseShiftRatio: 2.5,
+          heightRatio: 1,
+        },
+        scale: { longestDimensionMm: 80 },
+      },
+    ],
     [
       'triangle prism',
       {

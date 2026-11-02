@@ -1,9 +1,10 @@
-import type { PhysicalScale, PrismShape, RegularPrismShape, TrianglePrismShape } from '@diploma-3d/schema';
+import type { PhysicalScale, PrismShape, RegularPrismShape, TrapezoidPrismShape, TrianglePrismShape } from '@diploma-3d/schema';
 import type { Manifold } from 'manifold-3d';
 import type { GeometryKernel } from '../kernel.ts';
 import type { Track } from '../scope.ts';
 import { buildPrism, type PrismDimensions, type PrismProportions, prismDimensionsMm } from './prism-geometry.ts';
 import { regularPolygonVertices } from './regular-polygon.ts';
+import { trapezoidLegs, trapezoidVertices } from './trapezoid.ts';
 import { triangleThirdSide, triangleVertices } from './triangle.ts';
 
 /**
@@ -30,8 +31,28 @@ export function trianglePrismProportions(shape: TrianglePrismShape): PrismPropor
   };
 }
 
-export const prismShapeProportions = (shape: PrismShape): PrismProportions =>
-  shape.baseType === 'triangle' ? trianglePrismProportions(shape) : regularPrismProportions(shape);
+/**
+ * The prism over a trapezoid before scaling: a0 = 1 along X, b0 = b/a at the base height t0 = t/a with its midpoint
+ * shifted by δ0 = δ/a, centred at its area centroid, the height h0 = h/a and the upper base displaced by (dx0, dy0).
+ */
+export function trapezoidPrismProportions(shape: TrapezoidPrismShape): PrismProportions {
+  return {
+    base: trapezoidVertices(1, shape.parallelSideRatio, shape.baseHeightRatio, shape.baseShiftRatio),
+    height: shape.heightRatio,
+    offset: [shape.offsetXRatio, shape.offsetYRatio],
+  };
+}
+
+export function prismShapeProportions(shape: PrismShape): PrismProportions {
+  switch (shape.baseType) {
+    case 'regular':
+      return regularPrismProportions(shape);
+    case 'triangle':
+      return trianglePrismProportions(shape);
+    case 'trapezoid':
+      return trapezoidPrismProportions(shape);
+  }
+}
 
 export const regularPrismDimensionsMm = (shape: RegularPrismShape, scale: PhysicalScale): PrismDimensions =>
   prismDimensionsMm(regularPrismProportions(shape), scale);
@@ -50,6 +71,25 @@ export function trianglePrismDimensionsMm(shape: TrianglePrismShape, scale: Phys
   const dimensions = prismDimensionsMm(trianglePrismProportions(shape), scale);
   const b = shape.baseSideRatio * dimensions.edge;
   return { ...dimensions, baseSideB: b, baseSideC: triangleThirdSide(dimensions.edge, b, shape.baseAngleDeg) };
+}
+
+export interface TrapezoidPrismDimensions extends PrismDimensions {
+  readonly baseSideB: number;
+  readonly baseSideC: number;
+  readonly baseSideD: number;
+  /** t: the distance between the parallel sides within the base plane, not the prism's height h. */
+  readonly baseHeight: number;
+  /** δ: the shift of the midpoint of b along X from that of a. */
+  readonly baseShift: number;
+}
+
+/** Physical dimensions from the same uniform scale as the geometry: a is that scale and b, t and δ follow from it. */
+export function trapezoidPrismDimensionsMm(shape: TrapezoidPrismShape, scale: PhysicalScale): TrapezoidPrismDimensions {
+  const dimensions = prismDimensionsMm(trapezoidPrismProportions(shape), scale);
+  const a = dimensions.edge;
+  const [b, t, delta] = [shape.parallelSideRatio * a, shape.baseHeightRatio * a, shape.baseShiftRatio * a];
+  const { c, d } = trapezoidLegs(a, b, t, delta);
+  return { ...dimensions, baseSideB: b, baseSideC: c, baseSideD: d, baseHeight: t, baseShift: delta };
 }
 
 /** The prism in millimetres, with the base centre at the origin and the lower base in z = 0. */

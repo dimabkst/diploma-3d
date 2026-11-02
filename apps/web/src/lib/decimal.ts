@@ -36,6 +36,17 @@ export function snapDecimal(value: number, range: StepRange): number {
   );
 }
 
+/**
+ * (x + y) / 2 computed on the decimal values of x and y, so that a typed b/a = 1,1 aligns at (1,1 − 1)/2 = 0,05 rather
+ * than at the binary result 0,050000000000000044.
+ */
+export function halfSumDecimal(x: number, y: number): number {
+  const [p, q] = [toExactDecimal(x), toExactDecimal(y)];
+  const scale = Math.max(p.scale, q.scale);
+  // n / 2 = 5n / 10: one more decimal digit keeps the half exact.
+  return Number(`${(rescale(p, scale) + rescale(q, scale)) * 5n}e-${scale + 1}`);
+}
+
 /** Formats a stepped value exactly, with the Ukrainian decimal comma. */
 export const formatSteppedDecimal = (value: number): string => String(value).replace('.', ',');
 

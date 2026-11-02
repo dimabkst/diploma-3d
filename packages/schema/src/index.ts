@@ -14,6 +14,9 @@ export {
 export { OFFSET_LIMITS, offsetRatioSchema } from './offset.ts';
 export { type ParallelepipedShape, parallelepipedShapeSchema } from './parallelepiped.ts';
 export {
+  BASE_SHIFT_LIMITS,
+  baseShiftSchema,
+  DEFAULT_TRAPEZOID_BASE,
   DEFAULT_TRIANGLE_BASE,
   PRISM_BASE_SIDES,
   PRISM_BASE_TYPES,
@@ -23,7 +26,9 @@ export {
   prismShapeSchema,
   type RegularPrismShape,
   regularPrismShapeSchema,
+  type TrapezoidPrismShape,
   type TrianglePrismShape,
+  trapezoidPrismShapeSchema,
   trianglePrismShapeSchema,
 } from './prism.ts';
 export { PYRAMID_BASE_SIDES, type PyramidBaseSides, type PyramidShape, pyramidShapeSchema } from './pyramid.ts';

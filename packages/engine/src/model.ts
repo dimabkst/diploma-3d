@@ -60,10 +60,10 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
 
 /**
  * The shape kind, with the number of sides of a regular base for prisms and pyramids, e.g. "prism-6-sided", or the base
- * type otherwise, e.g. "prism-triangle".
+ * type otherwise, e.g. "prism-triangle" or "prism-trapezoid".
  */
 export function modelName(shape: Shape): string {
-  if (shape.kind === 'prism' && shape.baseType === 'triangle') return 'prism-triangle';
+  if (shape.kind === 'prism' && shape.baseType !== 'regular') return `prism-${shape.baseType}`;
   return shape.kind === 'prism' || shape.kind === 'pyramid' ? `${shape.kind}-${shape.baseSides}-sided` : shape.kind;
 }
 

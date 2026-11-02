@@ -232,6 +232,32 @@ describe('releases Manifold objects', () => {
       scale: { longestDimensionMm: 80 },
     },
   } as const satisfies Record<string, ModelSpecInput>;
+  const trapezoid = {
+    right: {
+      shape: {
+        kind: 'prism',
+        baseType: 'trapezoid',
+        parallelSideRatio: 0.5,
+        baseHeightRatio: 0.375,
+        baseShiftRatio: -0.25,
+        heightRatio: 0.5,
+      },
+      scale: { longestDimensionMm: 80 },
+    },
+    oblique: {
+      shape: {
+        kind: 'prism',
+        baseType: 'trapezoid',
+        parallelSideRatio: 2,
+        baseHeightRatio: 1,
+        baseShiftRatio: 0.5,
+        heightRatio: 1,
+        offsetXRatio: 1,
+        offsetYRatio: -0.5,
+      },
+      scale: { longestDimensionMm: 80 },
+    },
+  } as const satisfies Record<string, ModelSpecInput>;
   const triangle = {
     right: {
       shape: { kind: 'prism', baseType: 'triangle', baseSideRatio: 0.75, baseAngleDeg: 90, heightRatio: 1 },
@@ -261,6 +287,8 @@ describe('releases Manifold objects', () => {
     ['oblique prism', oblique.prism, 3],
     ['triangle prism', triangle.right, 2],
     ['oblique triangle prism', triangle.oblique, 3],
+    ['trapezoid prism', trapezoid.right, 2],
+    ['oblique trapezoid prism', trapezoid.oblique, 3],
     ['pyramid', defaultModelSpecs.pyramid, 2],
     ['tetrahedron', defaultModelSpecs.tetrahedron, 2],
   ];

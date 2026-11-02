@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  alignedTrapezoidShift,
   initialParameterChoices,
   initialParameterTexts,
   type ParameterTexts,
@@ -102,6 +103,9 @@ describe('resolveModelRequest', () => {
       prismOffsetYRatio: '0',
       prismTriangleSideRatio: '1',
       prismTriangleAngleDeg: '60',
+      prismTrapezoidSideRatio: '0,5',
+      prismTrapezoidHeightRatio: '0,5',
+      prismTrapezoidShiftRatio: '0',
       pyramidHeightRatio: '1',
       cylinderHeightRatio: '2',
       coneHeightRatio: '2',
@@ -426,6 +430,68 @@ describe('resolveModelRequest', () => {
       expect(resolveModelRequest('prism', mixed, triangleBase).spec?.shape).toMatchObject({ baseSideRatio: 2 });
       expect(resolveModelRequest('parallelepiped', mixed, triangleBase).spec).toBeUndefined();
     });
+  });
+
+  describe('prism over a configurable trapezoid', () => {
+    const trapezoidBase = { ...triangle, prismBaseType: 'trapezoid' } as const;
+
+    it('starts at b = t = a/2 with b centred and the shared height and offsets of the prism', () => {
+      expect(resolveModelRequest('prism', initialParameterTexts(), trapezoidBase).spec?.shape).toEqual({
+        kind: 'prism',
+        baseType: 'trapezoid',
+        parallelSideRatio: 0.5,
+        baseHeightRatio: 0.5,
+        baseShiftRatio: 0,
+        heightRatio: 2,
+        offsetXRatio: 0,
+        offsetYRatio: 0,
+      });
+    });
+
+    it('reads negative and off-step values, and b = a stays a trapezoid base', () => {
+      const typed = texts({
+        prismTrapezoidSideRatio: '1',
+        prismTrapezoidHeightRatio: '0.375',
+        prismTrapezoidShiftRatio: '-0,35',
+        prismOffsetYRatio: '1,1',
+      });
+      expect(resolveModelRequest('prism', typed, trapezoidBase).spec?.shape).toEqual({
+        kind: 'prism',
+        baseType: 'trapezoid',
+        parallelSideRatio: 1,
+        baseHeightRatio: 0.375,
+        baseShiftRatio: -0.35,
+        heightRatio: 2,
+        offsetXRatio: 0,
+        offsetYRatio: 1.1,
+      });
+    });
+
+    it('validates only the trapezoid fields when it is selected, and ignores them otherwise', () => {
+      const broken = texts({ prismTrapezoidSideRatio: '', prismTrapezoidShiftRatio: '-2,5' });
+      expect(resolveModelRequest('prism', broken, trapezoidBase).errors).toEqual({
+        prismTrapezoidSideRatio: 'Введіть значення.',
+        prismTrapezoidShiftRatio: 'Допустимі значення — від -2 до 2.',
+      });
+      expect(resolveModelRequest('prism', broken, trapezoidBase).spec).toBeUndefined();
+      for (const prismBaseType of ['regular', 'triangle'] as const) {
+        expect(resolveModelRequest('prism', broken, { ...triangle, prismBaseType }).errors).toEqual({});
+      }
+    });
+  });
+
+  it.each([
+    // [b/a, left, right]: left puts P3 above P0, right P2 above P1.
+    [0.5, -0.25, 0.25],
+    [2, 0.5, -0.5],
+    [1.1, 0.05, -0.05],
+    [0.25, -0.375, 0.375],
+    [4, 1.5, -1.5],
+    [1, 0, 0],
+  ])('aligns side b = %s·a at δ/a = %s on the left and %s on the right, exactly', (side, left, right) => {
+    expect(alignedTrapezoidShift(side, 'left')).toBe(left);
+    expect(alignedTrapezoidShift(side, 'right')).toBe(right);
+    expect(alignedTrapezoidShift(side, 'centre')).toBe(0);
   });
 
   it('builds the ball without reading any field', () => {
