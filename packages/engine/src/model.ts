@@ -1,4 +1,4 @@
-import { type ModelSpec, modelSpecSchema, type Shape, type ShapeKind } from '@diploma-3d/schema';
+import { type ModelSpec, modelSpecSchema, type PhysicalScale, type Shape, type ShapeKind } from '@diploma-3d/schema';
 import type { Manifold } from 'manifold-3d';
 import { GeometryError, InvalidModelSpecError } from './errors.ts';
 import type { GeometryKernel } from './kernel.ts';
@@ -7,12 +7,15 @@ import { type Track, withScope } from './scope.ts';
 import { buildUnitBox } from './shapes/box.ts';
 import { buildUnitPrism } from './shapes/prism.ts';
 import { buildUnitPyramid, pyramidParameters } from './shapes/pyramid.ts';
+import { buildRoundSolid } from './shapes/round.ts';
 
 export interface Solid {
   /** ASCII identifier, also used as the object name in exported files. */
   readonly name: string;
   readonly mesh: TriangleMesh;
   readonly measurements: MeshMeasurements;
+  /** Display hint: the solid approximates curved surfaces, which the preview shades smoothly. */
+  readonly smoothShading: boolean;
 }
 
 export interface GeneratedModel {
@@ -32,8 +35,7 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpec): Generat
   const spec = parsed.data;
 
   const mesh = withScope((track) => {
-    const unitSolid = buildUnitShape(kernel, track, spec.shape);
-    const solid = track(unitSolid.scale(spec.scale.longestDimensionMm));
+    const solid = buildShape(kernel, track, spec.shape, spec.scale);
     const status = solid.status();
     if (status !== 'NoError' || solid.isEmpty()) {
       throw new GeometryError(`Geometry kernel produced no solid (${status}).`);
@@ -43,7 +45,8 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpec): Generat
   assertValidSolidMesh(mesh);
 
   const name = modelName(spec.shape);
-  return { kind: spec.shape.kind, name, spec, solids: [{ name, mesh, measurements: measureMesh(mesh) }] };
+  const smoothShading = spec.shape.kind === 'cylinder' || spec.shape.kind === 'cone';
+  return { kind: spec.shape.kind, name, spec, solids: [{ name, mesh, measurements: measureMesh(mesh), smoothShading }] };
 }
 
 /** The shape kind, with the number of base sides for prisms and pyramids, e.g. "prism-6-sided". */
@@ -51,15 +54,20 @@ export function modelName(shape: Shape): string {
   return shape.kind === 'prism' || shape.kind === 'pyramid' ? `${shape.kind}-${shape.baseSides}-sided` : shape.kind;
 }
 
-function buildUnitShape(kernel: GeometryKernel, track: Track, shape: Shape): Manifold {
+/** The solid in millimetres: polyhedra are built in model units and scaled once; round solids are built at size. */
+function buildShape(kernel: GeometryKernel, track: Track, shape: Shape, scale: PhysicalScale): Manifold {
+  const toMillimetres = (unitSolid: Manifold) => track(unitSolid.scale(scale.longestDimensionMm));
   switch (shape.kind) {
     case 'cube':
     case 'cuboid':
-      return buildUnitBox(kernel, track, shape);
+      return toMillimetres(buildUnitBox(kernel, track, shape));
     case 'prism':
-      return buildUnitPrism(kernel, track, shape);
+      return toMillimetres(buildUnitPrism(kernel, track, shape));
     case 'pyramid':
     case 'tetrahedron':
-      return buildUnitPyramid(kernel, track, pyramidParameters(shape));
+      return toMillimetres(buildUnitPyramid(kernel, track, pyramidParameters(shape)));
+    case 'cylinder':
+    case 'cone':
+      return buildRoundSolid(kernel, track, shape, scale);
   }
 }

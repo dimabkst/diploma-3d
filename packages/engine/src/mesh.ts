@@ -89,10 +89,11 @@ export function meshFromManifold(manifold: Manifold): TriangleMesh {
     if ((compactIndex[vertex] as number) < 0) {
       compactIndex[vertex] = positions.length / 3;
       const offset = vertex * numProp;
+      // Adding 0 turns −0, which the kernel emits for some on-axis coordinates, into 0, as the exported text has it.
       positions.push(
-        vertProperties[offset] as number,
-        vertProperties[offset + 1] as number,
-        vertProperties[offset + 2] as number,
+        (vertProperties[offset] as number) + 0,
+        (vertProperties[offset + 1] as number) + 0,
+        (vertProperties[offset + 2] as number) + 0,
       );
     }
     triangles[corner] = compactIndex[vertex] as number;

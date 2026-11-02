@@ -12,7 +12,13 @@ import {
 import { formatDecimal, parseDecimal } from '../decimal.ts';
 
 /** Ratio fields, kept per shape so that switching shapes never carries a value into a different meaning. */
-export type ParameterKey = 'cuboidWidthRatio' | 'cuboidHeightRatio' | 'prismHeightRatio' | 'pyramidHeightRatio';
+export type ParameterKey =
+  | 'cuboidWidthRatio'
+  | 'cuboidHeightRatio'
+  | 'prismHeightRatio'
+  | 'pyramidHeightRatio'
+  | 'cylinderHeightRatio'
+  | 'coneHeightRatio';
 
 /** Raw field text, kept separately from parsed values so that empty and partially typed input stays editable. */
 export type ParameterTexts = Record<ParameterKey, string>;
@@ -38,6 +44,8 @@ export const initialParameterTexts = (): ParameterTexts => ({
   cuboidHeightRatio: formatDecimal(defaultModelSpecs.cuboid.shape.heightRatio),
   prismHeightRatio: formatDecimal(defaultModelSpecs.prism.shape.heightRatio),
   pyramidHeightRatio: formatDecimal(defaultModelSpecs.pyramid.shape.heightRatio),
+  cylinderHeightRatio: formatDecimal(defaultModelSpecs.cylinder.shape.heightRatio),
+  coneHeightRatio: formatDecimal(defaultModelSpecs.cone.shape.heightRatio),
 });
 
 export const initialParameterChoices = (): ParameterChoices => ({
@@ -97,6 +105,14 @@ export function resolveModelRequest(kind: ShapeKind, texts: ParameterTexts, choi
       const { pyramidHeightRatio: heightRatio } = values;
       if (heightRatio === undefined) return { scale, values, errors, spec: undefined, key: undefined };
       return withKey({ shape: { kind, baseSides: choices.pyramidBaseSides, heightRatio }, scale }, values);
+    }
+    case 'cylinder':
+    case 'cone': {
+      const key = kind === 'cylinder' ? 'cylinderHeightRatio' : 'coneHeightRatio';
+      const { values, errors } = validateRatios([key], texts);
+      const heightRatio = values[key];
+      if (heightRatio === undefined) return { scale, values, errors, spec: undefined, key: undefined };
+      return withKey({ shape: { kind, heightRatio }, scale }, values);
     }
   }
 }

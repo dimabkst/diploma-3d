@@ -202,10 +202,11 @@ describe('releases Manifold objects', () => {
       return manifold;
     };
     const prototype = instancePrototype();
-    const { cube: originalCube, extrude: originalExtrude } = kernel.Manifold;
+    const { cube: originalCube, extrude: originalExtrude, cylinder: originalCylinder } = kernel.Manifold;
     const { translate, scale } = prototype;
     vi.spyOn(kernel.Manifold, 'cube').mockImplementation((...args) => record(originalCube.apply(kernel.Manifold, args)));
     vi.spyOn(kernel.Manifold, 'extrude').mockImplementation((...args) => record(originalExtrude.apply(kernel.Manifold, args)));
+    vi.spyOn(kernel.Manifold, 'cylinder').mockImplementation((...args) => record(originalCylinder.apply(kernel.Manifold, args)));
     vi.spyOn(prototype, 'translate').mockImplementation(function (this: Manifold, ...args) {
       return record(translate.apply(this, args));
     });
@@ -218,13 +219,19 @@ describe('releases Manifold objects', () => {
   const isDeleted = (manifold: Manifold) => (manifold as unknown as { isDeleted(): boolean }).isDeleted();
 
   // Boxes: cube, translate onto the build plate, scale to millimetres. Prisms and pyramids: extrude, scale.
-  const kinds = [
+  const polyhedra = [
     ['cube', 3],
     ['cuboid', 3],
     ['prism', 2],
     ['pyramid', 2],
     ['tetrahedron', 2],
   ] as const;
+  // Built by manifold-3d at their physical size in one step.
+  const roundSolids = [
+    ['cylinder', 1],
+    ['cone', 1],
+  ] as const;
+  const kinds = [...polyhedra, ...roundSolids];
 
   it.each(kinds)('after successful generation of a %s', (kind, objects) => {
     const { created } = trackCreatedManifolds();
@@ -241,13 +248,23 @@ describe('releases Manifold objects', () => {
     expect(created.every(isDeleted)).toBe(true);
   });
 
-  it.each(kinds)('when a kernel operation throws midway through a %s', (kind, objects) => {
+  it.each(polyhedra)('when a kernel operation throws midway through a %s', (kind, objects) => {
     const { created, prototype } = trackCreatedManifolds();
     vi.spyOn(prototype, 'scale').mockImplementation(() => {
       throw new Error('out of memory');
     });
     expect(() => generateModel(kernel, defaultModelSpecs[kind])).toThrow('out of memory');
     expect(created).toHaveLength(objects - 1);
+    expect(created.every(isDeleted)).toBe(true);
+  });
+
+  it.each(roundSolids)('when copying the mesh of a %s out of the kernel throws', (kind, objects) => {
+    const { created, prototype } = trackCreatedManifolds();
+    vi.spyOn(prototype, 'getMesh').mockImplementation(() => {
+      throw new Error('out of memory');
+    });
+    expect(() => generateModel(kernel, defaultModelSpecs[kind])).toThrow('out of memory');
+    expect(created).toHaveLength(objects);
     expect(created.every(isDeleted)).toBe(true);
   });
 });

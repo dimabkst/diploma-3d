@@ -6,6 +6,7 @@ import {
   dot,
   length,
   measureMesh,
+  subtract,
   type TriangleMesh,
   triangleAreaVector,
   triangleAt,
@@ -18,6 +19,11 @@ export interface PreviewObject {
   readonly name: string;
   /** Millimetres, Z up. */
   readonly mesh: TriangleMesh;
+  /**
+   * Shade faces that meet at less than the feature-edge angle smoothly, as for the facets of a curved surface. Positions
+   * stay the exported ones; only the display normals change. Polyhedra keep flat faces.
+   */
+  readonly smoothShading?: boolean;
 }
 
 export const GLB_MEDIA_TYPE = 'model/gltf-binary';
@@ -32,8 +38,10 @@ const TRIANGLES: GLTF.MeshPrimitiveMode = 4;
 const SURFACE_COLOR = [0.2, 0.27, 0.4, 1] as const;
 const EDGE_COLOR = [0.9, 0.92, 0.95, 1] as const;
 
-// Edges between faces meeting at a smaller angle are tessellation edges of one face or of a curved surface.
+// Edges between faces meeting at a smaller angle are tessellation edges of one face or of a curved surface. Smooth
+// shading blends exactly these faces, so outlined edges such as a cylinder's rims stay sharp.
 const FEATURE_EDGE_MIN_ANGLE_DEG = 30;
+const FEATURE_EDGE_MIN_COSINE = Math.cos((FEATURE_EDGE_MIN_ANGLE_DEG * Math.PI) / 180);
 
 // Lines exactly on the surface z-fight with it; running them this fraction of the bounding-box diagonal outside the
 // adjacent faces keeps them visible without visibly detaching them from the solid.
@@ -53,7 +61,7 @@ export function toGltfPosition([x, y, z]: Vec3): Vec3 {
 
 const toGltfDirection = ([x, y, z]: Vec3): Vec3 => [x, z, -y];
 
-/** Builds a flat-shaded preview with outlined feature edges from the same meshes that are exported for printing. */
+/** Builds a shaded preview with outlined feature edges from the same meshes that are exported for printing. */
 export async function createPreviewGlb(objects: readonly PreviewObject[]): Promise<Uint8Array<ArrayBuffer>> {
   if (objects.length === 0) {
     throw new GeometryError('A preview needs at least one object.');
@@ -72,7 +80,7 @@ export async function createPreviewGlb(objects: readonly PreviewObject[]): Promi
 
   for (const object of objects) {
     assertValidSolidMesh(object.mesh);
-    const { positions, normals } = flatShadedTriangles(object.mesh);
+    const { positions, normals } = shadedTriangles(object.mesh, object.smoothShading ?? false);
     const surface = document
       .createPrimitive()
       .setMode(TRIANGLES)
@@ -98,16 +106,51 @@ export async function createPreviewGlb(objects: readonly PreviewObject[]): Promi
   return (await new WebIO().writeBinary(document)) as Uint8Array<ArrayBuffer>;
 }
 
-/** Unshared vertices per triangle so that each planar face is lit uniformly. */
-function flatShadedTriangles(mesh: TriangleMesh): { positions: Float32Array<ArrayBuffer>; normals: Float32Array<ArrayBuffer> } {
+/**
+ * Unshared vertices per triangle, so that each corner has its own normal. Flat shading uses the face normal. Smooth
+ * shading averages, weighted by their angles at the vertex, the normals of the faces around the vertex that lie within
+ * the feature-edge angle of this face: the facets of a curved side blend, while a rim between the side and a flat cap
+ * stays sharp. At a cone's apex each side triangle thus gets a normal close to its own instead of the axis direction.
+ */
+function shadedTriangles(
+  mesh: TriangleMesh,
+  smooth: boolean,
+): { positions: Float32Array<ArrayBuffer>; normals: Float32Array<ArrayBuffer> } {
+  const faceNormals = Array.from({ length: triangleCount(mesh) }, (_, triangle) => unitNormal(mesh, triangle));
+  const cornersOfVertex = new Map<number, { triangle: number; angle: number }[]>();
+  if (smooth) {
+    for (let triangle = 0; triangle < triangleCount(mesh); triangle += 1) {
+      const corners = triangleAt(mesh, triangle);
+      corners.forEach((vertex, corner) => {
+        const at = vertexAt(mesh, vertex);
+        const toNext = subtract(vertexAt(mesh, corners[(corner + 1) % 3] as number), at);
+        const toPrevious = subtract(vertexAt(mesh, corners[(corner + 2) % 3] as number), at);
+        const angle = Math.acos(Math.max(-1, Math.min(1, dot(toNext, toPrevious) / (length(toNext) * length(toPrevious)))));
+        const list = cornersOfVertex.get(vertex) ?? [];
+        list.push({ triangle, angle });
+        cornersOfVertex.set(vertex, list);
+      });
+    }
+  }
+
   const positions = new Float32Array(triangleCount(mesh) * 9);
   const normals = new Float32Array(triangleCount(mesh) * 9);
   for (let triangle = 0; triangle < triangleCount(mesh); triangle += 1) {
-    const normal = toGltfDirection(unitNormal(mesh, triangle));
+    const faceNormal = faceNormals[triangle] as Vec3;
     triangleAt(mesh, triangle).forEach((vertex, corner) => {
+      let normal = faceNormal;
+      if (smooth) {
+        let sum: Vec3 = [0, 0, 0];
+        for (const neighbour of cornersOfVertex.get(vertex) ?? []) {
+          const neighbourNormal = faceNormals[neighbour.triangle] as Vec3;
+          if (dot(neighbourNormal, faceNormal) >= FEATURE_EDGE_MIN_COSINE)
+            sum = add(sum, scale(neighbourNormal, neighbour.angle));
+        }
+        normal = scale(sum, 1 / length(sum));
+      }
       const offset = triangle * 9 + corner * 3;
       positions.set(toGltfPosition(vertexAt(mesh, vertex)), offset);
-      normals.set(normal, offset);
+      normals.set(toGltfDirection(normal), offset);
     });
   }
   return { positions, normals };
@@ -121,7 +164,6 @@ function featureEdgeSegments(mesh: TriangleMesh): Float32Array<ArrayBuffer> {
   const firstTriangleOfEdge = new Map<string, number>();
   const edges: [number, number][] = [];
   const adjacentNormals = new Map<number, Vec3[]>();
-  const minimumCosine = Math.cos((FEATURE_EDGE_MIN_ANGLE_DEG * Math.PI) / 180);
 
   for (let triangle = 0; triangle < triangleCount(mesh); triangle += 1) {
     const corners = triangleAt(mesh, triangle);
@@ -132,7 +174,7 @@ function featureEdgeSegments(mesh: TriangleMesh): Float32Array<ArrayBuffer> {
       const neighbour = firstTriangleOfEdge.get(key);
       if (neighbour === undefined) {
         firstTriangleOfEdge.set(key, triangle);
-      } else if (dot(unitNormal(mesh, triangle), unitNormal(mesh, neighbour)) < minimumCosine) {
+      } else if (dot(unitNormal(mesh, triangle), unitNormal(mesh, neighbour)) < FEATURE_EDGE_MIN_COSINE) {
         edges.push([from, to]);
         for (const vertex of [from, to]) {
           const normals = adjacentNormals.get(vertex) ?? [];

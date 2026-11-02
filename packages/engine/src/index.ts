@@ -22,3 +22,12 @@ export {
   regularBaseProportions,
 } from './shapes/regular-base.ts';
 export { regularPolygonArea, regularPolygonVertices, type Vec2 } from './shapes/regular-polygon.ts';
+export {
+  CIRCULAR_SEGMENTS,
+  circularSegments,
+  MAX_CIRCLE_DEVIATION_MM,
+  type RoundShape,
+  type RoundSolidMeasurements,
+  roundDimensionsMm,
+  roundSolidMeasurements,
+} from './shapes/round.ts';

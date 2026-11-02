@@ -1,9 +1,11 @@
 import {
   boxEdgeLengthsMm,
+  MAX_CIRCLE_DEVIATION_MM,
   type MeshMeasurements,
   pyramidParameters,
   regularBaseDimensionsMm,
   regularPolygonArea,
+  roundSolidMeasurements,
 } from '@diploma-3d/engine';
 import {
   defaultModelSpecs,
@@ -50,11 +52,7 @@ export type ChoiceField = {
 
 export type ParameterField = RatioField | ChoiceField;
 
-const plannedShapes = [
-  { value: 'sphere', label: 'Сфера' },
-  { value: 'cylinder', label: 'Циліндр' },
-  { value: 'cone', label: 'Конус' },
-] as const;
+const plannedShapes = [{ value: 'sphere', label: 'Сфера' }] as const;
 
 export const shapeOptions: readonly ShapeOption[] = [
   { value: 'cube', label: 'Куб', available: true },
@@ -62,6 +60,8 @@ export const shapeOptions: readonly ShapeOption[] = [
   { value: 'prism', label: 'Правильна призма', available: true },
   { value: 'pyramid', label: 'Правильна піраміда', available: true },
   { value: 'tetrahedron', label: 'Правильний тетраедр', available: true },
+  { value: 'cylinder', label: 'Циліндр', available: true },
+  { value: 'cone', label: 'Конус', available: true },
   ...plannedShapes.map((shape) => ({ ...shape, available: false })),
 ];
 
@@ -96,8 +96,16 @@ export function shapeDescription(kind: ShapeKind, scale: PhysicalScale): string 
         `Ребро моделі — ${formatDecimal(edge)} мм.`
       );
     }
+    case 'cylinder':
+      return `Прямий круговий циліндр: основи — рівні круги, твірні перпендикулярні до них. ${idealRoundNote}`;
+    case 'cone':
+      return `Прямий круговий конус: основа — круг, вершина лежить точно над її центром. ${idealRoundNote}`;
   }
 }
+
+const idealRoundNote =
+  'Розміри нижче — для ідеального тіла; у файлі друку коло наближено многокутником, ' +
+  `що відходить від нього не більше ніж на ${formatDecimal(MAX_CIRCLE_DEVIATION_MM)} мм.`;
 
 // Buttons, arrow keys and the slider move ratios to multiples of 0,25; typed values keep any precision.
 const ratioRange: StepRange = { ...RATIO_LIMITS, increment: 0.25 };
@@ -136,6 +144,8 @@ export const shapeParameters: Readonly<Record<ShapeKind, readonly ParameterField
   ],
   // Fixed proportions: nothing to adjust.
   tetrahedron: [],
+  cylinder: [{ type: 'ratio', key: 'cylinderHeightRatio', label: 'Висота h', suffix: '× r', range: ratioRange }],
+  cone: [{ type: 'ratio', key: 'coneHeightRatio', label: 'Висота h', suffix: '× r', range: ratioRange }],
 };
 
 export function parameterHint(kind: ShapeKind, scale: PhysicalScale): string | undefined {
@@ -158,13 +168,20 @@ export function parameterHint(kind: ShapeKind, scale: PhysicalScale): string | u
         'a — сторона основи, h — висота піраміди: перпендикуляр з вершини до центра основи. ' +
         `Найбільший габаритний вимір завжди ${formatLength(scale)}, тому зміна основи чи висоти може змінити всі розміри.`
       );
+    case 'cylinder':
+    case 'cone':
+      return (
+        'Висоту h задано відносно радіуса основи r. ' +
+        `Більший із діаметра та висоти завжди дорівнює ${formatLength(scale)}, тому зміна множника може змінити і радіус, і висоту.`
+      );
   }
 }
 
 /**
  * Edge lengths and the base area follow directly from the validated parameters (`shape` is undefined while they are
- * not valid); surface area and volume are measured on the generated mesh, so they describe exactly the geometry that is
- * previewed and exported.
+ * not valid); for polyhedra, surface area and volume are measured on the generated mesh, so they describe exactly the
+ * geometry that is previewed and exported. For the cylinder and cone every value is that of the ideal curved solid,
+ * which the exported polygonal approximation undershoots slightly.
  */
 export function measurementItems(
   kind: ShapeKind,
@@ -218,6 +235,25 @@ export function measurementItems(
         { label: 'Площа основи', value: formatQuantity(baseArea, 'мм²'), widest: widestQuantity(length ** 2, 'мм²') },
         { label: 'Площа поверхні', ...area },
         { label: 'Об’єм', ...volume },
+      ];
+    }
+    case 'cylinder':
+    case 'cone': {
+      const ideal = shape?.kind === 'cylinder' || shape?.kind === 'cone' ? roundSolidMeasurements(shape, scale) : undefined;
+      // The cone's slant height reaches √(L² + (L/2)²) for h = L and r = L/2.
+      const slantHeight = {
+        label: 'Твірна l',
+        value: formatQuantity(ideal?.slantHeight, 'мм'),
+        widest: widestQuantity((length * Math.sqrt(5)) / 2, 'мм'),
+      };
+      return [
+        { label: 'Радіус r', ...edge(ideal?.radius) },
+        { label: 'Діаметр d', ...edge(ideal?.diameter) },
+        { label: 'Висота h', ...edge(ideal?.height) },
+        ...(kind === 'cone' ? [slantHeight] : []),
+        { label: 'Площа основи', value: formatQuantity(ideal?.baseArea, 'мм²'), widest: widestQuantity(length ** 2, 'мм²') },
+        { label: 'Площа поверхні', ...area, value: formatQuantity(ideal?.surfaceArea, 'мм²') },
+        { label: 'Об’єм', ...volume, value: formatQuantity(ideal?.volume, 'мм³') },
       ];
     }
   }

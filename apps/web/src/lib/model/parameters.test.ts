@@ -43,6 +43,8 @@ describe('resolveModelRequest', () => {
       cuboidHeightRatio: '2',
       prismHeightRatio: '2',
       pyramidHeightRatio: '1',
+      cylinderHeightRatio: '2',
+      coneHeightRatio: '2',
     });
     expect(initialParameterChoices()).toEqual({ prismBaseSides: 3, pyramidBaseSides: 4 });
     expect(resolveModelRequest('cuboid', initialParameterTexts(), triangle).spec).toEqual({
@@ -58,7 +60,13 @@ describe('resolveModelRequest', () => {
   it('ignores parameter fields for the cube', () => {
     const request = resolveModelRequest(
       'cube',
-      { cuboidWidthRatio: '', cuboidHeightRatio: 'abc', prismHeightRatio: '-', pyramidHeightRatio: '9' },
+      {
+        ...initialParameterTexts(),
+        cuboidWidthRatio: '',
+        cuboidHeightRatio: 'abc',
+        prismHeightRatio: '-',
+        pyramidHeightRatio: '9',
+      },
       triangle,
     );
     expect(request.spec).toEqual({ shape: { kind: 'cube' }, scale: { longestDimensionMm: 80 } });
@@ -145,9 +153,27 @@ describe('resolveModelRequest', () => {
   });
 
   it('builds the tetrahedron without reading any field', () => {
-    const empty = { cuboidWidthRatio: '', cuboidHeightRatio: '', prismHeightRatio: '', pyramidHeightRatio: '' };
+    const empty = Object.fromEntries(Object.keys(initialParameterTexts()).map((key) => [key, ''])) as ParameterTexts;
     const request = resolveModelRequest('tetrahedron', empty, triangle);
     expect(request.spec).toEqual({ shape: { kind: 'tetrahedron' }, scale: { longestDimensionMm: 80 } });
     expect(request.errors).toEqual({});
+  });
+
+  it.each(['cylinder', 'cone'] as const)('builds the %s from its own h/r, including precise typed values', (kind) => {
+    const key = kind === 'cylinder' ? 'cylinderHeightRatio' : 'coneHeightRatio';
+    expect(resolveModelRequest(kind, initialParameterTexts(), triangle).spec).toEqual({
+      shape: { kind, heightRatio: 2 },
+      scale: { longestDimensionMm: 80 },
+    });
+    expect(resolveModelRequest(kind, texts({ [key]: '2.05' }), triangle).spec?.shape).toEqual({ kind, heightRatio: 2.05 });
+    const invalid = resolveModelRequest(kind, texts({ [key]: '4,5' }), triangle);
+    expect(invalid.spec).toBeUndefined();
+    expect(invalid.errors).toEqual({ [key]: 'Допустимі значення — від 0,25 до 4.' });
+  });
+
+  it('keeps the cylinder and cone ratios apart', () => {
+    const mixed = texts({ cylinderHeightRatio: '1,1', coneHeightRatio: '' });
+    expect(resolveModelRequest('cylinder', mixed, triangle).spec?.shape).toEqual({ kind: 'cylinder', heightRatio: 1.1 });
+    expect(resolveModelRequest('cone', mixed, triangle).errors).toEqual({ coneHeightRatio: 'Введіть значення.' });
   });
 });

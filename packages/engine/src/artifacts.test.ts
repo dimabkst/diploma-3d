@@ -31,6 +31,8 @@ describe('buildModelArtifacts', () => {
     ['prism', 'prism-3-sided.3mf'],
     ['pyramid', 'pyramid-4-sided.3mf'],
     ['tetrahedron', 'tetrahedron.3mf'],
+    ['cylinder', 'cylinder.3mf'],
+    ['cone', 'cone.3mf'],
   ] as const)('derives the %s preview and print file %s from the same geometry', async (kind, fileName) => {
     const { model, previewGlb, printFile } = await buildModelArtifacts(kernel, defaultModelSpecs[kind]);
     expect(printFile.fileName).toBe(fileName);
@@ -98,6 +100,48 @@ describe('buildModelArtifacts', () => {
         sixfoldVolume += dot(a, cross(b, c));
       }
       expect(sixfoldVolume / 6).toBeCloseTo(0.04 * 0.06 * 0.08, 9);
+    });
+  });
+
+  describe.each([
+    ['cylinder', 1],
+    ['cone', 1 / 3],
+  ] as const)('for a %s with h/r = 4', (kind, volumeShare) => {
+    // r = 80 / 4 = 20 mm and h = 80 mm; the 64-gon inscribed in the base circle has area 64·r²·sin(2π/64) / 2.
+    const spec: ModelSpec = { shape: { kind, heightRatio: 4 }, scale: { longestDimensionMm: 80 } };
+    const polygonBase = (64 * 20 ** 2 * Math.sin((2 * Math.PI) / 64)) / 2;
+
+    it(`exports ${kind}.3mf as one closed 40 × 40 × 80 mm object in millimetres`, async () => {
+      const { printFile } = await buildModelArtifacts(kernel, spec);
+      const { model } = readThreeMf(printFile.bytes);
+      expect(printFile.fileName).toBe(`${kind}.3mf`);
+      expect(model.unit).toBe('millimeter');
+      expect(model.objects.map(({ name }) => name)).toEqual([kind]);
+      const mesh = model.objects[0]?.mesh;
+      if (mesh === undefined) throw new Error('No exported mesh');
+      expect(findMeshDefects(mesh)).toEqual([]);
+      const measurements = measureMesh(mesh);
+      expect(measurements.bounds.min[2]).toBe(0);
+      [40, 40, 80].forEach((size, axis) => {
+        expect(measurements.size[axis]).toBeCloseTo(size, 4);
+      });
+      expect(measurements.volume / (polygonBase * 80 * volumeShare)).toBeCloseTo(1, 6);
+    });
+
+    it('previews the axis as glTF Y, in metres', async () => {
+      const { previewGlb } = await buildModelArtifacts(kernel, spec);
+      const positions = await previewSurfacePositions(previewGlb);
+      const points = Array.from(
+        { length: positions.getCount() },
+        (_, index) => positions.getElement(index, []) as unknown as Vec3,
+      );
+      const extent = (axis: 0 | 1 | 2) => [Math.min(...points.map((p) => p[axis])), Math.max(...points.map((p) => p[axis]))];
+      expect(extent(0)[0]).toBeCloseTo(-0.02, METRE_DIGITS);
+      expect(extent(0)[1]).toBeCloseTo(0.02, METRE_DIGITS);
+      expect(extent(1)[0]).toBeCloseTo(0, METRE_DIGITS);
+      expect(extent(1)[1]).toBeCloseTo(0.08, METRE_DIGITS);
+      expect(extent(2)[0]).toBeCloseTo(-0.02, METRE_DIGITS);
+      expect(extent(2)[1]).toBeCloseTo(0.02, METRE_DIGITS);
     });
   });
 
@@ -202,6 +246,8 @@ describe('buildModelArtifacts', () => {
     ['prism', { shape: { kind: 'prism', baseSides: 9, heightRatio: 2 }, scale: { longestDimensionMm: 80 } }],
     ['pyramid', { shape: { kind: 'pyramid', baseSides: 9, heightRatio: 1 }, scale: { longestDimensionMm: 80 } }],
     ['tetrahedron', { shape: { kind: 'tetrahedron', heightRatio: 1 }, scale: { longestDimensionMm: 80 } }],
+    ['cylinder', { shape: { kind: 'cylinder', heightRatio: 0 }, scale: { longestDimensionMm: 80 } }],
+    ['cone', { shape: { kind: 'cone', heightRatio: Number.NaN }, scale: { longestDimensionMm: 80 } }],
   ] as const)('produces no %s artifacts for invalid input', async (_, invalid) => {
     await expect(buildModelArtifacts(kernel, invalid as unknown as ModelSpec)).rejects.toBeInstanceOf(InvalidModelSpecError);
   });

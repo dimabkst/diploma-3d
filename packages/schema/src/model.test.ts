@@ -200,3 +200,35 @@ describe('regular tetrahedron', () => {
     expect(Number.isInteger(TETRAHEDRON_HEIGHT_RATIO * 4)).toBe(false);
   });
 });
+
+describe('right circular cylinder and cone parameters', () => {
+  const { min, max } = RATIO_LIMITS;
+  const round = (kind: string, heightRatio: unknown) => ({ shape: { kind, heightRatio }, scale });
+
+  it.each(['cylinder', 'cone'] as const)('defaults the %s to h/r = 2', (kind) => {
+    expect(modelSpecSchema.parse(defaultModelSpecs[kind])).toEqual({ shape: { kind, heightRatio: 2 }, scale });
+  });
+
+  it.each(['cylinder', 'cone'].flatMap((kind) => [min, 1.1, 2.05, max].map((heightRatio) => [kind, heightRatio] as const)))(
+    'accepts a %s with h/r = %s, including the boundaries and values off the 0,25 grid',
+    (kind, heightRatio) => {
+      expect(modelSpecSchema.parse(round(kind, heightRatio)).shape).toEqual({ kind, heightRatio });
+    },
+  );
+
+  it.each(
+    ['cylinder', 'cone'].flatMap((kind) =>
+      [...invalidNumbers, ['just below the minimum', min - 1e-9] as const, ['just above the maximum', max + 1e-9] as const].map(
+        ([label, ratio]) => [kind, label, ratio] as const,
+      ),
+    ),
+  )('rejects a %s whose height ratio is %s', (kind, _, ratio) => {
+    expect(modelSpecSchema.safeParse(round(kind, ratio)).success).toBe(false);
+  });
+
+  it.each(['cylinder', 'cone'])('rejects a %s with a base, a top radius, a resolution or absolute dimensions', (kind) => {
+    for (const extra of [{ baseSides: 4 }, { topRatio: 0.5 }, { segments: 32 }, { radius: 40 }]) {
+      expect(modelSpecSchema.safeParse({ shape: { kind, heightRatio: 2, ...extra }, scale }).success).toBe(false);
+    }
+  });
+});

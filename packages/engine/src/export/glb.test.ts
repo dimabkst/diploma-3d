@@ -1,4 +1,4 @@
-import { defaultModelSpecs } from '@diploma-3d/schema';
+import { defaultModelSpecs, type ModelSpec } from '@diploma-3d/schema';
 import { type Accessor, type Document, type Primitive, WebIO } from '@gltf-transform/core';
 import { strFromU8 } from 'fflate';
 import { describe, expect, it } from 'vitest';
@@ -170,5 +170,77 @@ describe('createPreviewGlb', () => {
     await expect(createPreviewGlb([])).rejects.toBeInstanceOf(GeometryError);
     const open = { positions: tetrahedron.positions, triangles: Uint32Array.of(0, 2, 1) };
     await expect(createPreviewGlb([{ name: 'open', mesh: open }])).rejects.toThrow(/open-edge/);
+  });
+});
+
+describe('createPreviewGlb shading', () => {
+  async function shadedCorners(spec: ModelSpec, smoothShading?: boolean) {
+    const kernel = await loadGeometryKernel();
+    const solid = generateModel(kernel, spec).solids[0];
+    if (solid === undefined) throw new Error('No solid');
+    const object = smoothShading === undefined ? solid : { ...solid, smoothShading };
+    const { surface, edges } = await readPrimitives(await createPreviewGlb([object]));
+    const positions = vectors(surface.getAttribute('POSITION'));
+    const normals = vectors(surface.getAttribute('NORMAL'));
+    const faces = Array.from({ length: positions.length / 3 }, (_, triangle) => {
+      const [a, b, c] = positions.slice(triangle * 3, triangle * 3 + 3) as [Vec3, Vec3, Vec3];
+      const n = cross(subtract(b, a), subtract(c, a));
+      return n.map((component) => component / Math.hypot(...n)) as unknown as Vec3;
+    });
+    return { positions, normals, faces, edgeSegments: vectors(edges?.getAttribute('POSITION') ?? null).length / 2 };
+  }
+
+  const cylinder: ModelSpec = { shape: { kind: 'cylinder', heightRatio: 2 }, scale: { longestDimensionMm: 80 } };
+  const cone: ModelSpec = { shape: { kind: 'cone', heightRatio: 2 }, scale: { longestDimensionMm: 80 } };
+
+  it('shades the cylinder side smoothly along the radius while caps stay flat and rims stay sharp', async () => {
+    const { positions, normals, faces, edgeSegments } = await shadedCorners(cylinder);
+    let sideCorners = 0;
+    positions.forEach((position, corner) => {
+      const normal = normals[corner] as Vec3;
+      const face = faces[Math.floor(corner / 3)] as Vec3;
+      expect(Math.hypot(...normal)).toBeCloseTo(1, 6);
+      if (Math.abs(face[1]) > 0.999) {
+        // Caps (glTF ±Y): exactly the cap normal, not tilted by the side.
+        expect(normal[1]).toBeCloseTo(face[1], 6);
+      } else {
+        // Side: horizontal and along the radius through the vertex, unlike the facet normal.
+        sideCorners += 1;
+        expect(Math.abs(normal[1])).toBeLessThan(1e-6);
+        const radial = [position[0], 0, position[2]] as Vec3;
+        expect(dot(normal, radial) / Math.hypot(...radial)).toBeGreaterThan(0.99999);
+      }
+    });
+    expect(sideCorners).toBe(64 * 2 * 3);
+    // Only the two 64-segment rims are outlined, not the lines between side facets.
+    expect(edgeSegments).toBe(128);
+  });
+
+  it('shades each cone side corner like its neighbourhood, so the apex does not take the axis direction', async () => {
+    const { positions, normals, faces } = await shadedCorners(cone);
+    const apexHeight = Math.max(...positions.map((position) => position[1]));
+    positions.forEach((position, corner) => {
+      const normal = normals[corner] as Vec3;
+      const face = faces[Math.floor(corner / 3)] as Vec3;
+      if (face[1] < -0.999) {
+        expect(normal[1]).toBeCloseTo(-1, 6);
+      } else {
+        expect(dot(normal, face)).toBeGreaterThan(Math.cos((10 * Math.PI) / 180));
+        if (position[1] === apexHeight) expect(normal[1]).toBeLessThan(0.9);
+      }
+    });
+  });
+
+  it('keeps exactly flat normals for polyhedra and when smooth shading is off', async () => {
+    for (const [spec, smoothShading] of [
+      [{ shape: { kind: 'prism', baseSides: 8, heightRatio: 0.25 }, scale: { longestDimensionMm: 80 } }, undefined],
+      [{ shape: { kind: 'pyramid', baseSides: 8, heightRatio: 0.25 }, scale: { longestDimensionMm: 80 } }, undefined],
+      [cylinder, false],
+    ] as const) {
+      const { normals, faces } = await shadedCorners(spec as ModelSpec, smoothShading);
+      normals.forEach((normal, corner) => {
+        expect(dot(normal, faces[Math.floor(corner / 3)] as Vec3)).toBeGreaterThan(1 - 1e-6);
+      });
+    }
   });
 });
