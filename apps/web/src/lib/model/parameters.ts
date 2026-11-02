@@ -1,4 +1,6 @@
 import {
+  BASE_ANGLE_LIMITS,
+  baseAngleSchema,
   defaultModelSpecs,
   type ModelSpec,
   modelSpecSchema,
@@ -11,10 +13,13 @@ import {
 } from '@diploma-3d/schema';
 import { formatDecimal, parseDecimal } from '../decimal.ts';
 
-/** Ratio fields, kept per shape so that switching shapes never carries a value into a different meaning. */
+/** Numeric fields, kept per shape so that switching shapes never carries a value into a different meaning. */
 export type ParameterKey =
   | 'cuboidWidthRatio'
   | 'cuboidHeightRatio'
+  | 'parallelepipedBaseSideRatio'
+  | 'parallelepipedHeightRatio'
+  | 'parallelepipedBaseAngleDeg'
   | 'prismHeightRatio'
   | 'pyramidHeightRatio'
   | 'cylinderHeightRatio'
@@ -42,6 +47,9 @@ export type ModelRequest = {
 export const initialParameterTexts = (): ParameterTexts => ({
   cuboidWidthRatio: formatDecimal(defaultModelSpecs.cuboid.shape.widthRatio),
   cuboidHeightRatio: formatDecimal(defaultModelSpecs.cuboid.shape.heightRatio),
+  parallelepipedBaseSideRatio: formatDecimal(defaultModelSpecs.parallelepiped.shape.baseSideRatio),
+  parallelepipedHeightRatio: formatDecimal(defaultModelSpecs.parallelepiped.shape.heightRatio),
+  parallelepipedBaseAngleDeg: formatDecimal(defaultModelSpecs.parallelepiped.shape.baseAngleDeg),
   prismHeightRatio: formatDecimal(defaultModelSpecs.prism.shape.heightRatio),
   pyramidHeightRatio: formatDecimal(defaultModelSpecs.pyramid.shape.heightRatio),
   cylinderHeightRatio: formatDecimal(defaultModelSpecs.cylinder.shape.heightRatio),
@@ -53,24 +61,49 @@ export const initialParameterChoices = (): ParameterChoices => ({
   pyramidBaseSides: defaultModelSpecs.pyramid.shape.baseSides,
 });
 
-export function validateRatio(text: string): { value: number } | { error: string } {
+type Validation = { value: number } | { error: string };
+
+/** Parses the text and checks it against the schema; the limits, example and unit only phrase the errors. */
+function validateNumber(
+  text: string,
+  schema: { safeParse(value: number): { success: boolean } },
+  limits: { readonly min: number; readonly max: number },
+  example: string,
+  unit = '',
+): Validation {
   if (text.trim() === '') return { error: 'Введіть значення.' };
   const value = parseDecimal(text);
-  if (value === undefined) return { error: 'Введіть число, наприклад 1,5.' };
-  if (!ratioSchema.safeParse(value).success) {
-    return { error: `Допустимі значення — від ${formatDecimal(RATIO_LIMITS.min)} до ${formatDecimal(RATIO_LIMITS.max)}.` };
+  if (value === undefined) return { error: `Введіть число, наприклад ${example}.` };
+  if (!schema.safeParse(value).success) {
+    return { error: `Допустимі значення — від ${formatDecimal(limits.min)}${unit} до ${formatDecimal(limits.max)}${unit}.` };
   }
   return { value };
 }
 
-function validateRatios(
+export const validateRatio = (text: string): Validation => validateNumber(text, ratioSchema, RATIO_LIMITS, '1,5');
+
+export const validateAngle = (text: string): Validation => validateNumber(text, baseAngleSchema, BASE_ANGLE_LIMITS, '60', '°');
+
+const validators: Readonly<Record<ParameterKey, (text: string) => Validation>> = {
+  cuboidWidthRatio: validateRatio,
+  cuboidHeightRatio: validateRatio,
+  parallelepipedBaseSideRatio: validateRatio,
+  parallelepipedHeightRatio: validateRatio,
+  parallelepipedBaseAngleDeg: validateAngle,
+  prismHeightRatio: validateRatio,
+  pyramidHeightRatio: validateRatio,
+  cylinderHeightRatio: validateRatio,
+  coneHeightRatio: validateRatio,
+};
+
+function validateFields(
   keys: readonly ParameterKey[],
   texts: ParameterTexts,
 ): { values: ParameterValues; errors: ParameterErrors } {
   const values: ParameterValues = {};
   const errors: ParameterErrors = {};
   for (const key of keys) {
-    const result = validateRatio(texts[key]);
+    const result = validators[key](texts[key]);
     if ('error' in result) errors[key] = result.error;
     else values[key] = result.value;
   }
@@ -89,20 +122,34 @@ export function resolveModelRequest(kind: ShapeKind, texts: ParameterTexts, choi
     case 'ball':
       return withKey({ shape: { kind }, scale }, {});
     case 'cuboid': {
-      const { values, errors } = validateRatios(['cuboidWidthRatio', 'cuboidHeightRatio'], texts);
+      const { values, errors } = validateFields(['cuboidWidthRatio', 'cuboidHeightRatio'], texts);
       const { cuboidWidthRatio: widthRatio, cuboidHeightRatio: heightRatio } = values;
       if (widthRatio === undefined || heightRatio === undefined)
         return { scale, values, errors, spec: undefined, key: undefined };
       return withKey({ shape: { kind, widthRatio, heightRatio }, scale }, values);
     }
+    case 'parallelepiped': {
+      const { values, errors } = validateFields(
+        ['parallelepipedBaseSideRatio', 'parallelepipedHeightRatio', 'parallelepipedBaseAngleDeg'],
+        texts,
+      );
+      const {
+        parallelepipedBaseSideRatio: baseSideRatio,
+        parallelepipedHeightRatio: heightRatio,
+        parallelepipedBaseAngleDeg: baseAngleDeg,
+      } = values;
+      if (baseSideRatio === undefined || heightRatio === undefined || baseAngleDeg === undefined)
+        return { scale, values, errors, spec: undefined, key: undefined };
+      return withKey({ shape: { kind, baseSideRatio, heightRatio, baseAngleDeg }, scale }, values);
+    }
     case 'prism': {
-      const { values, errors } = validateRatios(['prismHeightRatio'], texts);
+      const { values, errors } = validateFields(['prismHeightRatio'], texts);
       const { prismHeightRatio: heightRatio } = values;
       if (heightRatio === undefined) return { scale, values, errors, spec: undefined, key: undefined };
       return withKey({ shape: { kind, baseSides: choices.prismBaseSides, heightRatio }, scale }, values);
     }
     case 'pyramid': {
-      const { values, errors } = validateRatios(['pyramidHeightRatio'], texts);
+      const { values, errors } = validateFields(['pyramidHeightRatio'], texts);
       const { pyramidHeightRatio: heightRatio } = values;
       if (heightRatio === undefined) return { scale, values, errors, spec: undefined, key: undefined };
       return withKey({ shape: { kind, baseSides: choices.pyramidBaseSides, heightRatio }, scale }, values);
@@ -110,7 +157,7 @@ export function resolveModelRequest(kind: ShapeKind, texts: ParameterTexts, choi
     case 'cylinder':
     case 'cone': {
       const key = kind === 'cylinder' ? 'cylinderHeightRatio' : 'coneHeightRatio';
-      const { values, errors } = validateRatios([key], texts);
+      const { values, errors } = validateFields([key], texts);
       const heightRatio = values[key];
       if (heightRatio === undefined) return { scale, values, errors, spec: undefined, key: undefined };
       return withKey({ shape: { kind, heightRatio }, scale }, values);

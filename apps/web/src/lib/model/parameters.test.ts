@@ -4,6 +4,7 @@ import {
   initialParameterTexts,
   type ParameterTexts,
   resolveModelRequest,
+  validateAngle,
   validateRatio,
 } from './parameters.ts';
 
@@ -36,11 +37,40 @@ describe('validateRatio', () => {
   });
 });
 
+describe('validateAngle', () => {
+  it.each([
+    ['15', 15],
+    ['165', 165],
+    ['60', 60],
+    // Values between the 5° stepping grid are as valid as typed, with a comma or a point.
+    ['62', 62],
+    ['72,5', 72.5],
+    ['72.5', 72.5],
+  ])('accepts %s, including the limits', (text, value) => {
+    expect(validateAngle(text)).toEqual({ value });
+  });
+
+  it.each([
+    ['', 'Введіть значення.'],
+    ['60°', 'Введіть число, наприклад 60.'],
+    ['abc', 'Введіть число, наприклад 60.'],
+    ['14,9', 'Допустимі значення — від 15° до 165°.'],
+    ['165,1', 'Допустимі значення — від 15° до 165°.'],
+    ['180', 'Допустимі значення — від 15° до 165°.'],
+    ['0', 'Допустимі значення — від 15° до 165°.'],
+  ])('reports "%s" without clamping it', (text, error) => {
+    expect(validateAngle(text)).toEqual({ error });
+  });
+});
+
 describe('resolveModelRequest', () => {
   it('starts the cuboid at b/a = 1,5 and c/a = 2 and the prism at three sides and h/a = 2, at 80 mm', () => {
     expect(initialParameterTexts()).toEqual({
       cuboidWidthRatio: '1,5',
       cuboidHeightRatio: '2',
+      parallelepipedBaseSideRatio: '1',
+      parallelepipedHeightRatio: '1',
+      parallelepipedBaseAngleDeg: '60',
       prismHeightRatio: '2',
       pyramidHeightRatio: '1',
       cylinderHeightRatio: '2',
@@ -175,6 +205,58 @@ describe('resolveModelRequest', () => {
     const mixed = texts({ cylinderHeightRatio: '1,1', coneHeightRatio: '' });
     expect(resolveModelRequest('cylinder', mixed, triangle).spec?.shape).toEqual({ kind: 'cylinder', heightRatio: 1.1 });
     expect(resolveModelRequest('cone', mixed, triangle).errors).toEqual({ coneHeightRatio: 'Введіть значення.' });
+  });
+
+  it('starts the parallelepiped with b = a, h = a and α = 60°', () => {
+    expect(resolveModelRequest('parallelepiped', initialParameterTexts(), triangle).spec).toEqual({
+      shape: { kind: 'parallelepiped', baseSideRatio: 1, heightRatio: 1, baseAngleDeg: 60 },
+      scale: { longestDimensionMm: 80 },
+    });
+  });
+
+  it('builds the parallelepiped from its own fields, including typed values off the stepping grids', () => {
+    const request = resolveModelRequest(
+      'parallelepiped',
+      texts({
+        parallelepipedBaseSideRatio: '2.05',
+        parallelepipedHeightRatio: '1,1',
+        parallelepipedBaseAngleDeg: '62',
+        cuboidWidthRatio: 'abc',
+      }),
+      triangle,
+    );
+    expect(request.errors).toEqual({});
+    expect(request.values).toEqual({
+      parallelepipedBaseSideRatio: 2.05,
+      parallelepipedHeightRatio: 1.1,
+      parallelepipedBaseAngleDeg: 62,
+    });
+    expect(request.spec?.shape).toEqual({ kind: 'parallelepiped', baseSideRatio: 2.05, heightRatio: 1.1, baseAngleDeg: 62 });
+  });
+
+  it('reports each invalid parallelepiped field with its own limits and keeps the valid values', () => {
+    const request = resolveModelRequest(
+      'parallelepiped',
+      texts({ parallelepipedBaseSideRatio: '4,5', parallelepipedHeightRatio: '0,5', parallelepipedBaseAngleDeg: '170' }),
+      triangle,
+    );
+    expect(request.spec).toBeUndefined();
+    expect(request.key).toBeUndefined();
+    expect(request.values).toEqual({ parallelepipedHeightRatio: 0.5 });
+    expect(request.errors).toEqual({
+      parallelepipedBaseSideRatio: 'Допустимі значення — від 0,25 до 4.',
+      parallelepipedBaseAngleDeg: 'Допустимі значення — від 15° до 165°.',
+    });
+  });
+
+  it('keeps the parallelepiped apart from the cuboid and gives mirrored angles different keys', () => {
+    const mixed = texts({ cuboidWidthRatio: '', parallelepipedHeightRatio: '2' });
+    expect(resolveModelRequest('parallelepiped', mixed, triangle).spec?.shape).toMatchObject({ heightRatio: 2 });
+    expect(resolveModelRequest('cuboid', mixed, triangle).errors).toEqual({ cuboidWidthRatio: 'Введіть значення.' });
+    const acute = resolveModelRequest('parallelepiped', texts({ parallelepipedBaseAngleDeg: '60' }), triangle);
+    const obtuse = resolveModelRequest('parallelepiped', texts({ parallelepipedBaseAngleDeg: '120' }), triangle);
+    expect(obtuse.key).not.toBe(acute.key);
+    expect(resolveModelRequest('parallelepiped', texts({ parallelepipedBaseAngleDeg: '60,0' }), triangle).key).toBe(acute.key);
   });
 
   it('builds the ball without reading any field', () => {

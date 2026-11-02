@@ -3,12 +3,14 @@ import {
   boxEdgeLengthsMm,
   MAX_CIRCLE_DEVIATION_MM,
   type MeshMeasurements,
+  parallelepipedDimensionsMm,
   pyramidParameters,
   regularBaseDimensionsMm,
   regularPolygonArea,
   roundSolidMeasurements,
 } from '@diploma-3d/engine';
 import {
+  BASE_ANGLE_LIMITS,
   defaultModelSpecs,
   type PhysicalScale,
   PRISM_BASE_SIDES,
@@ -33,9 +35,12 @@ export type MeasurementItem = {
   readonly widest: string;
 };
 
-/** A multiplier field: "label [value] suffix", e.g. "Ширина b [1,5] × a", with a slider over `range`. */
-export type RatioField = {
-  readonly type: 'ratio';
+/**
+ * A numeric field: "label [value] suffix", e.g. "Ширина b [1,5] × a" for a multiplier or "Кут α [60] °" for an angle,
+ * with a slider over `range`.
+ */
+export type NumericField = {
+  readonly type: 'number';
   readonly key: ParameterKey;
   readonly label: string;
   readonly suffix: string;
@@ -50,11 +55,12 @@ export type ChoiceField = {
   readonly options: readonly { readonly value: PrismBaseSides; readonly label: string }[];
 };
 
-export type ParameterField = RatioField | ChoiceField;
+export type ParameterField = NumericField | ChoiceField;
 
 export const shapeOptions: readonly ShapeOption[] = [
   { value: 'cube', label: 'Куб' },
   { value: 'cuboid', label: 'Прямокутний паралелепіпед' },
+  { value: 'parallelepiped', label: 'Паралелепіпед' },
   { value: 'prism', label: 'Правильна призма' },
   { value: 'pyramid', label: 'Правильна піраміда' },
   { value: 'tetrahedron', label: 'Правильний тетраедр' },
@@ -83,6 +89,8 @@ export function shapeDescription(kind: ShapeKind, scale: PhysicalScale): string 
       return `Куб не має окремих параметрів форми: усі ребра рівні, а всі грані — квадрати. Ребро моделі — ${formatLength(scale)}.`;
     case 'cuboid':
       return 'Усі грані — прямокутники, усі кути прямі. Ребро a — довжина, b — ширина, c — висота.';
+    case 'parallelepiped':
+      return 'Основа — паралелограм зі сторонами a і b та кутом α між ними. Бічні ребра перпендикулярні до основи та дорівнюють висоті h.';
     case 'prism':
       return 'Основи — рівні правильні многокутники, бічні ребра перпендикулярні до основ, а бічні грані — прямокутники.';
     case 'pyramid':
@@ -113,6 +121,8 @@ const idealRoundNote =
 
 // Buttons, arrow keys and the slider move ratios to multiples of 0,25; typed values keep any precision.
 const ratioRange: StepRange = { ...RATIO_LIMITS, increment: 0.25 };
+// The base angle moves in whole multiples of 5°.
+const angleRange: StepRange = { ...BASE_ANGLE_LIMITS, increment: 5 };
 
 const baseNames: Readonly<Record<PrismBaseSides, string>> = {
   3: 'Рівносторонній трикутник',
@@ -125,8 +135,13 @@ const baseNames: Readonly<Record<PrismBaseSides, string>> = {
 export const shapeParameters: Readonly<Record<ShapeKind, readonly ParameterField[]>> = {
   cube: [],
   cuboid: [
-    { type: 'ratio', key: 'cuboidWidthRatio', label: 'Ширина b', suffix: '× a', range: ratioRange },
-    { type: 'ratio', key: 'cuboidHeightRatio', label: 'Висота c', suffix: '× a', range: ratioRange },
+    { type: 'number', key: 'cuboidWidthRatio', label: 'Ширина b', suffix: '× a', range: ratioRange },
+    { type: 'number', key: 'cuboidHeightRatio', label: 'Висота c', suffix: '× a', range: ratioRange },
+  ],
+  parallelepiped: [
+    { type: 'number', key: 'parallelepipedBaseSideRatio', label: 'Сторона основи b', suffix: '× a', range: ratioRange },
+    { type: 'number', key: 'parallelepipedHeightRatio', label: 'Висота h', suffix: '× a', range: ratioRange },
+    { type: 'number', key: 'parallelepipedBaseAngleDeg', label: 'Кут α', suffix: '°', range: angleRange },
   ],
   prism: [
     {
@@ -135,7 +150,7 @@ export const shapeParameters: Readonly<Record<ShapeKind, readonly ParameterField
       label: 'Основа',
       options: PRISM_BASE_SIDES.map((sides) => ({ value: sides, label: baseNames[sides] })),
     },
-    { type: 'ratio', key: 'prismHeightRatio', label: 'Висота h', suffix: '× a', range: ratioRange },
+    { type: 'number', key: 'prismHeightRatio', label: 'Висота h', suffix: '× a', range: ratioRange },
   ],
   pyramid: [
     {
@@ -144,13 +159,13 @@ export const shapeParameters: Readonly<Record<ShapeKind, readonly ParameterField
       label: 'Основа',
       options: PYRAMID_BASE_SIDES.map((sides) => ({ value: sides, label: baseNames[sides] })),
     },
-    { type: 'ratio', key: 'pyramidHeightRatio', label: 'Висота h', suffix: '× a', range: ratioRange },
+    { type: 'number', key: 'pyramidHeightRatio', label: 'Висота h', suffix: '× a', range: ratioRange },
   ],
   // Fixed proportions: nothing to adjust.
   tetrahedron: [],
   ball: [],
-  cylinder: [{ type: 'ratio', key: 'cylinderHeightRatio', label: 'Висота h', suffix: '× r', range: ratioRange }],
-  cone: [{ type: 'ratio', key: 'coneHeightRatio', label: 'Висота h', suffix: '× r', range: ratioRange }],
+  cylinder: [{ type: 'number', key: 'cylinderHeightRatio', label: 'Висота h', suffix: '× r', range: ratioRange }],
+  cone: [{ type: 'number', key: 'coneHeightRatio', label: 'Висота h', suffix: '× r', range: ratioRange }],
 };
 
 export function parameterHint(kind: ShapeKind, scale: PhysicalScale): string | undefined {
@@ -163,6 +178,12 @@ export function parameterHint(kind: ShapeKind, scale: PhysicalScale): string | u
       return (
         'Множники задають ширину b і висоту c відносно довжини a. ' +
         `Найбільший вимір моделі завжди дорівнює ${formatLength(scale)}, тому зміна пропорцій може змінити всі фізичні розміри.`
+      );
+    case 'parallelepiped':
+      return (
+        'Множники задають сторону b і висоту h відносно сторони a; α — кут між сторонами a і b, у градусах. ' +
+        `Найбільший габаритний вимір моделі (ширина, глибина чи висота, а не ребро) завжди ${formatLength(scale)}, ` +
+        'тому зміна будь-якого параметра може змінити всі розміри.'
       );
     case 'prism':
       return (
@@ -195,9 +216,9 @@ export function measurementItems(
   shape: Shape | undefined,
   measurements: MeshMeasurements | undefined,
 ): MeasurementItem[] {
-  // Every solid here fits in its bounding box with longest side L: its edges are at most L, a face at most L², the
-  // surface area at most 6L² and the volume at most L³ (convex solids inside a cube). Formatting these bounds with one
-  // decimal gives the widest text any value can take.
+  // Every solid here fits in its bounding box with longest side L: an axis-aligned edge is at most L, a face at most L²,
+  // the surface area at most 6L² and the volume at most L³ (convex solids inside a cube). Formatting these bounds with
+  // one decimal gives the widest text any value can take.
   const length = scale.longestDimensionMm;
   const edge = (value: number | undefined) => ({ value: formatQuantity(value, 'мм'), widest: widestQuantity(length, 'мм') });
   const area = { value: formatQuantity(measurements?.surfaceArea, 'мм²'), widest: widestQuantity(6 * length ** 2, 'мм²') };
@@ -217,6 +238,27 @@ export function measurementItems(
         { label: 'Довжина a', ...edge(edges?.[0]) },
         { label: 'Ширина b', ...edge(edges?.[1]) },
         { label: 'Висота c', ...edge(edges?.[2]) },
+        { label: 'Площа поверхні', ...area },
+        { label: 'Об’єм', ...volume },
+      ];
+    }
+    case 'parallelepiped': {
+      const dimensions = shape?.kind === 'parallelepiped' ? parallelepipedDimensionsMm(shape, scale) : undefined;
+      // The slanted side b lies in a base face of at most L × L, so it is at most its diagonal √2·L: for b/a = 4 and
+      // α ≈ 55° it is about 1,22·L.
+      const slantedSide = {
+        value: formatQuantity(dimensions?.baseSideB, 'мм'),
+        widest: widestQuantity(Math.SQRT2 * length, 'мм'),
+      };
+      return [
+        { label: 'Сторона основи a', ...edge(dimensions?.baseSideA) },
+        { label: 'Сторона основи b', ...slantedSide },
+        { label: 'Висота h', ...edge(dimensions?.height) },
+        {
+          label: 'Площа основи',
+          value: formatQuantity(dimensions?.baseArea, 'мм²'),
+          widest: widestQuantity(length ** 2, 'мм²'),
+        },
         { label: 'Площа поверхні', ...area },
         { label: 'Об’єм', ...volume },
       ];

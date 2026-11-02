@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  BASE_ANGLE_LIMITS,
   DEFAULT_LONGEST_DIMENSION_MM,
   defaultModelSpecs,
   MAX_LONGEST_DIMENSION_MM,
@@ -14,6 +15,10 @@ const scale = { longestDimensionMm: 80 };
 const cubeWithLongestDimension = (longestDimensionMm: unknown) => ({ shape: { kind: 'cube' }, scale: { longestDimensionMm } });
 const cuboid = (widthRatio: unknown, heightRatio: unknown) => ({ shape: { kind: 'cuboid', widthRatio, heightRatio }, scale });
 const prism = (baseSides: unknown, heightRatio: unknown) => ({ shape: { kind: 'prism', baseSides, heightRatio }, scale });
+const parallelepiped = (baseSideRatio: unknown, heightRatio: unknown, baseAngleDeg: unknown) => ({
+  shape: { kind: 'parallelepiped', baseSideRatio, heightRatio, baseAngleDeg },
+  scale,
+});
 const pyramid = (baseSides: unknown, heightRatio: unknown) => ({ shape: { kind: 'pyramid', baseSides, heightRatio }, scale });
 
 const invalidNumbers: readonly (readonly [string, unknown])[] = [
@@ -97,6 +102,60 @@ describe('cuboid proportions', () => {
   it('rejects absolute dimensions instead of proportions', () => {
     const result = modelSpecSchema.safeParse({ shape: { kind: 'cuboid', widthRatio: 1, heightRatio: 1, a: 40 }, scale });
     expect(result.success).toBe(false);
+  });
+});
+
+describe('right parallelepiped parameters', () => {
+  const { min, max } = RATIO_LIMITS;
+  const outOfRange = (low: number, high: number) => [
+    ...invalidNumbers,
+    ['just below the minimum', low - 1e-9] as const,
+    ['just above the maximum', high + 1e-9] as const,
+  ];
+
+  it('defaults to a rhombus base with α = 60° and h = a, and limits α to [15°, 165°]', () => {
+    expect(modelSpecSchema.parse(defaultModelSpecs.parallelepiped)).toEqual({
+      shape: { kind: 'parallelepiped', baseSideRatio: 1, heightRatio: 1, baseAngleDeg: 60 },
+      scale,
+    });
+    expect(BASE_ANGLE_LIMITS).toEqual({ min: 15, max: 165 });
+  });
+
+  it.each([
+    [min, min, BASE_ANGLE_LIMITS.min],
+    [max, max, BASE_ANGLE_LIMITS.max],
+    [min, max, 90],
+    // Values off the 0,25 and 5° interaction grids are as valid as typed.
+    [2.05, 1.1, 62],
+    [1, 1, 72.5],
+  ])('accepts b/a = %s, h/a = %s and α = %s°, including the boundaries', (baseSideRatio, heightRatio, baseAngleDeg) => {
+    expect(modelSpecSchema.parse(parallelepiped(baseSideRatio, heightRatio, baseAngleDeg)).shape).toEqual({
+      kind: 'parallelepiped',
+      baseSideRatio,
+      heightRatio,
+      baseAngleDeg,
+    });
+  });
+
+  it.each(outOfRange(min, max))('rejects a ratio that is %s, without clamping', (_, ratio) => {
+    expect(modelSpecSchema.safeParse(parallelepiped(ratio, 1, 60)).success).toBe(false);
+    expect(modelSpecSchema.safeParse(parallelepiped(1, ratio, 60)).success).toBe(false);
+  });
+
+  it.each([
+    ...outOfRange(BASE_ANGLE_LIMITS.min, BASE_ANGLE_LIMITS.max),
+    ['a flat angle', 180] as const,
+    ['a reflex angle', 270] as const,
+    ['in radians', Math.PI / 3] as const,
+  ])('rejects a base angle that is %s', (_, angle) => {
+    expect(modelSpecSchema.safeParse(parallelepiped(1, 1, angle)).success).toBe(false);
+  });
+
+  it('rejects fields of other shapes, a lateral-edge offset and absolute dimensions', () => {
+    for (const extra of [{ widthRatio: 1 }, { baseSides: 4 }, { topOffset: [0.5, 0] }, { a: 40 }]) {
+      const shape = { kind: 'parallelepiped', baseSideRatio: 1, heightRatio: 1, baseAngleDeg: 60, ...extra };
+      expect(modelSpecSchema.safeParse({ shape, scale }).success).toBe(false);
+    }
   });
 });
 

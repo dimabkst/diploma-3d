@@ -38,10 +38,16 @@ const TRIANGLES: GLTF.MeshPrimitiveMode = 4;
 const SURFACE_COLOR = [0.2, 0.27, 0.4, 1] as const;
 const EDGE_COLOR = [0.9, 0.92, 0.95, 1] as const;
 
-// Edges between faces meeting at a smaller angle are tessellation edges of one face or of a curved surface. Smooth
-// shading blends exactly these faces, so outlined edges such as a cylinder's rims stay sharp.
+// On a smoothly shaded solid, edges between faces meeting at a smaller angle are tessellation edges of a curved surface.
+// Smooth shading blends exactly these faces, so outlined edges such as a cylinder's rims stay sharp.
 const FEATURE_EDGE_MIN_ANGLE_DEG = 30;
 const FEATURE_EDGE_MIN_COSINE = Math.cos((FEATURE_EDGE_MIN_ANGLE_DEG * Math.PI) / 180);
+
+// A polyhedron's faces are planar, so every edge between non-coplanar triangles is a real edge, however flat: the lateral
+// faces of a parallelepiped with α = 165° meet at 15°, those of a low octagonal pyramid at about 9°. Only the rounding
+// noise between triangles of one face, far below this angle, is excluded.
+const POLYHEDRON_EDGE_MIN_ANGLE_DEG = 1;
+const POLYHEDRON_EDGE_MIN_COSINE = Math.cos((POLYHEDRON_EDGE_MIN_ANGLE_DEG * Math.PI) / 180);
 
 // Lines exactly on the surface z-fight with it; running them this fraction of the bounding-box diagonal outside the
 // adjacent faces keeps them visible without visibly detaching them from the solid.
@@ -80,7 +86,8 @@ export async function createPreviewGlb(objects: readonly PreviewObject[]): Promi
 
   for (const object of objects) {
     assertValidSolidMesh(object.mesh);
-    const { positions, normals } = shadedTriangles(object.mesh, object.smoothShading ?? false);
+    const smooth = object.smoothShading ?? false;
+    const { positions, normals } = shadedTriangles(object.mesh, smooth);
     const surface = document
       .createPrimitive()
       .setMode(TRIANGLES)
@@ -89,7 +96,7 @@ export async function createPreviewGlb(objects: readonly PreviewObject[]): Promi
       .setMaterial(surfaceMaterial);
     const mesh = document.createMesh(object.name).addPrimitive(surface);
 
-    const edgePositions = featureEdgeSegments(object.mesh);
+    const edgePositions = featureEdgeSegments(object.mesh, smooth ? FEATURE_EDGE_MIN_COSINE : POLYHEDRON_EDGE_MIN_COSINE);
     if (edgePositions.length > 0) {
       mesh.addPrimitive(
         document
@@ -160,7 +167,7 @@ function shadedTriangles(
  * Feature edges, lifted off the surface. Each vertex gets one offset shared by all its edges, so that the lines stay
  * connected at corners; offsetting every edge along its own normal bisector would leave gaps there.
  */
-function featureEdgeSegments(mesh: TriangleMesh): Float32Array<ArrayBuffer> {
+function featureEdgeSegments(mesh: TriangleMesh, minCosine: number): Float32Array<ArrayBuffer> {
   const firstTriangleOfEdge = new Map<string, number>();
   const edges: [number, number][] = [];
   const adjacentNormals = new Map<number, Vec3[]>();
@@ -174,7 +181,7 @@ function featureEdgeSegments(mesh: TriangleMesh): Float32Array<ArrayBuffer> {
       const neighbour = firstTriangleOfEdge.get(key);
       if (neighbour === undefined) {
         firstTriangleOfEdge.set(key, triangle);
-      } else if (dot(unitNormal(mesh, triangle), unitNormal(mesh, neighbour)) < FEATURE_EDGE_MIN_COSINE) {
+      } else if (dot(unitNormal(mesh, triangle), unitNormal(mesh, neighbour)) < minCosine) {
         edges.push([from, to]);
         for (const vertex of [from, to]) {
           const normals = adjacentNormals.get(vertex) ?? [];

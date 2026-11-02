@@ -2,7 +2,8 @@ import { type PyramidShape, TETRAHEDRON_HEIGHT_RATIO, type TetrahedronShape } fr
 import type { Manifold } from 'manifold-3d';
 import type { GeometryKernel } from '../kernel.ts';
 import type { Track } from '../scope.ts';
-import { baseContours, type RegularBaseParameters, regularBaseProportions } from './regular-base.ts';
+import { baseContours } from './polygon.ts';
+import { type RegularBaseParameters, regularBaseProportions } from './regular-base.ts';
 
 /** The regular tetrahedron is the regular triangular pyramid whose lateral edges equal the base edge. */
 export function pyramidParameters(shape: PyramidShape | TetrahedronShape): RegularBaseParameters {

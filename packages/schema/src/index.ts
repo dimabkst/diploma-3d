@@ -2,6 +2,12 @@ export { type BallShape, ballShapeSchema } from './ball.ts';
 export { type CubeShape, cubeShapeSchema } from './cube.ts';
 export { type CuboidShape, cuboidShapeSchema } from './cuboid.ts';
 export { defaultModelSpecs, type ModelSpec, modelSpecSchema, type Shape, type ShapeKind, shapeSchema } from './model.ts';
+export {
+  BASE_ANGLE_LIMITS,
+  baseAngleSchema,
+  type ParallelepipedShape,
+  parallelepipedShapeSchema,
+} from './parallelepiped.ts';
 export { PRISM_BASE_SIDES, type PrismBaseSides, type PrismShape, prismShapeSchema } from './prism.ts';
 export { PYRAMID_BASE_SIDES, type PyramidBaseSides, type PyramidShape, pyramidShapeSchema } from './pyramid.ts';
 export { RATIO_LIMITS, ratioSchema } from './ratio.ts';

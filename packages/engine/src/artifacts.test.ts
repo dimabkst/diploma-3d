@@ -28,6 +28,7 @@ describe('buildModelArtifacts', () => {
   it.each([
     ['cube', 'cube.3mf'],
     ['cuboid', 'cuboid.3mf'],
+    ['parallelepiped', 'parallelepiped.3mf'],
     ['prism', 'prism-3-sided.3mf'],
     ['pyramid', 'pyramid-4-sided.3mf'],
     ['tetrahedron', 'tetrahedron.3mf'],
@@ -101,6 +102,57 @@ describe('buildModelArtifacts', () => {
         sixfoldVolume += dot(a, cross(b, c));
       }
       expect(sixfoldVolume / 6).toBeCloseTo(0.04 * 0.06 * 0.08, 9);
+    });
+  });
+
+  describe('for a parallelepiped with b/a = 2, h/a = 0,5 and α = 120°', () => {
+    // The base is 1 + |2·cos 120°| = 2 wide and 2·sin 120° = √3 deep in units of a, so a = 40 mm, b = 80 mm, h = 20 mm
+    // and the base, with area a·b·sin 120° = 1600√3 mm², spans x ∈ [−40, 40] and y ∈ [−20√3, 20√3].
+    const spec: ModelSpec = {
+      shape: { kind: 'parallelepiped', baseSideRatio: 2, heightRatio: 0.5, baseAngleDeg: 120 },
+      scale: { longestDimensionMm: 80 },
+    };
+    const baseArea = 1600 * Math.sqrt(3);
+    const halfDepth = 20 * Math.sqrt(3);
+
+    it('exports parallelepiped.3mf as one closed object in millimetres with the analytic bounds, volume and area', async () => {
+      const { printFile } = await buildModelArtifacts(kernel, spec);
+      const { model } = readThreeMf(printFile.bytes);
+      expect(printFile.fileName).toBe('parallelepiped.3mf');
+      expect(model.unit).toBe('millimeter');
+      expect(model.objects.map(({ name, type }) => ({ name, type }))).toEqual([{ name: 'parallelepiped', type: 'model' }]);
+      const mesh = model.objects[0]?.mesh;
+      if (mesh === undefined) throw new Error('No exported mesh');
+      expect(findMeshDefects(mesh)).toEqual([]);
+      const { bounds, volume, surfaceArea } = measureMesh(mesh);
+      [-40, -halfDepth, 0].forEach((value, axis) => {
+        expect(bounds.min[axis]).toBeCloseTo(value, 4);
+      });
+      [40, halfDepth, 20].forEach((value, axis) => {
+        expect(bounds.max[axis]).toBeCloseTo(value, 4);
+      });
+      expect(bounds.min[2]).toBe(0);
+      expect(volume / (baseArea * 20)).toBeCloseTo(1, 6);
+      expect(surfaceArea / (2 * baseArea + 2 * (40 + 80) * 20)).toBeCloseTo(1, 6);
+    });
+
+    it('previews the height in glTF Y and the base depth in glTF Z, in metres', async () => {
+      const { previewGlb } = await buildModelArtifacts(kernel, spec);
+      const positions = await previewSurfacePositions(previewGlb);
+      const points = Array.from(
+        { length: positions.getCount() },
+        (_, index) => positions.getElement(index, []) as unknown as Vec3,
+      );
+      const extent = (axis: 0 | 1 | 2) => [Math.min(...points.map((p) => p[axis])), Math.max(...points.map((p) => p[axis]))];
+      [
+        [-0.04, 0.04],
+        [0, 0.02],
+        [-halfDepth / 1000, halfDepth / 1000],
+      ].forEach(([min, max], axis) => {
+        const [actualMin, actualMax] = extent(axis as 0 | 1 | 2);
+        expect(actualMin).toBeCloseTo(min as number, METRE_DIGITS);
+        expect(actualMax).toBeCloseTo(max as number, METRE_DIGITS);
+      });
     });
   });
 
@@ -286,6 +338,13 @@ describe('buildModelArtifacts', () => {
   it.each([
     ['cube', { shape: { kind: 'cube' }, scale: { longestDimensionMm: -1 } }],
     ['cuboid', { shape: { kind: 'cuboid', widthRatio: 5, heightRatio: 2 }, scale: { longestDimensionMm: 80 } }],
+    [
+      'parallelepiped',
+      {
+        shape: { kind: 'parallelepiped', baseSideRatio: 1, heightRatio: 1, baseAngleDeg: 170 },
+        scale: { longestDimensionMm: 80 },
+      },
+    ],
     ['prism', { shape: { kind: 'prism', baseSides: 9, heightRatio: 2 }, scale: { longestDimensionMm: 80 } }],
     ['pyramid', { shape: { kind: 'pyramid', baseSides: 9, heightRatio: 1 }, scale: { longestDimensionMm: 80 } }],
     ['tetrahedron', { shape: { kind: 'tetrahedron', heightRatio: 1 }, scale: { longestDimensionMm: 80 } }],

@@ -1,11 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { regularPolygonArea, regularPolygonVertices, type Vec2 } from './regular-polygon.ts';
-
-const signedArea = (vertices: readonly Vec2[]) =>
-  vertices.reduce((sum, [x, y], index) => {
-    const [nextX, nextY] = vertices[(index + 1) % vertices.length] as Vec2;
-    return sum + (x * nextY - nextX * y) / 2;
-  }, 0);
+import { signedPolygonArea, type Vec2 } from './polygon.ts';
+import { regularPolygonArea, regularPolygonVertices } from './regular-polygon.ts';
 
 const SIDE_COUNTS = [3, 4, 5, 6, 7, 8, 12];
 
@@ -18,7 +13,7 @@ describe('regularPolygonVertices', () => {
       const [nextX, nextY] = vertices[(index + 1) % sides] as Vec2;
       expect(Math.hypot(nextX - x, nextY - y)).toBeCloseTo(edge, 12);
     });
-    expect(signedArea(vertices)).toBeGreaterThan(0);
+    expect(signedPolygonArea(vertices)).toBeGreaterThan(0);
     const centroid = vertices.reduce(([sx, sy], [x, y]) => [sx + x / sides, sy + y / sides], [0, 0]);
     expect(centroid[0]).toBeCloseTo(0, 12);
     expect(centroid[1]).toBeCloseTo(0, 12);
@@ -98,6 +93,6 @@ describe('regularPolygonArea', () => {
   });
 
   it.each(SIDE_COUNTS)('matches the shoelace area of the constructed %s-gon', (sides) => {
-    expect(regularPolygonArea(sides, 1.75)).toBeCloseTo(signedArea(regularPolygonVertices(sides, 1.75)), 12);
+    expect(regularPolygonArea(sides, 1.75)).toBeCloseTo(signedPolygonArea(regularPolygonVertices(sides, 1.75)), 12);
   });
 });

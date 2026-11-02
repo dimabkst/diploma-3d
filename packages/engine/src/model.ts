@@ -6,6 +6,7 @@ import { assertValidSolidMesh, type MeshMeasurements, measureMesh, meshFromManif
 import { type Track, withScope } from './scope.ts';
 import { buildBall } from './shapes/ball.ts';
 import { buildUnitBox } from './shapes/box.ts';
+import { buildParallelepiped } from './shapes/parallelepiped.ts';
 import { buildUnitPrism } from './shapes/prism.ts';
 import { buildUnitPyramid, pyramidParameters } from './shapes/pyramid.ts';
 import { buildRoundSolid } from './shapes/round.ts';
@@ -55,13 +56,18 @@ export function modelName(shape: Shape): string {
   return shape.kind === 'prism' || shape.kind === 'pyramid' ? `${shape.kind}-${shape.baseSides}-sided` : shape.kind;
 }
 
-/** The solid in millimetres: polyhedra are built in model units and scaled once; curved solids are built at size. */
+/**
+ * The solid in millimetres: most polyhedra are built in model units and scaled once; the parallelepiped is scaled from
+ * its unnormalised construction in one step, and curved solids are built at size.
+ */
 function buildShape(kernel: GeometryKernel, track: Track, shape: Shape, scale: PhysicalScale): Manifold {
   const toMillimetres = (unitSolid: Manifold) => track(unitSolid.scale(scale.longestDimensionMm));
   switch (shape.kind) {
     case 'cube':
     case 'cuboid':
       return toMillimetres(buildUnitBox(kernel, track, shape));
+    case 'parallelepiped':
+      return buildParallelepiped(kernel, track, shape, scale);
     case 'prism':
       return toMillimetres(buildUnitPrism(kernel, track, shape));
     case 'pyramid':

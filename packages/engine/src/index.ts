@@ -21,6 +21,14 @@ export {
   ballSegments,
 } from './shapes/ball.ts';
 export { type BoxShape, boxEdgeLengthsMm, boxProportions } from './shapes/box.ts';
+export {
+  type ParallelepipedDimensions,
+  type ParallelepipedProportions,
+  parallelepipedDimensionsMm,
+  parallelepipedProportions,
+} from './shapes/parallelepiped.ts';
+export { cosSinDeg, parallelogramArea, parallelogramVertices } from './shapes/parallelogram.ts';
+export { baseContours, polygonSize, signedPolygonArea, type Vec2 } from './shapes/polygon.ts';
 export { pyramidParameters } from './shapes/pyramid.ts';
 export {
   type RegularBaseParameters,
@@ -28,7 +36,7 @@ export {
   regularBaseDimensionsMm,
   regularBaseProportions,
 } from './shapes/regular-base.ts';
-export { regularPolygonArea, regularPolygonVertices, type Vec2 } from './shapes/regular-polygon.ts';
+export { regularPolygonArea, regularPolygonVertices } from './shapes/regular-polygon.ts';
 export {
   CIRCULAR_SEGMENTS,
   circularSegments,

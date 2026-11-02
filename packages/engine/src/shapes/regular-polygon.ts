@@ -1,4 +1,4 @@
-export type Vec2 = readonly [number, number];
+import type { Vec2 } from './polygon.ts';
 
 function assertPolygon(sides: number, edge: number): void {
   if (!Number.isInteger(sides) || sides < 3) throw new RangeError(`A regular polygon needs at least 3 sides, not ${sides}.`);

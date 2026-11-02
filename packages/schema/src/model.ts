@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { ballShapeSchema } from './ball.ts';
 import { cubeShapeSchema } from './cube.ts';
 import { cuboidShapeSchema } from './cuboid.ts';
+import { parallelepipedShapeSchema } from './parallelepiped.ts';
 import { prismShapeSchema } from './prism.ts';
 import { pyramidShapeSchema } from './pyramid.ts';
 import { coneShapeSchema, cylinderShapeSchema } from './round.ts';
@@ -11,6 +12,7 @@ import { tetrahedronShapeSchema } from './tetrahedron.ts';
 export const shapeSchema = z.discriminatedUnion('kind', [
   cubeShapeSchema,
   cuboidShapeSchema,
+  parallelepipedShapeSchema,
   prismShapeSchema,
   pyramidShapeSchema,
   tetrahedronShapeSchema,
@@ -34,6 +36,10 @@ const defaultScale = { longestDimensionMm: DEFAULT_LONGEST_DIMENSION_MM } as con
 export const defaultModelSpecs = {
   cube: { shape: { kind: 'cube' }, scale: defaultScale },
   cuboid: { shape: { kind: 'cuboid', widthRatio: 1.5, heightRatio: 2 }, scale: defaultScale },
+  parallelepiped: {
+    shape: { kind: 'parallelepiped', baseSideRatio: 1, heightRatio: 1, baseAngleDeg: 60 },
+    scale: defaultScale,
+  },
   prism: { shape: { kind: 'prism', baseSides: 3, heightRatio: 2 }, scale: defaultScale },
   pyramid: { shape: { kind: 'pyramid', baseSides: 4, heightRatio: 1 }, scale: defaultScale },
   tetrahedron: { shape: { kind: 'tetrahedron' }, scale: defaultScale },

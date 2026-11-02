@@ -1,5 +1,6 @@
 import type { PhysicalScale } from '@diploma-3d/schema';
-import { regularPolygonVertices, type Vec2 } from './regular-polygon.ts';
+import { polygonSize, type Vec2 } from './polygon.ts';
+import { regularPolygonVertices } from './regular-polygon.ts';
 
 /** A solid over a regular base, such as a regular prism or pyramid: the number of base sides and h/a. */
 export interface RegularBaseParameters {
@@ -24,9 +25,7 @@ export interface RegularBaseProportions {
  */
 export function regularBaseProportions({ baseSides, heightRatio }: RegularBaseParameters): RegularBaseProportions {
   const base = regularPolygonVertices(baseSides);
-  const extent = (axis: 0 | 1) =>
-    Math.max(...base.map((vertex) => vertex[axis])) - Math.min(...base.map((vertex) => vertex[axis]));
-  const scale = 1 / Math.max(extent(0), extent(1), heightRatio);
+  const scale = 1 / Math.max(...polygonSize(base), heightRatio);
   return {
     base: base.map(([x, y]): Vec2 => [x * scale, y * scale]),
     edge: scale,
@@ -42,6 +41,3 @@ export function regularBaseDimensionsMm(
   const { edge, height } = regularBaseProportions(parameters);
   return { edge: edge * scale.longestDimensionMm, height: height * scale.longestDimensionMm };
 }
-
-/** The base as the contour list that manifold-3d's extrusion expects. */
-export const baseContours = (base: readonly Vec2[]): [number, number][][] => [base.map(([x, y]): [number, number] => [x, y])];

@@ -248,10 +248,22 @@ describe('createPreviewGlb shading', () => {
     expect(edgeSegments).toBe(0);
   });
 
+  it.each([
+    // Lateral faces meeting at 15° along the edges at the obtuse base angles, and at 165° at the acute ones.
+    ['a parallelepiped with α = 165°', { kind: 'parallelepiped', baseSideRatio: 1, heightRatio: 1, baseAngleDeg: 165 }, 12],
+    ['a parallelepiped with α = 15°', { kind: 'parallelepiped', baseSideRatio: 4, heightRatio: 0.25, baseAngleDeg: 15 }, 12],
+    // Adjacent lateral faces meet at about 9°: 8 base edges and 8 lateral edges.
+    ['a low octagonal pyramid', { kind: 'pyramid', baseSides: 8, heightRatio: 0.25 }, 16],
+  ])('outlines every edge of %s, also between faces meeting at a small angle, but no face diagonal', async (_, shape, count) => {
+    const { edgeSegments } = await shadedCorners({ shape, scale: { longestDimensionMm: 80 } } as ModelSpec);
+    expect(edgeSegments).toBe(count);
+  });
+
   it('keeps exactly flat normals for polyhedra and when smooth shading is off', async () => {
     for (const [spec, smoothShading] of [
       [{ shape: { kind: 'prism', baseSides: 8, heightRatio: 0.25 }, scale: { longestDimensionMm: 80 } }, undefined],
       [{ shape: { kind: 'pyramid', baseSides: 8, heightRatio: 0.25 }, scale: { longestDimensionMm: 80 } }, undefined],
+      [defaultModelSpecs.parallelepiped, undefined],
       [cylinder, false],
     ] as const) {
       const { normals, faces } = await shadedCorners(spec as ModelSpec, smoothShading);
