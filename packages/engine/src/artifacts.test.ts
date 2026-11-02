@@ -29,6 +29,8 @@ describe('buildModelArtifacts', () => {
     ['cube', 'cube.3mf'],
     ['cuboid', 'cuboid.3mf'],
     ['prism', 'prism-3-sided.3mf'],
+    ['pyramid', 'pyramid-4-sided.3mf'],
+    ['tetrahedron', 'tetrahedron.3mf'],
   ] as const)('derives the %s preview and print file %s from the same geometry', async (kind, fileName) => {
     const { model, previewGlb, printFile } = await buildModelArtifacts(kernel, defaultModelSpecs[kind]);
     expect(printFile.fileName).toBe(fileName);
@@ -99,6 +101,48 @@ describe('buildModelArtifacts', () => {
     });
   });
 
+  describe('for a hexagonal pyramid with h/a = 2', () => {
+    // The hexagon is two edges wide and h = 2a, so a = 40 mm and h = 80 mm.
+    const spec: ModelSpec = { shape: { kind: 'pyramid', baseSides: 6, heightRatio: 2 }, scale: { longestDimensionMm: 80 } };
+    const a = 40;
+    const h = 80;
+    const baseArea = ((3 * Math.sqrt(3)) / 2) * a ** 2;
+    const apothem = (Math.sqrt(3) / 2) * a;
+
+    it('exports pyramid-6-sided.3mf in millimetres with the analytic volume and surface area', async () => {
+      const { printFile } = await buildModelArtifacts(kernel, spec);
+      const { model } = readThreeMf(printFile.bytes);
+      expect(printFile.fileName).toBe('pyramid-6-sided.3mf');
+      expect(model.unit).toBe('millimeter');
+      expect(model.objects.map(({ name }) => name)).toEqual(['pyramid-6-sided']);
+      const mesh = model.objects[0]?.mesh;
+      if (mesh === undefined) throw new Error('No exported mesh');
+      expect(findMeshDefects(mesh)).toEqual([]);
+      const measurements = measureMesh(mesh);
+      expect(measurements.bounds.min[2]).toBe(0);
+      [2 * a, Math.sqrt(3) * a, h].forEach((size, axis) => {
+        expect(measurements.size[axis]).toBeCloseTo(size, 4);
+      });
+      expect(measurements.volume / ((baseArea * h) / 3)).toBeCloseTo(1, 6);
+      expect(measurements.surfaceArea / (baseArea + 3 * a * Math.hypot(h, apothem))).toBeCloseTo(1, 6);
+    });
+
+    it('previews the apex on the glTF up axis above the base centre', async () => {
+      const { previewGlb } = await buildModelArtifacts(kernel, spec);
+      const positions = await previewSurfacePositions(previewGlb);
+      const points = Array.from(
+        { length: positions.getCount() },
+        (_, index) => positions.getElement(index, []) as unknown as Vec3,
+      );
+      const top = Math.max(...points.map((point) => point[1]));
+      expect(top).toBeCloseTo(h / 1000, METRE_DIGITS);
+      for (const point of points.filter((candidate) => candidate[1] > 1e-6)) {
+        expect(point[0]).toBeCloseTo(0, METRE_DIGITS);
+        expect(point[2]).toBeCloseTo(0, METRE_DIGITS);
+      }
+    });
+  });
+
   describe('for a hexagonal prism with h/a = 0,5', () => {
     // The hexagon is two edges wide, so a = 80 / 2 = 40 mm, h = 20 mm and the base is 40√3 mm deep.
     const spec: ModelSpec = { shape: { kind: 'prism', baseSides: 6, heightRatio: 0.5 }, scale: { longestDimensionMm: 80 } };
@@ -156,6 +200,8 @@ describe('buildModelArtifacts', () => {
     ['cube', { shape: { kind: 'cube' }, scale: { longestDimensionMm: -1 } }],
     ['cuboid', { shape: { kind: 'cuboid', widthRatio: 5, heightRatio: 2 }, scale: { longestDimensionMm: 80 } }],
     ['prism', { shape: { kind: 'prism', baseSides: 9, heightRatio: 2 }, scale: { longestDimensionMm: 80 } }],
+    ['pyramid', { shape: { kind: 'pyramid', baseSides: 9, heightRatio: 1 }, scale: { longestDimensionMm: 80 } }],
+    ['tetrahedron', { shape: { kind: 'tetrahedron', heightRatio: 1 }, scale: { longestDimensionMm: 80 } }],
   ] as const)('produces no %s artifacts for invalid input', async (_, invalid) => {
     await expect(buildModelArtifacts(kernel, invalid as unknown as ModelSpec)).rejects.toBeInstanceOf(InvalidModelSpecError);
   });

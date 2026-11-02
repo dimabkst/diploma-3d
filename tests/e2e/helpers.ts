@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { expect, type Page } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
 import { EDGE_LIFT_RELATIVE } from '../../packages/engine/src/export/glb.ts';
 import { readThreeMf } from '../../packages/engine/src/export/three-mf.test-helper.ts';
 import { findMeshDefects, type MeshMeasurements, measureMesh } from '../../packages/engine/src/mesh.ts';
@@ -65,3 +65,15 @@ export function expectSizesClose(actual: readonly number[], expected: readonly n
     expect(Math.abs(value - (expected[index] as number))).toBeLessThan(toleranceMm);
   });
 }
+
+/** The value shown in the measurement row with exactly this label. */
+export const measurementValue = (page: Page, label: string) =>
+  page
+    .getByRole('term')
+    .filter({ hasText: new RegExp(`^${label}$`) })
+    .locator('xpath=following-sibling::dd');
+
+export type Box = { x: number; y: number; width: number; height: number };
+
+export const boxesOf = async (locator: Locator): Promise<Box[]> =>
+  Promise.all((await locator.all()).map(async (item) => (await item.boundingBox()) as Box));

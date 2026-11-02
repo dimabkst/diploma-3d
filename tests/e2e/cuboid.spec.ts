@@ -1,5 +1,7 @@
-import { expect, type Locator, type Page, test } from '@playwright/test';
+import { expect, type Page, test } from '@playwright/test';
 import {
+  type Box,
+  boxesOf,
   collectErrors,
   downloadButton,
   downloadThreeMf,
@@ -327,11 +329,6 @@ test('cuboid: switching back to the cube restores equal edges and keeps the cubo
 
   expect(errors).toEqual([]);
 });
-
-type Box = { x: number; y: number; width: number; height: number };
-
-const boxesOf = async (locator: Locator): Promise<Box[]> =>
-  Promise.all((await locator.all()).map(async (item) => (await item.boundingBox()) as Box));
 
 for (const [layout, width, stacked] of [
   ['desktop', 1440, false],

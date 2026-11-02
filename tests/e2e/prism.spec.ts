@@ -1,11 +1,14 @@
-import { expect, type Locator, type Page, test } from '@playwright/test';
+import { expect, type Page, test } from '@playwright/test';
 import {
+  type Box,
+  boxesOf,
   collectErrors,
   downloadButton,
   downloadThreeMf,
   expectPreviewOf,
   expectSizesClose,
   expectViewerBox,
+  measurementValue,
   previewViewport,
   shapeSelect,
 } from './helpers.ts';
@@ -63,12 +66,6 @@ async function expectDownloadedPrism(page: Page, sides: BaseSides, ratio: number
   expect(Math.abs(measurements.surfaceArea / expected.surfaceArea - 1)).toBeLessThan(1e-6);
 }
 
-const measurement = (page: Page, label: string) =>
-  page
-    .getByRole('term')
-    .filter({ hasText: new RegExp(`^${label}$`) })
-    .locator('xpath=following-sibling::dd');
-
 test('prism: base and height drive the preview and the downloaded 3MF', async ({ page }) => {
   const errors = collectErrors(page);
   await page.goto('/');
@@ -79,10 +76,10 @@ test('prism: base and height drive the preview and the downloaded 3MF', async ({
   await expect(heightRatio(page)).toHaveValue('2');
   await expectPreviewOf(page, summary(3, 2));
   await expect(page.getByRole('term')).toHaveText(['Сторона основи a', 'Висота h', 'Площа основи', 'Площа поверхні', 'Об’єм']);
-  await expect(measurement(page, 'Сторона основи a')).toHaveText('40 мм');
-  await expect(measurement(page, 'Висота h')).toHaveText('80 мм');
+  await expect(measurementValue(page, 'Сторона основи a')).toHaveText('40 мм');
+  await expect(measurementValue(page, 'Висота h')).toHaveText('80 мм');
   // √3/4 · 40² ≈ 692,8 mm².
-  await expect(measurement(page, 'Площа основи')).toHaveText('692,8 мм²');
+  await expect(measurementValue(page, 'Площа основи')).toHaveText('692,8 мм²');
   await expectDownloadedPrism(page, 3, 2);
 
   // The hexagon is two edges wide: with h = 2a both are 80 mm, so a = 40 mm.
@@ -91,7 +88,7 @@ test('prism: base and height drive the preview and the downloaded 3MF', async ({
   await expectPreviewOf(page, summary(6, 2));
   await heightRatio(page).fill('0,5');
   await expectPreviewOf(page, summary(6, 0.5));
-  await expect(measurement(page, 'Висота h')).toHaveText('20 мм');
+  await expect(measurementValue(page, 'Висота h')).toHaveText('20 мм');
   await expectDownloadedPrism(page, 6, 0.5);
 
   // The height ratio is kept when the base changes; a square base with h = 0,5a is an 80 × 80 × 40 mm box.
@@ -118,7 +115,7 @@ test('prism: base and height drive the preview and the downloaded 3MF', async ({
   await chooseBase(page, 8);
   await expect(heightRatio(page)).toHaveValue('1.1');
   await expectPreviewOf(page, summary(8, 1.1));
-  await expect(measurement(page, 'Сторона основи a')).toHaveText(`${sizeFormat.format(80 / (1 + Math.SQRT2))} мм`);
+  await expect(measurementValue(page, 'Сторона основи a')).toHaveText(`${sizeFormat.format(80 / (1 + Math.SQRT2))} мм`);
   await expectDownloadedPrism(page, 8, 1.1);
 
   expect(errors).toEqual([]);
@@ -196,7 +193,7 @@ test('prism: an invalid height is explained, blocks the download and survives ba
   await expect(heightRatio(page)).toHaveValue('4');
   await expect(stepButton(page, 'збільшити')).toBeDisabled();
   await expectPreviewOf(page, summary(6, 4));
-  await expect(measurement(page, 'Сторона основи a')).toHaveText('20 мм');
+  await expect(measurementValue(page, 'Сторона основи a')).toHaveText('20 мм');
 
   expect(errors).toEqual([]);
 });
@@ -217,11 +214,6 @@ test('prism: switching shapes keeps the prism base and height and the cuboid rat
   await expect(heightRatio(page)).toHaveValue('1,5');
   await expectPreviewOf(page, summary(6, 1.5));
 });
-
-type Box = { x: number; y: number; width: number; height: number };
-
-const boxesOf = async (locator: Locator): Promise<Box[]> =>
-  Promise.all((await locator.all()).map(async (item) => (await item.boundingBox()) as Box));
 
 for (const [layout, width] of [
   ['desktop', 1440],

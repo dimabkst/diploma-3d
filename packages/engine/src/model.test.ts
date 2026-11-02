@@ -217,11 +217,13 @@ describe('releases Manifold objects', () => {
 
   const isDeleted = (manifold: Manifold) => (manifold as unknown as { isDeleted(): boolean }).isDeleted();
 
-  // Boxes: cube, translate onto the build plate, scale to millimetres. Prisms: extrude, scale to millimetres.
+  // Boxes: cube, translate onto the build plate, scale to millimetres. Prisms and pyramids: extrude, scale.
   const kinds = [
     ['cube', 3],
     ['cuboid', 3],
     ['prism', 2],
+    ['pyramid', 2],
+    ['tetrahedron', 2],
   ] as const;
 
   it.each(kinds)('after successful generation of a %s', (kind, objects) => {

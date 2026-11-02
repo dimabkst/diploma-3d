@@ -5,13 +5,16 @@ import {
   MAX_LONGEST_DIMENSION_MM,
   modelSpecSchema,
   PRISM_BASE_SIDES,
+  PYRAMID_BASE_SIDES,
   RATIO_LIMITS,
+  TETRAHEDRON_HEIGHT_RATIO,
 } from './index.ts';
 
 const scale = { longestDimensionMm: 80 };
 const cubeWithLongestDimension = (longestDimensionMm: unknown) => ({ shape: { kind: 'cube' }, scale: { longestDimensionMm } });
 const cuboid = (widthRatio: unknown, heightRatio: unknown) => ({ shape: { kind: 'cuboid', widthRatio, heightRatio }, scale });
 const prism = (baseSides: unknown, heightRatio: unknown) => ({ shape: { kind: 'prism', baseSides, heightRatio }, scale });
+const pyramid = (baseSides: unknown, heightRatio: unknown) => ({ shape: { kind: 'pyramid', baseSides, heightRatio }, scale });
 
 const invalidNumbers: readonly (readonly [string, unknown])[] = [
   ['zero', 0],
@@ -138,5 +141,62 @@ describe('regular prism parameters', () => {
     expect(modelSpecSchema.safeParse({ shape: { kind: 'prism', baseSides: 3, heightRatio: 2, a: 40 }, scale }).success).toBe(
       false,
     );
+  });
+});
+
+describe('regular pyramid parameters', () => {
+  const { min, max } = RATIO_LIMITS;
+
+  it('defaults to a square base with h = a and supports triangular to hexagonal and octagonal bases', () => {
+    expect(PYRAMID_BASE_SIDES).toEqual([3, 4, 5, 6, 8]);
+    expect(modelSpecSchema.parse(defaultModelSpecs.pyramid)).toEqual({
+      shape: { kind: 'pyramid', baseSides: 4, heightRatio: 1 },
+      scale,
+    });
+  });
+
+  it.each(PYRAMID_BASE_SIDES.flatMap((baseSides) => [min, 1.1, max].map((heightRatio) => [baseSides, heightRatio] as const)))(
+    'accepts %s base sides with h/a = %s, including the ratio boundaries',
+    (baseSides, heightRatio) => {
+      expect(modelSpecSchema.parse(pyramid(baseSides, heightRatio)).shape).toEqual({ kind: 'pyramid', baseSides, heightRatio });
+    },
+  );
+
+  it.each([
+    ['too few sides', 2],
+    ['a side count that is not offered', 7],
+    ['too many sides', 9],
+    ['a non-integer side count', 4.5],
+    ['a numeric string', '4'],
+    ['missing', undefined],
+  ])('rejects a base with %s', (_, baseSides) => {
+    expect(modelSpecSchema.safeParse(pyramid(baseSides, 1)).success).toBe(false);
+  });
+
+  it.each([...invalidNumbers, ['just below the minimum', min - 1e-9] as const, ['just above the maximum', max + 1e-9] as const])(
+    'rejects a height ratio that is %s, without clamping',
+    (_, ratio) => {
+      expect(modelSpecSchema.safeParse(pyramid(4, ratio)).success).toBe(false);
+    },
+  );
+
+  it('rejects an apex offset or other extra fields', () => {
+    const shape = { kind: 'pyramid', baseSides: 4, heightRatio: 1, apexOffset: [0.1, 0] };
+    expect(modelSpecSchema.safeParse({ shape, scale }).success).toBe(false);
+  });
+});
+
+describe('regular tetrahedron', () => {
+  it('has no independent parameters', () => {
+    expect(modelSpecSchema.parse(defaultModelSpecs.tetrahedron)).toEqual({ shape: { kind: 'tetrahedron' }, scale });
+    for (const extra of [{ baseSides: 3 }, { heightRatio: 1 }, { edge: 40 }]) {
+      expect(modelSpecSchema.safeParse({ shape: { kind: 'tetrahedron', ...extra }, scale }).success).toBe(false);
+    }
+  });
+
+  it('keeps h/a = √(2/3) at full precision, off the 0,25 interaction grid', () => {
+    expect(TETRAHEDRON_HEIGHT_RATIO).toBe(Math.sqrt(2 / 3));
+    expect(TETRAHEDRON_HEIGHT_RATIO ** 2).toBeCloseTo(2 / 3, 15);
+    expect(Number.isInteger(TETRAHEDRON_HEIGHT_RATIO * 4)).toBe(false);
   });
 });

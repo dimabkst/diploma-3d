@@ -14,5 +14,11 @@ export {
 } from './mesh.ts';
 export { type GeneratedModel, generateModel, modelName, type Solid } from './model.ts';
 export { type BoxShape, boxEdgeLengthsMm, boxProportions } from './shapes/box.ts';
-export { type PrismProportions, prismDimensionsMm, prismProportions } from './shapes/prism.ts';
+export { pyramidParameters } from './shapes/pyramid.ts';
+export {
+  type RegularBaseParameters,
+  type RegularBaseProportions,
+  regularBaseDimensionsMm,
+  regularBaseProportions,
+} from './shapes/regular-base.ts';
 export { regularPolygonArea, regularPolygonVertices, type Vec2 } from './shapes/regular-polygon.ts';

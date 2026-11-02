@@ -6,6 +6,7 @@ import { assertValidSolidMesh, type MeshMeasurements, measureMesh, meshFromManif
 import { type Track, withScope } from './scope.ts';
 import { buildUnitBox } from './shapes/box.ts';
 import { buildUnitPrism } from './shapes/prism.ts';
+import { buildUnitPyramid, pyramidParameters } from './shapes/pyramid.ts';
 
 export interface Solid {
   /** ASCII identifier, also used as the object name in exported files. */
@@ -45,9 +46,9 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpec): Generat
   return { kind: spec.shape.kind, name, spec, solids: [{ name, mesh, measurements: measureMesh(mesh) }] };
 }
 
-/** The shape kind, with the number of base sides for prisms, e.g. "prism-6-sided". */
+/** The shape kind, with the number of base sides for prisms and pyramids, e.g. "prism-6-sided". */
 export function modelName(shape: Shape): string {
-  return shape.kind === 'prism' ? `prism-${shape.baseSides}-sided` : shape.kind;
+  return shape.kind === 'prism' || shape.kind === 'pyramid' ? `${shape.kind}-${shape.baseSides}-sided` : shape.kind;
 }
 
 function buildUnitShape(kernel: GeometryKernel, track: Track, shape: Shape): Manifold {
@@ -57,5 +58,8 @@ function buildUnitShape(kernel: GeometryKernel, track: Track, shape: Shape): Man
       return buildUnitBox(kernel, track, shape);
     case 'prism':
       return buildUnitPrism(kernel, track, shape);
+    case 'pyramid':
+    case 'tetrahedron':
+      return buildUnitPyramid(kernel, track, pyramidParameters(shape));
   }
 }

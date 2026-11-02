@@ -1,9 +1,16 @@
-import { boxEdgeLengthsMm, type MeshMeasurements, prismDimensionsMm, regularPolygonArea } from '@diploma-3d/engine';
+import {
+  boxEdgeLengthsMm,
+  type MeshMeasurements,
+  pyramidParameters,
+  regularBaseDimensionsMm,
+  regularPolygonArea,
+} from '@diploma-3d/engine';
 import {
   defaultModelSpecs,
   type PhysicalScale,
   PRISM_BASE_SIDES,
   type PrismBaseSides,
+  PYRAMID_BASE_SIDES,
   RATIO_LIMITS,
   type Shape,
   type ShapeKind,
@@ -44,8 +51,6 @@ export type ChoiceField = {
 export type ParameterField = RatioField | ChoiceField;
 
 const plannedShapes = [
-  { value: 'pyramid', label: 'Піраміда' },
-  { value: 'tetrahedron', label: 'Тетраедр' },
   { value: 'sphere', label: 'Сфера' },
   { value: 'cylinder', label: 'Циліндр' },
   { value: 'cone', label: 'Конус' },
@@ -55,6 +60,8 @@ export const shapeOptions: readonly ShapeOption[] = [
   { value: 'cube', label: 'Куб', available: true },
   { value: 'cuboid', label: 'Прямокутний паралелепіпед', available: true },
   { value: 'prism', label: 'Правильна призма', available: true },
+  { value: 'pyramid', label: 'Правильна піраміда', available: true },
+  { value: 'tetrahedron', label: 'Правильний тетраедр', available: true },
   ...plannedShapes.map((shape) => ({ ...shape, available: false })),
 ];
 
@@ -80,6 +87,15 @@ export function shapeDescription(kind: ShapeKind, scale: PhysicalScale): string 
       return 'Усі грані — прямокутники, усі кути прямі. Ребро a — довжина, b — ширина, c — висота.';
     case 'prism':
       return 'Основи — рівні правильні многокутники, бічні ребра перпендикулярні до основ, а бічні грані — прямокутники.';
+    case 'pyramid':
+      return 'Основа — правильний многокутник, вершина лежить точно над її центром, а бічні грані — рівні рівнобедрені трикутники.';
+    case 'tetrahedron': {
+      const { edge } = regularBaseDimensionsMm(pyramidParameters({ kind }), scale);
+      return (
+        'Усі шість ребер рівні, а всі чотири грані — рівносторонні трикутники; висота h = a·√(2/3) ≈ 0,816a. ' +
+        `Ребро моделі — ${formatDecimal(edge)} мм.`
+      );
+    }
   }
 }
 
@@ -109,11 +125,23 @@ export const shapeParameters: Readonly<Record<ShapeKind, readonly ParameterField
     },
     { type: 'ratio', key: 'prismHeightRatio', label: 'Висота h', suffix: '× a', range: ratioRange },
   ],
+  pyramid: [
+    {
+      type: 'choice',
+      key: 'pyramidBaseSides',
+      label: 'Основа',
+      options: PYRAMID_BASE_SIDES.map((sides) => ({ value: sides, label: baseNames[sides] })),
+    },
+    { type: 'ratio', key: 'pyramidHeightRatio', label: 'Висота h', suffix: '× a', range: ratioRange },
+  ],
+  // Fixed proportions: nothing to adjust.
+  tetrahedron: [],
 };
 
 export function parameterHint(kind: ShapeKind, scale: PhysicalScale): string | undefined {
   switch (kind) {
     case 'cube':
+    case 'tetrahedron':
       return undefined;
     case 'cuboid':
       return (
@@ -123,6 +151,11 @@ export function parameterHint(kind: ShapeKind, scale: PhysicalScale): string | u
     case 'prism':
       return (
         'a — сторона основи, h — висота призми, перпендикулярна до основи. ' +
+        `Найбільший габаритний вимір завжди ${formatLength(scale)}, тому зміна основи чи висоти може змінити всі розміри.`
+      );
+    case 'pyramid':
+      return (
+        'a — сторона основи, h — висота піраміди: перпендикуляр з вершини до центра основи. ' +
         `Найбільший габаритний вимір завжди ${formatLength(scale)}, тому зміна основи чи висоти може змінити всі розміри.`
       );
   }
@@ -165,12 +198,22 @@ export function measurementItems(
         { label: 'Об’єм', ...volume },
       ];
     }
-    case 'prism': {
-      const dimensions = shape?.kind === 'prism' ? prismDimensionsMm(shape, scale) : undefined;
+    case 'prism':
+    case 'pyramid':
+    case 'tetrahedron': {
+      const parameters =
+        shape?.kind === 'prism'
+          ? shape
+          : shape?.kind === 'pyramid' || shape?.kind === 'tetrahedron'
+            ? pyramidParameters(shape)
+            : undefined;
+      const dimensions = parameters === undefined ? undefined : regularBaseDimensionsMm(parameters, scale);
       const baseArea =
-        shape?.kind === 'prism' && dimensions !== undefined ? regularPolygonArea(shape.baseSides, dimensions.edge) : undefined;
+        parameters === undefined || dimensions === undefined
+          ? undefined
+          : regularPolygonArea(parameters.baseSides, dimensions.edge);
       return [
-        { label: 'Сторона основи a', ...edge(dimensions?.edge) },
+        { label: kind === 'tetrahedron' ? 'Ребро a' : 'Сторона основи a', ...edge(dimensions?.edge) },
         { label: 'Висота h', ...edge(dimensions?.height) },
         { label: 'Площа основи', value: formatQuantity(baseArea, 'мм²'), widest: widestQuantity(length ** 2, 'мм²') },
         { label: 'Площа поверхні', ...area },

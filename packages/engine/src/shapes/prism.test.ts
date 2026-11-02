@@ -4,7 +4,7 @@ import { InvalidModelSpecError } from '../errors.ts';
 import { type GeometryKernel, loadGeometryKernel } from '../kernel.ts';
 import { findMeshDefects, type TriangleMesh, triangleAreaVector, triangleCount, type Vec3, vertexAt } from '../mesh.ts';
 import { generateModel } from '../model.ts';
-import { prismDimensionsMm } from './prism.ts';
+import { regularBaseDimensionsMm } from './regular-base.ts';
 
 let kernel: GeometryKernel;
 
@@ -79,7 +79,10 @@ describe('generateModel for a regular prism', () => {
     expect(model.kind).toBe('prism');
     expect(model.name).toBe('prism-3-sided');
     expect(model.solids.map((solid) => solid.name)).toEqual(['prism-3-sided']);
-    expect(prismDimensionsMm(defaultModelSpecs.prism.shape, defaultModelSpecs.prism.scale)).toEqual({ edge: 40, height: 80 });
+    expect(regularBaseDimensionsMm(defaultModelSpecs.prism.shape, defaultModelSpecs.prism.scale)).toEqual({
+      edge: 40,
+      height: 80,
+    });
     const { size, bounds } = model.solids[0]?.measurements ?? {};
     expectRelativelyClose(size?.[0], 40);
     expectRelativelyClose(size?.[1], 20 * Math.sqrt(3));
@@ -96,7 +99,7 @@ describe('generateModel for a regular prism', () => {
     const { mesh, measurements } = onlySolid(spec);
     const a = expectedEdge(sides, heightRatio);
     const h = heightRatio * a;
-    const dimensions = prismDimensionsMm(spec.shape as PrismShape, spec.scale);
+    const dimensions = regularBaseDimensionsMm(spec.shape as PrismShape, spec.scale);
     expectRelativelyClose(dimensions.edge, a);
     expectRelativelyClose(dimensions.height, h);
 
@@ -147,7 +150,7 @@ describe('generateModel for a regular prism', () => {
     [8, 4, 20, 80],
   ] as const)('with %s sides and h/a = %s has a = %s mm and h = %s mm', (sides, heightRatio, a, h) => {
     const spec = prism(sides, heightRatio);
-    const dimensions = prismDimensionsMm(spec.shape as PrismShape, spec.scale);
+    const dimensions = regularBaseDimensionsMm(spec.shape as PrismShape, spec.scale);
     expectRelativelyClose(dimensions.edge, a);
     expectRelativelyClose(dimensions.height, h);
     expectRelativelyClose(onlySolid(spec).measurements.size[2], h);

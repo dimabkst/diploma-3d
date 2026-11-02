@@ -38,8 +38,13 @@ describe('validateRatio', () => {
 
 describe('resolveModelRequest', () => {
   it('starts the cuboid at b/a = 1,5 and c/a = 2 and the prism at three sides and h/a = 2, at 80 mm', () => {
-    expect(initialParameterTexts()).toEqual({ cuboidWidthRatio: '1,5', cuboidHeightRatio: '2', prismHeightRatio: '2' });
-    expect(initialParameterChoices()).toEqual({ prismBaseSides: 3 });
+    expect(initialParameterTexts()).toEqual({
+      cuboidWidthRatio: '1,5',
+      cuboidHeightRatio: '2',
+      prismHeightRatio: '2',
+      pyramidHeightRatio: '1',
+    });
+    expect(initialParameterChoices()).toEqual({ prismBaseSides: 3, pyramidBaseSides: 4 });
     expect(resolveModelRequest('cuboid', initialParameterTexts(), triangle).spec).toEqual({
       shape: { kind: 'cuboid', widthRatio: 1.5, heightRatio: 2 },
       scale: { longestDimensionMm: 80 },
@@ -53,7 +58,7 @@ describe('resolveModelRequest', () => {
   it('ignores parameter fields for the cube', () => {
     const request = resolveModelRequest(
       'cube',
-      { cuboidWidthRatio: '', cuboidHeightRatio: 'abc', prismHeightRatio: '-' },
+      { cuboidWidthRatio: '', cuboidHeightRatio: 'abc', prismHeightRatio: '-', pyramidHeightRatio: '9' },
       triangle,
     );
     expect(request.spec).toEqual({ shape: { kind: 'cube' }, scale: { longestDimensionMm: 80 } });
@@ -102,7 +107,7 @@ describe('resolveModelRequest', () => {
   });
 
   it.each([3, 4, 5, 6, 8] as const)('builds a prism with %s base sides and keeps h/a when the base changes', (prismBaseSides) => {
-    const request = resolveModelRequest('prism', texts({ prismHeightRatio: '0,75' }), { prismBaseSides });
+    const request = resolveModelRequest('prism', texts({ prismHeightRatio: '0,75' }), { ...triangle, prismBaseSides });
     expect(request.spec?.shape).toEqual({ kind: 'prism', baseSides: prismBaseSides, heightRatio: 0.75 });
     expect(request.values).toEqual({ prismHeightRatio: 0.75 });
   });
@@ -115,7 +120,34 @@ describe('resolveModelRequest', () => {
     expect(other.key).not.toBe(comma.key);
     expect(resolveModelRequest('cube', initialParameterTexts(), triangle).key).not.toBe(comma.key);
     // The same h/a with another base is another model.
-    const square = resolveModelRequest('prism', initialParameterTexts(), { prismBaseSides: 4 });
+    const square = resolveModelRequest('prism', initialParameterTexts(), { ...triangle, prismBaseSides: 4 });
     expect(square.key).not.toBe(resolveModelRequest('prism', initialParameterTexts(), triangle).key);
+  });
+
+  it('starts the pyramid with a square base and h = a, and keeps h/a when its base changes', () => {
+    expect(resolveModelRequest('pyramid', initialParameterTexts(), triangle).spec?.shape).toEqual({
+      kind: 'pyramid',
+      baseSides: 4,
+      heightRatio: 1,
+    });
+    for (const pyramidBaseSides of [3, 4, 5, 6, 8] as const) {
+      const request = resolveModelRequest('pyramid', texts({ pyramidHeightRatio: '1,1' }), { ...triangle, pyramidBaseSides });
+      expect(request.spec?.shape).toEqual({ kind: 'pyramid', baseSides: pyramidBaseSides, heightRatio: 1.1 });
+    }
+  });
+
+  it('keeps the pyramid and prism parameters apart', () => {
+    const mixed = texts({ prismHeightRatio: '3', pyramidHeightRatio: '' });
+    expect(resolveModelRequest('prism', mixed, triangle).spec?.shape).toEqual({ kind: 'prism', baseSides: 3, heightRatio: 3 });
+    const pyramid = resolveModelRequest('pyramid', mixed, triangle);
+    expect(pyramid.spec).toBeUndefined();
+    expect(pyramid.errors).toEqual({ pyramidHeightRatio: 'Введіть значення.' });
+  });
+
+  it('builds the tetrahedron without reading any field', () => {
+    const empty = { cuboidWidthRatio: '', cuboidHeightRatio: '', prismHeightRatio: '', pyramidHeightRatio: '' };
+    const request = resolveModelRequest('tetrahedron', empty, triangle);
+    expect(request.spec).toEqual({ shape: { kind: 'tetrahedron' }, scale: { longestDimensionMm: 80 } });
+    expect(request.errors).toEqual({});
   });
 });

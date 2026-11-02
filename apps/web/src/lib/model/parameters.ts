@@ -4,6 +4,7 @@ import {
   modelSpecSchema,
   type PhysicalScale,
   type PrismBaseSides,
+  type PyramidBaseSides,
   RATIO_LIMITS,
   ratioSchema,
   type ShapeKind,
@@ -11,13 +12,13 @@ import {
 import { formatDecimal, parseDecimal } from '../decimal.ts';
 
 /** Ratio fields, kept per shape so that switching shapes never carries a value into a different meaning. */
-export type ParameterKey = 'cuboidWidthRatio' | 'cuboidHeightRatio' | 'prismHeightRatio';
+export type ParameterKey = 'cuboidWidthRatio' | 'cuboidHeightRatio' | 'prismHeightRatio' | 'pyramidHeightRatio';
 
 /** Raw field text, kept separately from parsed values so that empty and partially typed input stays editable. */
 export type ParameterTexts = Record<ParameterKey, string>;
 
 /** Parameters picked from fixed options. */
-export type ParameterChoices = { prismBaseSides: PrismBaseSides };
+export type ParameterChoices = { prismBaseSides: PrismBaseSides; pyramidBaseSides: PyramidBaseSides };
 
 export type ChoiceKey = keyof ParameterChoices;
 
@@ -36,10 +37,12 @@ export const initialParameterTexts = (): ParameterTexts => ({
   cuboidWidthRatio: formatDecimal(defaultModelSpecs.cuboid.shape.widthRatio),
   cuboidHeightRatio: formatDecimal(defaultModelSpecs.cuboid.shape.heightRatio),
   prismHeightRatio: formatDecimal(defaultModelSpecs.prism.shape.heightRatio),
+  pyramidHeightRatio: formatDecimal(defaultModelSpecs.pyramid.shape.heightRatio),
 });
 
 export const initialParameterChoices = (): ParameterChoices => ({
   prismBaseSides: defaultModelSpecs.prism.shape.baseSides,
+  pyramidBaseSides: defaultModelSpecs.pyramid.shape.baseSides,
 });
 
 export function validateRatio(text: string): { value: number } | { error: string } {
@@ -74,6 +77,7 @@ export function resolveModelRequest(kind: ShapeKind, texts: ParameterTexts, choi
   const { scale } = defaultModelSpecs[kind];
   switch (kind) {
     case 'cube':
+    case 'tetrahedron':
       return withKey({ shape: { kind }, scale }, {});
     case 'cuboid': {
       const { values, errors } = validateRatios(['cuboidWidthRatio', 'cuboidHeightRatio'], texts);
@@ -87,6 +91,12 @@ export function resolveModelRequest(kind: ShapeKind, texts: ParameterTexts, choi
       const { prismHeightRatio: heightRatio } = values;
       if (heightRatio === undefined) return { scale, values, errors, spec: undefined, key: undefined };
       return withKey({ shape: { kind, baseSides: choices.prismBaseSides, heightRatio }, scale }, values);
+    }
+    case 'pyramid': {
+      const { values, errors } = validateRatios(['pyramidHeightRatio'], texts);
+      const { pyramidHeightRatio: heightRatio } = values;
+      if (heightRatio === undefined) return { scale, values, errors, spec: undefined, key: undefined };
+      return withKey({ shape: { kind, baseSides: choices.pyramidBaseSides, heightRatio }, scale }, values);
     }
   }
 }
