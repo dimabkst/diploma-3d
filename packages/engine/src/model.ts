@@ -15,7 +15,7 @@ import { buildBall } from './shapes/ball.ts';
 import { buildUnitBox } from './shapes/box.ts';
 import { buildParallelepiped } from './shapes/parallelepiped.ts';
 import { buildPrismShape } from './shapes/prism.ts';
-import { buildUnitPyramid, pyramidParameters } from './shapes/pyramid.ts';
+import { buildPyramidShape } from './shapes/pyramid.ts';
 import { buildRoundSolid } from './shapes/round.ts';
 
 export interface Solid {
@@ -63,13 +63,15 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
  * type otherwise, e.g. "prism-triangle" or "prism-trapezoid".
  */
 export function modelName(shape: Shape): string {
-  if (shape.kind === 'prism' && shape.baseType !== 'regular') return `prism-${shape.baseType}`;
+  if ((shape.kind === 'prism' || shape.kind === 'pyramid') && shape.baseType !== 'regular') {
+    return `${shape.kind}-${shape.baseType}`;
+  }
   return shape.kind === 'prism' || shape.kind === 'pyramid' ? `${shape.kind}-${shape.baseSides}-sided` : shape.kind;
 }
 
 /**
- * The solid in millimetres: boxes and pyramids are built in model units and scaled once; prisms, right or oblique, are
- * scaled once after their complete unnormalised construction, and curved solids are built at size.
+ * The solid in millimetres: boxes are built in model units and scaled once; prisms and pyramids are scaled once after
+ * their complete unnormalised construction, including a displaced upper base or apex; curved solids are built at size.
  */
 function buildShape(kernel: GeometryKernel, track: Track, shape: Shape, scale: PhysicalScale): Manifold {
   const toMillimetres = (unitSolid: Manifold) => track(unitSolid.scale(scale.longestDimensionMm));
@@ -83,7 +85,7 @@ function buildShape(kernel: GeometryKernel, track: Track, shape: Shape, scale: P
       return buildPrismShape(kernel, track, shape, scale);
     case 'pyramid':
     case 'tetrahedron':
-      return toMillimetres(buildUnitPyramid(kernel, track, pyramidParameters(shape)));
+      return buildPyramidShape(kernel, track, shape, scale);
     case 'cylinder':
     case 'cone':
       return buildRoundSolid(kernel, track, shape, scale);

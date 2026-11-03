@@ -232,6 +232,25 @@ describe('releases Manifold objects', () => {
       scale: { longestDimensionMm: 80 },
     },
   } as const satisfies Record<string, ModelSpecInput>;
+  const pyramids = {
+    triangle: {
+      shape: { kind: 'pyramid', baseType: 'triangle', baseSideRatio: 2, baseAngleDeg: 120, heightRatio: 1 },
+      scale: { longestDimensionMm: 80 },
+    },
+    displaced: {
+      shape: {
+        kind: 'pyramid',
+        baseType: 'trapezoid',
+        parallelSideRatio: 0.5,
+        baseHeightRatio: 0.5,
+        baseShiftRatio: 0.25,
+        heightRatio: 1,
+        apexXRatio: 2,
+        apexYRatio: -1,
+      },
+      scale: { longestDimensionMm: 80 },
+    },
+  } as const satisfies Record<string, ModelSpecInput>;
   const trapezoid = {
     right: {
       shape: {
@@ -288,6 +307,8 @@ describe('releases Manifold objects', () => {
     ['triangle prism', triangle.right, 2],
     ['oblique triangle prism', triangle.oblique, 3],
     ['trapezoid prism', trapezoid.right, 2],
+    ['triangle pyramid', pyramids.triangle, 2],
+    ['pyramid with a displaced apex', pyramids.displaced, 3],
     ['oblique trapezoid prism', trapezoid.oblique, 3],
     ['pyramid', defaultModelSpecs.pyramid, 2],
     ['tetrahedron', defaultModelSpecs.tetrahedron, 2],
@@ -325,12 +346,15 @@ describe('releases Manifold objects', () => {
     expect(created.every(isDeleted)).toBe(true);
   });
 
-  it('when the shear of an oblique prism throws', () => {
+  it.each([
+    ['an oblique prism', oblique.prism],
+    ['a pyramid with a displaced apex', pyramids.displaced],
+  ])('when the shear of %s throws', (_, spec) => {
     const { created, prototype } = trackCreatedManifolds();
     vi.spyOn(prototype, 'transform').mockImplementation(() => {
       throw new Error('out of memory');
     });
-    expect(() => generateModel(kernel, oblique.prism)).toThrow('out of memory');
+    expect(() => generateModel(kernel, spec)).toThrow('out of memory');
     expect(created).toHaveLength(1);
     expect(created.every(isDeleted)).toBe(true);
   });

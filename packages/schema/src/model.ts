@@ -48,7 +48,10 @@ export const defaultModelSpecs = {
     shape: { kind: 'prism', baseType: 'regular', baseSides: 3, heightRatio: 2, offsetXRatio: 0, offsetYRatio: 0 },
     scale: defaultScale,
   },
-  pyramid: { shape: { kind: 'pyramid', baseSides: 4, heightRatio: 1 }, scale: defaultScale },
+  pyramid: {
+    shape: { kind: 'pyramid', baseType: 'regular', baseSides: 4, heightRatio: 1, apexXRatio: 0, apexYRatio: 0 },
+    scale: defaultScale,
+  },
   tetrahedron: { shape: { kind: 'tetrahedron' }, scale: defaultScale },
   cylinder: { shape: { kind: 'cylinder', heightRatio: 2 }, scale: defaultScale },
   cone: { shape: { kind: 'cone', heightRatio: 2 }, scale: defaultScale },

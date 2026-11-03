@@ -21,6 +21,7 @@ export {
   ballRadiusMm,
   ballSegments,
 } from './shapes/ball.ts';
+export { type BaseShape, type BaseSides, baseSidesMm, baseVertices } from './shapes/base.ts';
 export { type BoxShape, boxEdgeLengthsMm, boxProportions } from './shapes/box.ts';
 export {
   type ParallelepipedDimensions,
@@ -48,7 +49,20 @@ export {
   prismDimensionsMm,
   prismScaleMm,
 } from './shapes/prism-geometry.ts';
-export { pyramidParameters } from './shapes/pyramid.ts';
+export {
+  buildPyramidShape,
+  type PyramidShapeDimensions,
+  pyramidShapeDimensionsMm,
+  pyramidShapeProportions,
+} from './shapes/pyramid.ts';
+export {
+  isApexCentred,
+  type PyramidDimensions,
+  type PyramidProportions,
+  pyramidBoundingSize,
+  pyramidDimensionsMm,
+  pyramidScaleMm,
+} from './shapes/pyramid-geometry.ts';
 export {
   type RegularBaseParameters,
   type RegularBaseProportions,
@@ -65,6 +79,7 @@ export {
   roundDimensionsMm,
   roundSolidMeasurements,
 } from './shapes/round.ts';
+export { shearMatrix } from './shapes/shear.ts';
 export {
   type TrapezoidKind,
   trapezoidArea,

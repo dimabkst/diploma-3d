@@ -1,4 +1,12 @@
+export { APEX_LIMITS, apexRatioSchema } from './apex.ts';
 export { type BallShape, ballShapeSchema } from './ball.ts';
+export {
+  BASE_SHIFT_LIMITS,
+  baseShiftSchema,
+  DEFAULT_PARALLELOGRAM_BASE,
+  DEFAULT_TRAPEZOID_BASE,
+  DEFAULT_TRIANGLE_BASE,
+} from './base.ts';
 export { BASE_ANGLE_LIMITS, baseAngleSchema } from './base-angle.ts';
 export { type CubeShape, cubeShapeSchema } from './cube.ts';
 export { type CuboidShape, cuboidShapeSchema } from './cuboid.ts';
@@ -14,10 +22,6 @@ export {
 export { OFFSET_LIMITS, offsetRatioSchema } from './offset.ts';
 export { type ParallelepipedShape, parallelepipedShapeSchema } from './parallelepiped.ts';
 export {
-  BASE_SHIFT_LIMITS,
-  baseShiftSchema,
-  DEFAULT_TRAPEZOID_BASE,
-  DEFAULT_TRIANGLE_BASE,
   PRISM_BASE_SIDES,
   PRISM_BASE_TYPES,
   type PrismBaseSides,
@@ -31,7 +35,15 @@ export {
   trapezoidPrismShapeSchema,
   trianglePrismShapeSchema,
 } from './prism.ts';
-export { PYRAMID_BASE_SIDES, type PyramidBaseSides, type PyramidShape, pyramidShapeSchema } from './pyramid.ts';
+export {
+  PYRAMID_BASE_SIDES,
+  PYRAMID_BASE_TYPES,
+  type PyramidBaseSides,
+  type PyramidBaseType,
+  type PyramidShape,
+  pyramidShapeSchema,
+  type RegularPyramidShape,
+} from './pyramid.ts';
 export { RATIO_LIMITS, ratioSchema } from './ratio.ts';
 export { type ConeShape, type CylinderShape, coneShapeSchema, cylinderShapeSchema } from './round.ts';
 export {

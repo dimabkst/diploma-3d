@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  APEX_LIMITS,
   BASE_ANGLE_LIMITS,
   BASE_SHIFT_LIMITS,
   DEFAULT_LONGEST_DIMENSION_MM,
+  DEFAULT_PARALLELOGRAM_BASE,
   DEFAULT_TRAPEZOID_BASE,
   DEFAULT_TRIANGLE_BASE,
   defaultModelSpecs,
@@ -12,6 +14,7 @@ import {
   PRISM_BASE_SIDES,
   PRISM_BASE_TYPES,
   PYRAMID_BASE_SIDES,
+  PYRAMID_BASE_TYPES,
   RATIO_LIMITS,
   TETRAHEDRON_HEIGHT_RATIO,
 } from './index.ts';
@@ -429,13 +432,75 @@ describe('prism and parallelepiped displacement of the upper base', () => {
   });
 });
 
+describe('pyramid bases and apex position', () => {
+  const pyramidWith = (fields: Record<string, unknown>) => ({ shape: { kind: 'pyramid', heightRatio: 1, ...fields }, scale });
+  const bases = {
+    regular: { baseType: 'regular', baseSides: 5 },
+    triangle: { baseType: 'triangle', baseSideRatio: 0.75, baseAngleDeg: 90 },
+    parallelogram: { baseType: 'parallelogram', baseSideRatio: 2.05, baseAngleDeg: 120 },
+    trapezoid: { baseType: 'trapezoid', parallelSideRatio: 0.5, baseHeightRatio: 0.375, baseShiftRatio: -0.25 },
+  } as const;
+
+  it('offers the regular polygon, triangle, parallelogram and trapezoid, with the apex limited to [−4, 4]', () => {
+    expect(PYRAMID_BASE_TYPES).toEqual(['regular', 'triangle', 'parallelogram', 'trapezoid']);
+    expect(APEX_LIMITS).toEqual({ min: -4, max: 4 });
+    expect(DEFAULT_PARALLELOGRAM_BASE).toEqual({ baseSideRatio: 1, baseAngleDeg: 60 });
+  });
+
+  it.each(Object.entries(bases))('accepts a %s base and defaults the apex to the base centroid', (_, base) => {
+    expect(modelSpecSchema.parse(pyramidWith(base)).shape).toEqual({
+      kind: 'pyramid',
+      heightRatio: 1,
+      ...base,
+      apexXRatio: 0,
+      apexYRatio: 0,
+    });
+  });
+
+  it.each([
+    [APEX_LIMITS.min, APEX_LIMITS.max],
+    [APEX_LIMITS.max, APEX_LIMITS.min],
+    [-0.1, 0],
+    [2.35, -3.05],
+  ])('accepts the apex at (%s, %s), including the limits, negative and off-step values', (x, y) => {
+    for (const base of Object.values(bases)) {
+      expect(modelSpecSchema.parse(pyramidWith({ ...base, apexXRatio: x, apexYRatio: y })).shape).toMatchObject({
+        apexXRatio: x,
+        apexYRatio: y,
+      });
+    }
+  });
+
+  it.each([
+    ['NaN', Number.NaN],
+    ['infinite', Number.POSITIVE_INFINITY],
+    ['a numeric string', '1'],
+    ['null', null],
+    ['below the minimum', APEX_LIMITS.min - 1e-9],
+    ['above the maximum', APEX_LIMITS.max + 1e-9],
+  ])('rejects an apex coordinate that is %s', (_, value) => {
+    expect(modelSpecSchema.safeParse(pyramidWith({ ...bases.triangle, apexXRatio: value })).success).toBe(false);
+    expect(modelSpecSchema.safeParse(pyramidWith({ ...bases.trapezoid, apexYRatio: value })).success).toBe(false);
+  });
+
+  it('validates only the fields of the selected base type and keeps the prism offsets apart', () => {
+    expect(modelSpecSchema.safeParse(pyramidWith({ ...bases.parallelogram, baseSides: 4 })).success).toBe(false);
+    expect(modelSpecSchema.safeParse(pyramidWith({ ...bases.regular, baseAngleDeg: 60 })).success).toBe(false);
+    expect(modelSpecSchema.safeParse(pyramidWith({ ...bases.triangle, baseAngleDeg: 170 })).success).toBe(false);
+    expect(modelSpecSchema.safeParse(pyramidWith({ ...bases.trapezoid, baseShiftRatio: 2.5 })).success).toBe(false);
+    expect(modelSpecSchema.safeParse(pyramidWith({ ...bases.regular, offsetXRatio: 1 })).success).toBe(false);
+    expect(modelSpecSchema.safeParse(pyramidWith({ baseType: 'circle' })).success).toBe(false);
+    expect(modelSpecSchema.safeParse(pyramidWith({ ...bases.triangle, heightRatio: 0 })).success).toBe(false);
+  });
+});
+
 describe('regular pyramid parameters', () => {
   const { min, max } = RATIO_LIMITS;
 
   it('defaults to a square base with h = a and supports triangular to hexagonal and octagonal bases', () => {
     expect(PYRAMID_BASE_SIDES).toEqual([3, 4, 5, 6, 8]);
     expect(modelSpecSchema.parse(defaultModelSpecs.pyramid)).toEqual({
-      shape: { kind: 'pyramid', baseSides: 4, heightRatio: 1 },
+      shape: { kind: 'pyramid', baseType: 'regular', baseSides: 4, heightRatio: 1, apexXRatio: 0, apexYRatio: 0 },
       scale,
     });
   });
@@ -443,7 +508,15 @@ describe('regular pyramid parameters', () => {
   it.each(PYRAMID_BASE_SIDES.flatMap((baseSides) => [min, 1.1, max].map((heightRatio) => [baseSides, heightRatio] as const)))(
     'accepts %s base sides with h/a = %s, including the ratio boundaries',
     (baseSides, heightRatio) => {
-      expect(modelSpecSchema.parse(pyramid(baseSides, heightRatio)).shape).toEqual({ kind: 'pyramid', baseSides, heightRatio });
+      // Without a base type or apex position the pyramid keeps its earlier meaning: regular, apex above the centre.
+      expect(modelSpecSchema.parse(pyramid(baseSides, heightRatio)).shape).toEqual({
+        kind: 'pyramid',
+        baseType: 'regular',
+        baseSides,
+        heightRatio,
+        apexXRatio: 0,
+        apexYRatio: 0,
+      });
     },
   );
 
@@ -465,7 +538,7 @@ describe('regular pyramid parameters', () => {
     },
   );
 
-  it('rejects an apex offset or other extra fields', () => {
+  it('rejects unknown fields such as an apex offset vector', () => {
     const shape = { kind: 'pyramid', baseSides: 4, heightRatio: 1, apexOffset: [0.1, 0] };
     expect(modelSpecSchema.safeParse({ shape, scale }).success).toBe(false);
   });

@@ -1,8 +1,11 @@
 import {
+  APEX_LIMITS,
+  apexRatioSchema,
   BASE_ANGLE_LIMITS,
   BASE_SHIFT_LIMITS,
   baseAngleSchema,
   baseShiftSchema,
+  DEFAULT_PARALLELOGRAM_BASE,
   DEFAULT_TRAPEZOID_BASE,
   DEFAULT_TRIANGLE_BASE,
   defaultModelSpecs,
@@ -15,6 +18,7 @@ import {
   type PrismBaseSides,
   type PrismBaseType,
   type PyramidBaseSides,
+  type PyramidBaseType,
   RATIO_LIMITS,
   ratioSchema,
   type ShapeKind,
@@ -39,6 +43,15 @@ export type ParameterKey =
   | 'prismTrapezoidHeightRatio'
   | 'prismTrapezoidShiftRatio'
   | 'pyramidHeightRatio'
+  | 'pyramidApexXRatio'
+  | 'pyramidApexYRatio'
+  | 'pyramidTriangleSideRatio'
+  | 'pyramidTriangleAngleDeg'
+  | 'pyramidParallelogramSideRatio'
+  | 'pyramidParallelogramAngleDeg'
+  | 'pyramidTrapezoidSideRatio'
+  | 'pyramidTrapezoidHeightRatio'
+  | 'pyramidTrapezoidShiftRatio'
   | 'cylinderHeightRatio'
   | 'coneHeightRatio';
 
@@ -49,6 +62,7 @@ export type ParameterTexts = Record<ParameterKey, string>;
 export type ParameterChoices = {
   prismBaseType: PrismBaseType;
   prismBaseSides: PrismBaseSides;
+  pyramidBaseType: PyramidBaseType;
   pyramidBaseSides: PyramidBaseSides;
 };
 
@@ -82,6 +96,15 @@ export const initialParameterTexts = (): ParameterTexts => ({
   prismTrapezoidHeightRatio: formatDecimal(DEFAULT_TRAPEZOID_BASE.baseHeightRatio),
   prismTrapezoidShiftRatio: formatDecimal(DEFAULT_TRAPEZOID_BASE.baseShiftRatio),
   pyramidHeightRatio: formatDecimal(defaultModelSpecs.pyramid.shape.heightRatio),
+  pyramidApexXRatio: formatDecimal(defaultModelSpecs.pyramid.shape.apexXRatio),
+  pyramidApexYRatio: formatDecimal(defaultModelSpecs.pyramid.shape.apexYRatio),
+  pyramidTriangleSideRatio: formatDecimal(DEFAULT_TRIANGLE_BASE.baseSideRatio),
+  pyramidTriangleAngleDeg: formatDecimal(DEFAULT_TRIANGLE_BASE.baseAngleDeg),
+  pyramidParallelogramSideRatio: formatDecimal(DEFAULT_PARALLELOGRAM_BASE.baseSideRatio),
+  pyramidParallelogramAngleDeg: formatDecimal(DEFAULT_PARALLELOGRAM_BASE.baseAngleDeg),
+  pyramidTrapezoidSideRatio: formatDecimal(DEFAULT_TRAPEZOID_BASE.parallelSideRatio),
+  pyramidTrapezoidHeightRatio: formatDecimal(DEFAULT_TRAPEZOID_BASE.baseHeightRatio),
+  pyramidTrapezoidShiftRatio: formatDecimal(DEFAULT_TRAPEZOID_BASE.baseShiftRatio),
   cylinderHeightRatio: formatDecimal(defaultModelSpecs.cylinder.shape.heightRatio),
   coneHeightRatio: formatDecimal(defaultModelSpecs.cone.shape.heightRatio),
 });
@@ -89,6 +112,7 @@ export const initialParameterTexts = (): ParameterTexts => ({
 export const initialParameterChoices = (): ParameterChoices => ({
   prismBaseType: defaultModelSpecs.prism.shape.baseType,
   prismBaseSides: defaultModelSpecs.prism.shape.baseSides,
+  pyramidBaseType: defaultModelSpecs.pyramid.shape.baseType,
   pyramidBaseSides: defaultModelSpecs.pyramid.shape.baseSides,
 });
 
@@ -119,6 +143,8 @@ export const validateOffset = (text: string): Validation => validateNumber(text,
 
 export const validateShift = (text: string): Validation => validateNumber(text, baseShiftSchema, BASE_SHIFT_LIMITS, '-0,5');
 
+export const validateApex = (text: string): Validation => validateNumber(text, apexRatioSchema, APEX_LIMITS, '-0,5');
+
 const validators: Readonly<Record<ParameterKey, (text: string) => Validation>> = {
   cuboidWidthRatio: validateRatio,
   cuboidHeightRatio: validateRatio,
@@ -136,6 +162,15 @@ const validators: Readonly<Record<ParameterKey, (text: string) => Validation>> =
   prismTrapezoidHeightRatio: validateRatio,
   prismTrapezoidShiftRatio: validateShift,
   pyramidHeightRatio: validateRatio,
+  pyramidApexXRatio: validateApex,
+  pyramidApexYRatio: validateApex,
+  pyramidTriangleSideRatio: validateRatio,
+  pyramidTriangleAngleDeg: validateAngle,
+  pyramidParallelogramSideRatio: validateRatio,
+  pyramidParallelogramAngleDeg: validateAngle,
+  pyramidTrapezoidSideRatio: validateRatio,
+  pyramidTrapezoidHeightRatio: validateRatio,
+  pyramidTrapezoidShiftRatio: validateShift,
   cylinderHeightRatio: validateRatio,
   coneHeightRatio: validateRatio,
 };
@@ -202,12 +237,8 @@ export function resolveModelRequest(kind: ShapeKind, texts: ParameterTexts, choi
     }
     case 'prism':
       return resolvePrismRequest(texts, choices);
-    case 'pyramid': {
-      const { values, errors } = validateFields(['pyramidHeightRatio'], texts);
-      const { pyramidHeightRatio: heightRatio } = values;
-      if (heightRatio === undefined) return { scale, values, errors, spec: undefined, key: undefined };
-      return withKey({ shape: { kind, baseSides: choices.pyramidBaseSides, heightRatio }, scale }, values);
-    }
+    case 'pyramid':
+      return resolvePyramidRequest(texts, choices);
     case 'cylinder':
     case 'cone': {
       const key = kind === 'cylinder' ? 'cylinderHeightRatio' : 'coneHeightRatio';
@@ -219,43 +250,77 @@ export function resolveModelRequest(kind: ShapeKind, texts: ParameterTexts, choi
   }
 }
 
-/** The prism: its height and displacement are shared by every base type; only the selected base's fields are read. */
-function resolvePrismRequest(texts: ParameterTexts, choices: ParameterChoices): ModelRequest {
-  const kind = 'prism';
-  const { scale } = defaultModelSpecs.prism;
-  const baseKeys = {
-    regular: [],
-    triangle: ['prismTriangleSideRatio', 'prismTriangleAngleDeg'],
-    trapezoid: ['prismTrapezoidSideRatio', 'prismTrapezoidHeightRatio', 'prismTrapezoidShiftRatio'],
-  } as const satisfies Record<PrismBaseType, readonly ParameterKey[]>;
-  const { values, errors } = validateFields(
-    ['prismHeightRatio', 'prismOffsetXRatio', 'prismOffsetYRatio', ...baseKeys[choices.prismBaseType]],
-    texts,
-  );
-  const { prismHeightRatio: heightRatio, prismOffsetXRatio: offsetXRatio, prismOffsetYRatio: offsetYRatio } = values;
-  const invalid = { scale, values, errors, spec: undefined, key: undefined } as const;
-  if (heightRatio === undefined || offsetXRatio === undefined || offsetYRatio === undefined) return invalid;
-  const shared = { kind, heightRatio, offsetXRatio, offsetYRatio } as const;
-  switch (choices.prismBaseType) {
+/** The field keys of each configurable base type, per solid family. */
+type BaseFieldKeys = {
+  readonly triangle: readonly [side: ParameterKey, angle: ParameterKey];
+  readonly parallelogram?: readonly [side: ParameterKey, angle: ParameterKey];
+  readonly trapezoid: readonly [side: ParameterKey, height: ParameterKey, shift: ParameterKey];
+};
+
+const prismBaseKeys: BaseFieldKeys = {
+  triangle: ['prismTriangleSideRatio', 'prismTriangleAngleDeg'],
+  trapezoid: ['prismTrapezoidSideRatio', 'prismTrapezoidHeightRatio', 'prismTrapezoidShiftRatio'],
+};
+
+const pyramidBaseKeys: BaseFieldKeys = {
+  triangle: ['pyramidTriangleSideRatio', 'pyramidTriangleAngleDeg'],
+  parallelogram: ['pyramidParallelogramSideRatio', 'pyramidParallelogramAngleDeg'],
+  trapezoid: ['pyramidTrapezoidSideRatio', 'pyramidTrapezoidHeightRatio', 'pyramidTrapezoidShiftRatio'],
+};
+
+const baseKeysOf = (baseType: PyramidBaseType, keys: BaseFieldKeys): readonly ParameterKey[] =>
+  baseType === 'regular' ? [] : (keys[baseType] ?? []);
+
+/** The selected base's specification fields from the validated values, or undefined while any of them is invalid. */
+function baseFields(baseType: PyramidBaseType, keys: BaseFieldKeys, values: ParameterValues, baseSides: PrismBaseSides) {
+  switch (baseType) {
     case 'regular':
-      return withKey({ shape: { ...shared, baseType: 'regular', baseSides: choices.prismBaseSides }, scale }, values);
-    case 'triangle': {
-      const { prismTriangleSideRatio: baseSideRatio, prismTriangleAngleDeg: baseAngleDeg } = values;
-      if (baseSideRatio === undefined || baseAngleDeg === undefined) return invalid;
-      return withKey({ shape: { ...shared, baseType: 'triangle', baseSideRatio, baseAngleDeg }, scale }, values);
+      return { baseType, baseSides } as const;
+    case 'triangle':
+    case 'parallelogram': {
+      const [baseSideRatio, baseAngleDeg] = baseKeysOf(baseType, keys).map((key) => values[key]);
+      if (baseSideRatio === undefined || baseAngleDeg === undefined) return undefined;
+      return { baseType, baseSideRatio, baseAngleDeg } as const;
     }
     case 'trapezoid': {
-      const {
-        prismTrapezoidSideRatio: parallelSideRatio,
-        prismTrapezoidHeightRatio: baseHeightRatio,
-        prismTrapezoidShiftRatio: baseShiftRatio,
-      } = values;
-      if (parallelSideRatio === undefined || baseHeightRatio === undefined || baseShiftRatio === undefined) return invalid;
-      const base = { baseType: 'trapezoid', parallelSideRatio, baseHeightRatio, baseShiftRatio } as const;
-      return withKey({ shape: { ...shared, ...base }, scale }, values);
+      const [parallelSideRatio, baseHeightRatio, baseShiftRatio] = keys.trapezoid.map((key) => values[key]);
+      if (parallelSideRatio === undefined || baseHeightRatio === undefined || baseShiftRatio === undefined) return undefined;
+      return { baseType, parallelSideRatio, baseHeightRatio, baseShiftRatio } as const;
     }
   }
 }
+
+/**
+ * A prism or pyramid: its height and the position of its upper base or apex are shared by every base type; only the
+ * selected base's own fields are read.
+ */
+function resolveBasedSolidRequest(
+  kind: 'prism' | 'pyramid',
+  texts: ParameterTexts,
+  baseType: PyramidBaseType,
+  baseSides: PrismBaseSides,
+): ModelRequest {
+  const { scale } = defaultModelSpecs[kind];
+  const [keys, heightKey, xKey, yKey] =
+    kind === 'prism'
+      ? ([prismBaseKeys, 'prismHeightRatio', 'prismOffsetXRatio', 'prismOffsetYRatio'] as const)
+      : ([pyramidBaseKeys, 'pyramidHeightRatio', 'pyramidApexXRatio', 'pyramidApexYRatio'] as const);
+  const { values, errors } = validateFields([heightKey, xKey, yKey, ...baseKeysOf(baseType, keys)], texts);
+  const [heightRatio, x, y] = [values[heightKey], values[xKey], values[yKey]];
+  const base = baseFields(baseType, keys, values, baseSides);
+  if (heightRatio === undefined || x === undefined || y === undefined || base === undefined) {
+    return { scale, values, errors, spec: undefined, key: undefined };
+  }
+  const position = kind === 'prism' ? { offsetXRatio: x, offsetYRatio: y } : { apexXRatio: x, apexYRatio: y };
+  // The schema checks the combination: a prism never receives the parallelogram base, which it does not offer.
+  return withKey({ shape: { kind, heightRatio, ...position, ...base }, scale } as ModelSpecInput, values);
+}
+
+const resolvePrismRequest = (texts: ParameterTexts, choices: ParameterChoices): ModelRequest =>
+  resolveBasedSolidRequest('prism', texts, choices.prismBaseType, choices.prismBaseSides);
+
+const resolvePyramidRequest = (texts: ParameterTexts, choices: ParameterChoices): ModelRequest =>
+  resolveBasedSolidRequest('pyramid', texts, choices.pyramidBaseType, choices.pyramidBaseSides);
 
 export type TrapezoidAlignment = 'left' | 'centre' | 'right';
 

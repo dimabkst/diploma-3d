@@ -6,6 +6,7 @@ import {
   type ParameterTexts,
   resolveModelRequest,
   validateAngle,
+  validateApex,
   validateOffset,
   validateRatio,
 } from './parameters.ts';
@@ -107,10 +108,24 @@ describe('resolveModelRequest', () => {
       prismTrapezoidHeightRatio: '0,5',
       prismTrapezoidShiftRatio: '0',
       pyramidHeightRatio: '1',
+      pyramidApexXRatio: '0',
+      pyramidApexYRatio: '0',
+      pyramidTriangleSideRatio: '1',
+      pyramidTriangleAngleDeg: '60',
+      pyramidParallelogramSideRatio: '1',
+      pyramidParallelogramAngleDeg: '60',
+      pyramidTrapezoidSideRatio: '0,5',
+      pyramidTrapezoidHeightRatio: '0,5',
+      pyramidTrapezoidShiftRatio: '0',
       cylinderHeightRatio: '2',
       coneHeightRatio: '2',
     });
-    expect(initialParameterChoices()).toEqual({ prismBaseType: 'regular', prismBaseSides: 3, pyramidBaseSides: 4 });
+    expect(initialParameterChoices()).toEqual({
+      prismBaseType: 'regular',
+      prismBaseSides: 3,
+      pyramidBaseType: 'regular',
+      pyramidBaseSides: 4,
+    });
     expect(resolveModelRequest('cuboid', initialParameterTexts(), triangle).spec).toEqual({
       shape: { kind: 'cuboid', widthRatio: 1.5, heightRatio: 2 },
       scale: { longestDimensionMm: 80 },
@@ -216,13 +231,90 @@ describe('resolveModelRequest', () => {
   it('starts the pyramid with a square base and h = a, and keeps h/a when its base changes', () => {
     expect(resolveModelRequest('pyramid', initialParameterTexts(), triangle).spec?.shape).toEqual({
       kind: 'pyramid',
+      baseType: 'regular',
       baseSides: 4,
       heightRatio: 1,
+      apexXRatio: 0,
+      apexYRatio: 0,
     });
     for (const pyramidBaseSides of [3, 4, 5, 6, 8] as const) {
       const request = resolveModelRequest('pyramid', texts({ pyramidHeightRatio: '1,1' }), { ...triangle, pyramidBaseSides });
-      expect(request.spec?.shape).toEqual({ kind: 'pyramid', baseSides: pyramidBaseSides, heightRatio: 1.1 });
+      expect(request.spec?.shape).toEqual({
+        kind: 'pyramid',
+        baseType: 'regular',
+        baseSides: pyramidBaseSides,
+        heightRatio: 1.1,
+        apexXRatio: 0,
+        apexYRatio: 0,
+      });
     }
+  });
+
+  describe('pyramid bases and apex', () => {
+    const withBase = (pyramidBaseType: 'triangle' | 'parallelogram' | 'trapezoid') => ({ ...triangle, pyramidBaseType });
+    const typed = texts({
+      pyramidHeightRatio: '1,1',
+      pyramidApexXRatio: '-0,1',
+      pyramidApexYRatio: '3.05',
+      pyramidTriangleSideRatio: '0,75',
+      pyramidTriangleAngleDeg: '90',
+      pyramidParallelogramSideRatio: '2',
+      pyramidParallelogramAngleDeg: '120',
+      pyramidTrapezoidSideRatio: '0,5',
+      pyramidTrapezoidHeightRatio: '0,375',
+      pyramidTrapezoidShiftRatio: '-0,25',
+    });
+    const shared = { kind: 'pyramid', heightRatio: 1.1, apexXRatio: -0.1, apexYRatio: 3.05 };
+
+    it.each([
+      ['triangle', { baseType: 'triangle', baseSideRatio: 0.75, baseAngleDeg: 90 }],
+      ['parallelogram', { baseType: 'parallelogram', baseSideRatio: 2, baseAngleDeg: 120 }],
+      ['trapezoid', { baseType: 'trapezoid', parallelSideRatio: 0.5, baseHeightRatio: 0.375, baseShiftRatio: -0.25 }],
+    ] as const)('builds the %s base with the shared height and apex, including negative and off-step values', (type, base) => {
+      expect(resolveModelRequest('pyramid', typed, withBase(type)).spec?.shape).toEqual({ ...shared, ...base });
+    });
+
+    it('keeps the height and apex when the base type changes and validates only the selected base', () => {
+      const regular = resolveModelRequest('pyramid', typed, triangle).spec?.shape;
+      expect(regular).toEqual({ ...shared, baseType: 'regular', baseSides: 4 });
+      const broken = texts({ pyramidParallelogramAngleDeg: '170', pyramidTriangleSideRatio: '' });
+      expect(resolveModelRequest('pyramid', broken, withBase('trapezoid')).errors).toEqual({});
+      expect(resolveModelRequest('pyramid', broken, withBase('parallelogram')).errors).toEqual({
+        pyramidParallelogramAngleDeg: 'Допустимі значення — від 15° до 165°.',
+      });
+      expect(resolveModelRequest('pyramid', broken, withBase('triangle')).errors).toEqual({
+        pyramidTriangleSideRatio: 'Введіть значення.',
+      });
+    });
+
+    it.each([
+      ['4,5', 'Допустимі значення — від -4 до 4.'],
+      ['-4,01', 'Допустимі значення — від -4 до 4.'],
+      ['', 'Введіть значення.'],
+      ['−1', 'Введіть число, наприклад -0,5.'],
+    ])('reports the apex coordinate "%s" without clamping it', (text, error) => {
+      expect(validateApex(text)).toEqual({ error });
+      const request = resolveModelRequest('pyramid', texts({ pyramidApexXRatio: text }), triangle);
+      expect(request.spec).toBeUndefined();
+      expect(request.errors).toEqual({ pyramidApexXRatio: error });
+    });
+
+    it.each([
+      ['-4', -4],
+      ['4', 4],
+      ['2,35', 2.35],
+    ])('accepts the apex coordinate %s', (text, value) => {
+      expect(validateApex(text)).toEqual({ value });
+    });
+
+    it('keeps the pyramid parallelogram apart from the parallelepiped and the prism offsets apart from the apex', () => {
+      const mixed = texts({ pyramidParallelogramSideRatio: '3', parallelepipedBaseSideRatio: '0,5', prismOffsetXRatio: '1' });
+      expect(resolveModelRequest('pyramid', mixed, withBase('parallelogram')).spec?.shape).toMatchObject({
+        baseSideRatio: 3,
+        apexXRatio: 0,
+      });
+      expect(resolveModelRequest('parallelepiped', mixed, triangle).spec?.shape).toMatchObject({ baseSideRatio: 0.5 });
+    });
   });
 
   it('keeps the pyramid and prism parameters apart', () => {

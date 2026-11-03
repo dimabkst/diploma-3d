@@ -12,7 +12,6 @@ import {
   type MeasurementItem,
   type NumericField,
   type OffsetGroup,
-  offsetHint,
   type ParameterField,
   type ShapeOption,
   type TrapezoidGroup,
@@ -53,14 +52,14 @@ let {
 const describedBy = (...ids: (string | undefined)[]) => ids.filter((id) => id !== undefined).join(' ') || undefined;
 const hintId = $derived(parameterHint === undefined ? undefined : 'parameter-hint');
 
-/** Right when both offsets are zero, oblique otherwise; undefined while either is not valid. */
-function offsetState(group: OffsetGroup): 'right' | 'oblique' | undefined {
+/** Centred when both values are zero, moved otherwise; undefined while either is not valid. */
+function offsetState(group: OffsetGroup): 'centred' | 'moved' | undefined {
   const [x, y] = group.fields.map((field) => values[field.key]);
   if (x === undefined || y === undefined) return undefined;
-  return x === 0 && y === 0 ? 'right' : 'oblique';
+  return x === 0 && y === 0 ? 'centred' : 'moved';
 }
 
-function removeTilt(group: OffsetGroup) {
+function resetOffset(group: OffsetGroup) {
   for (const field of group.fields) texts[field.key] = '0';
 }
 
@@ -121,16 +120,16 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
               </Field>
             {:else if field.type === 'offset'}
               {@const state = offsetState(field)}
-              <FieldGroup id={field.key} legend={field.legend} description={offsetHint}>
+              <FieldGroup id={field.key} legend={field.legend} description={field.description}>
                 {#each field.fields as offsetField (offsetField.key)}
                   {@render numberField(offsetField, describedBy(`${field.key}-description`, hintId))}
                 {/each}
                 <div class="offset-footer">
                   <p class="group-status" aria-live="polite">
-                    {#if state !== undefined}Зараз: {field.solidName[state]}{/if}
+                    {#if state !== undefined}Зараз: {field.status[state]}{/if}
                   </p>
-                  <Button variant="secondary" disabled={state === 'right'} onclick={() => removeTilt(field)}>
-                    Прибрати нахил
+                  <Button variant="secondary" disabled={state === 'centred'} onclick={() => resetOffset(field)}>
+                    {field.resetLabel}
                   </Button>
                 </div>
               </FieldGroup>

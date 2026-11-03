@@ -310,6 +310,77 @@ describe('buildModelArtifacts', () => {
     });
   });
 
+  describe('for pyramids with a displaced apex', () => {
+    // The square pyramid with h = a and the apex above the corner (−a/2, −a/2): a 1 × 1 × 1 box, so a = h = 80 mm,
+    // V = 80³/3 mm³ and S = 80²·(2 + √2) mm².
+    const corner: ModelSpecInput = {
+      shape: { kind: 'pyramid', baseSides: 4, heightRatio: 1, apexXRatio: -0.5, apexYRatio: -0.5 },
+      scale: { longestDimensionMm: 80 },
+    };
+    // The rectangle-based parallelogram pyramid with the apex at (a, 0), outside the base: the box spans x from −a/2
+    // to a, 1,5a wide, so a = h = 160/3 mm.
+    const outside: ModelSpecInput = {
+      shape: {
+        kind: 'pyramid',
+        baseType: 'parallelogram',
+        baseSideRatio: 1,
+        baseAngleDeg: 90,
+        heightRatio: 1,
+        apexXRatio: 1,
+        apexYRatio: 0,
+      },
+      scale: { longestDimensionMm: 80 },
+    };
+
+    it.each([
+      ['corner', corner, 'pyramid-4-sided.3mf', [-40, -40, 0], [40, 40, 80], 512_000 / 3, 6400 * (2 + Math.SQRT2)],
+      [
+        'outside',
+        outside,
+        'pyramid-parallelogram.3mf',
+        [-80 / 3, -80 / 3, 0],
+        [160 / 3, 80 / 3, 160 / 3],
+        (160 / 3) ** 3 / 3,
+        undefined,
+      ],
+    ] as const)(
+      'exports the %s apex in millimetres with its bounds and volume',
+      async (_, spec, fileName, min, max, volume, area) => {
+        const { printFile } = await buildModelArtifacts(kernel, spec);
+        const { model } = readThreeMf(printFile.bytes);
+        expect(printFile.fileName).toBe(fileName);
+        expect(model.unit).toBe('millimeter');
+        const mesh = model.objects[0]?.mesh;
+        if (mesh === undefined) throw new Error('No exported mesh');
+        expect(findMeshDefects(mesh)).toEqual([]);
+        const measurements = measureMesh(mesh);
+        min.forEach((value, axis) => {
+          expect(measurements.bounds.min[axis]).toBeCloseTo(value, 4);
+        });
+        max.forEach((value, axis) => {
+          expect(measurements.bounds.max[axis]).toBeCloseTo(value, 4);
+        });
+        expect(measurements.volume / volume).toBeCloseTo(1, 6);
+        if (area !== undefined) expect(measurements.surfaceArea / area).toBeCloseTo(1, 6);
+      },
+    );
+
+    it('previews the apex of the outside pyramid at glTF (a, h, 0), in metres', async () => {
+      const { previewGlb } = await buildModelArtifacts(kernel, outside);
+      const positions = await previewSurfacePositions(previewGlb);
+      const points = Array.from(
+        { length: positions.getCount() },
+        (_, index) => positions.getElement(index, []) as unknown as Vec3,
+      );
+      const top = Math.max(...points.map((point) => point[1]));
+      expect(top).toBeCloseTo(0.16 / 3, METRE_DIGITS);
+      for (const point of points.filter((candidate) => candidate[1] > 1e-6)) {
+        expect(point[0]).toBeCloseTo(0.16 / 3, METRE_DIGITS);
+        expect(point[2]).toBeCloseTo(0, METRE_DIGITS);
+      }
+    });
+  });
+
   describe('for the default ball', () => {
     it('exports ball.3mf as one closed 80 mm object in millimetres resting on the build plate', async () => {
       const { printFile } = await buildModelArtifacts(kernel, defaultModelSpecs.ball);
@@ -500,6 +571,10 @@ describe('buildModelArtifacts', () => {
       },
     ],
     ['prism', { shape: { kind: 'prism', baseSides: 9, heightRatio: 2 }, scale: { longestDimensionMm: 80 } }],
+    [
+      'pyramid with the apex too far out',
+      { shape: { kind: 'pyramid', baseSides: 4, heightRatio: 1, apexXRatio: 4.5 }, scale: { longestDimensionMm: 80 } },
+    ],
     [
       'trapezoid prism',
       {

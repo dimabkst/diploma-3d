@@ -1,20 +1,20 @@
 import {
+  type BaseSides,
   ballMeasurements,
+  baseSidesMm,
   boxEdgeLengthsMm,
   MAX_CIRCLE_DEVIATION_MM,
   type MeshMeasurements,
   parallelepipedDimensionsMm,
-  pyramidParameters,
-  regularBaseDimensionsMm,
-  regularPolygonArea,
-  regularPrismDimensionsMm,
+  prismDimensionsMm,
+  prismShapeProportions,
+  pyramidShapeDimensionsMm,
   roundSolidMeasurements,
   type TrapezoidKind,
   trapezoidKind,
-  trapezoidPrismDimensionsMm,
-  trianglePrismDimensionsMm,
 } from '@diploma-3d/engine';
 import {
+  APEX_LIMITS,
   BASE_ANGLE_LIMITS,
   BASE_SHIFT_LIMITS,
   defaultModelSpecs,
@@ -23,8 +23,8 @@ import {
   PRISM_BASE_SIDES,
   PRISM_BASE_TYPES,
   type PrismBaseSides,
-  type PrismBaseType,
-  PYRAMID_BASE_SIDES,
+  PYRAMID_BASE_TYPES,
+  type PyramidBaseType,
   RATIO_LIMITS,
   type Shape,
   type ShapeKind,
@@ -65,16 +65,18 @@ export type ChoiceField = {
 };
 
 /**
- * The displacement of a prism's upper base: two numeric fields under one legend, with a reset to the right prism. Whether
- * the solid is right or oblique follows from the two values; nothing else stores it.
+ * A horizontal position, such as the displacement of a prism's upper base or a pyramid's apex: two numeric fields under
+ * one legend, with a reset to zero. Whether the position is centred follows from the two values; nothing else stores it.
  */
 export type OffsetGroup = {
   readonly type: 'offset';
   readonly key: string;
   readonly legend: string;
-  readonly fields: readonly [NumericField, NumericField];
-  /** The solid's name in the status line, such as "пряма призма" and "похила призма". */
-  readonly solidName: { readonly right: string; readonly oblique: string };
+  readonly description: string;
+  readonly fields: readonly [x: NumericField, y: NumericField];
+  readonly resetLabel: string;
+  /** The status line for both values zero and otherwise, such as "пряма призма" and "похила призма". */
+  readonly status: { readonly centred: string; readonly moved: string };
 };
 
 /**
@@ -95,7 +97,7 @@ export const shapeOptions: readonly ShapeOption[] = [
   { value: 'cuboid', label: 'Прямокутний паралелепіпед' },
   { value: 'parallelepiped', label: 'Паралелепіпед' },
   { value: 'prism', label: 'Призма' },
-  { value: 'pyramid', label: 'Правильна піраміда' },
+  { value: 'pyramid', label: 'Піраміда' },
   { value: 'tetrahedron', label: 'Правильний тетраедр' },
   { value: 'cylinder', label: 'Циліндр' },
   { value: 'cone', label: 'Конус' },
@@ -135,9 +137,13 @@ export function shapeDescription(kind: ShapeKind, scale: PhysicalScale): string 
         'основою — правильна. Зі зміщенням призма похила: бічні грані — паралелограми, а бічне ребро l довше за висоту h.'
       );
     case 'pyramid':
-      return 'Основа — правильний многокутник, вершина лежить точно над її центром, а бічні грані — рівні рівнобедрені трикутники.';
+      return (
+        'Основа — правильний багатокутник, трикутник, паралелограм або трапеція; бічні грані — трикутники зі спільною ' +
+        'вершиною. Висота h — перпендикуляр з вершини до площини основи. Піраміда правильна, лише коли основа — ' +
+        'правильний багатокутник, а вершина лежить над її центром.'
+      );
     case 'tetrahedron': {
-      const { edge } = regularBaseDimensionsMm(pyramidParameters({ kind }), scale);
+      const { edge } = pyramidShapeDimensionsMm({ kind }, scale);
       return (
         'Усі шість ребер рівні, а всі чотири грані — рівносторонні трикутники; висота h = a·√(2/3) ≈ 0,816a. ' +
         `Ребро моделі — ${formatDecimal(edge)} мм.`
@@ -155,6 +161,9 @@ export function shapeDescription(kind: ShapeKind, scale: PhysicalScale): string 
       );
   }
 }
+
+const triangleNote =
+  'Трикутник задається сторонами a і b та кутом α між ними. Довжина третьої сторони c обчислюється автоматично. ';
 
 const obliqueSizeNote = (scale: PhysicalScale): string =>
   `Найбільший габаритний вимір моделі (ширина, глибина чи висота, а не ребро) завжди ${formatLength(scale)}. ` +
@@ -177,9 +186,13 @@ const trapezoidKindNames: Readonly<Record<TrapezoidKind, string>> = {
 export const trapezoidKindName = (sideRatio: number | undefined, shiftRatio: number | undefined): string | undefined =>
   sideRatio === undefined || shiftRatio === undefined ? undefined : trapezoidKindNames[trapezoidKind(sideRatio, shiftRatio)];
 
-export const offsetHint =
+const offsetHint =
   'X — уздовж сторони основи a, Y — перпендикулярно до неї в площині основи. Напрямки прив’язані до моделі, а не до ' +
   'камери. Обидва нулі дають пряме тіло, будь-яке інше значення — похиле.';
+
+const apexHint =
+  'Координати відлічуються від центра мас основи: X — уздовж сторони основи a, Y — перпендикулярно до неї в площині ' +
+  'основи. Висота h завжди перпендикулярна до цієї площини. Вершина може лежати й над ребром, над вершиною основи чи поза нею.';
 
 const idealRoundNote =
   'Розміри нижче — для ідеального тіла; у файлі друку коло наближено многокутником, ' +
@@ -190,26 +203,39 @@ const ratioRange: StepRange = { ...RATIO_LIMITS, increment: 0.25 };
 // The base angle moves in whole multiples of 5°.
 const angleRange: StepRange = { ...BASE_ANGLE_LIMITS, increment: 5 };
 const offsetRange: StepRange = { ...OFFSET_LIMITS, increment: 0.25 };
+const apexRange: StepRange = { ...APEX_LIMITS, increment: 0.25 };
 const shiftRange: StepRange = { ...BASE_SHIFT_LIMITS, increment: 0.25 };
 
-const offsetGroup = (
-  x: ParameterKey,
-  y: ParameterKey,
-  solidName: { readonly right: string; readonly oblique: string },
-): OffsetGroup => ({
+const offsetGroup = (x: ParameterKey, y: ParameterKey, status: OffsetGroup['status']): OffsetGroup => ({
   type: 'offset',
   key: `${x}-${y}`,
   legend: 'Зміщення верхньої основи',
+  description: offsetHint,
   fields: [
     { type: 'number', key: x, label: 'Зміщення X', suffix: '× a', range: offsetRange },
     { type: 'number', key: y, label: 'Зміщення Y', suffix: '× a', range: offsetRange },
   ],
-  solidName,
+  resetLabel: 'Прибрати нахил',
+  status,
 });
 
-const baseTypeNames: Readonly<Record<PrismBaseType, string>> = {
+const apexGroup: OffsetGroup = {
+  type: 'offset',
+  key: 'pyramidApex',
+  legend: 'Положення вершини',
+  description: apexHint,
+  fields: [
+    { type: 'number', key: 'pyramidApexXRatio', label: 'Зміщення X', suffix: '× a', range: apexRange },
+    { type: 'number', key: 'pyramidApexYRatio', label: 'Зміщення Y', suffix: '× a', range: apexRange },
+  ],
+  resetLabel: 'Над центром основи',
+  status: { centred: 'вершина над центром основи', moved: 'вершина зміщена' },
+};
+
+const baseTypeNames: Readonly<Record<PyramidBaseType, string>> = {
   regular: 'Правильний багатокутник',
   triangle: 'Трикутник',
+  parallelogram: 'Паралелограм',
   trapezoid: 'Трапеція',
 };
 
@@ -221,54 +247,105 @@ const baseNames: Readonly<Record<PrismBaseSides, string>> = {
   8: 'Правильний восьмикутник',
 };
 
-const prismBaseFields: Readonly<Record<PrismBaseType, readonly ParameterField[]>> = {
-  regular: [
-    {
-      type: 'choice',
-      key: 'prismBaseSides',
-      label: 'Багатокутник',
-      options: PRISM_BASE_SIDES.map((sides) => ({ value: sides, label: baseNames[sides] })),
-    },
-  ],
-  triangle: [
-    { type: 'number', key: 'prismTriangleSideRatio', label: 'Сторона основи b', suffix: '× a', range: ratioRange },
-    { type: 'number', key: 'prismTriangleAngleDeg', label: 'Кут α', suffix: '°', range: angleRange },
-  ],
-  trapezoid: [
-    {
-      type: 'trapezoid',
-      key: 'prismTrapezoid',
-      legend: 'Трапеція в основі',
-      fields: [
-        { type: 'number', key: 'prismTrapezoidSideRatio', label: 'Паралельна сторона b', suffix: '× a', range: ratioRange },
-        { type: 'number', key: 'prismTrapezoidHeightRatio', label: 'Висота трапеції t', suffix: '× a', range: ratioRange },
-        { type: 'number', key: 'prismTrapezoidShiftRatio', label: 'Зміщення сторони b', suffix: '× a', range: shiftRange },
-      ],
-    },
-  ],
+/** The keys of one solid family's base fields; the parallelogram is offered by pyramids only. */
+type BaseFieldKeys = {
+  readonly typeKey: 'prismBaseType' | 'pyramidBaseType';
+  readonly types: readonly PyramidBaseType[];
+  readonly sidesKey: 'prismBaseSides' | 'pyramidBaseSides';
+  readonly triangle: readonly [side: ParameterKey, angle: ParameterKey];
+  readonly parallelogram?: readonly [side: ParameterKey, angle: ParameterKey];
+  readonly trapezoid: { readonly key: string; readonly fields: readonly [ParameterKey, ParameterKey, ParameterKey] };
+};
+
+const twoSidesAndAngle = ([side, angle]: readonly [ParameterKey, ParameterKey]): NumericField[] => [
+  { type: 'number', key: side, label: 'Сторона основи b', suffix: '× a', range: ratioRange },
+  { type: 'number', key: angle, label: 'Кут α', suffix: '°', range: angleRange },
+];
+
+/** The base type selector and the selected base's own fields. */
+function baseFields(keys: BaseFieldKeys, baseType: PyramidBaseType): ParameterField[] {
+  const selector: ChoiceField = {
+    type: 'choice',
+    key: keys.typeKey,
+    label: 'Основа',
+    options: keys.types.map((type) => ({ value: type, label: baseTypeNames[type] })),
+  };
+  const [side, height, shift] = keys.trapezoid.fields;
+  const fields: Record<PyramidBaseType, ParameterField[]> = {
+    regular: [
+      {
+        type: 'choice',
+        key: keys.sidesKey,
+        label: 'Багатокутник',
+        options: PRISM_BASE_SIDES.map((sides) => ({ value: sides, label: baseNames[sides] })),
+      },
+    ],
+    triangle: twoSidesAndAngle(keys.triangle),
+    parallelogram: keys.parallelogram === undefined ? [] : twoSidesAndAngle(keys.parallelogram),
+    trapezoid: [
+      {
+        type: 'trapezoid',
+        key: keys.trapezoid.key,
+        legend: 'Трапеція в основі',
+        fields: [
+          { type: 'number', key: side, label: 'Паралельна сторона b', suffix: '× a', range: ratioRange },
+          { type: 'number', key: height, label: 'Висота трапеції t', suffix: '× a', range: ratioRange },
+          { type: 'number', key: shift, label: 'Зміщення сторони b', suffix: '× a', range: shiftRange },
+        ],
+      },
+    ],
+  };
+  return [selector, ...fields[baseType]];
+}
+
+const prismBaseKeys: BaseFieldKeys = {
+  typeKey: 'prismBaseType',
+  types: PRISM_BASE_TYPES,
+  sidesKey: 'prismBaseSides',
+  triangle: ['prismTriangleSideRatio', 'prismTriangleAngleDeg'],
+  trapezoid: {
+    key: 'prismTrapezoid',
+    fields: ['prismTrapezoidSideRatio', 'prismTrapezoidHeightRatio', 'prismTrapezoidShiftRatio'],
+  },
+};
+
+const pyramidBaseKeys: BaseFieldKeys = {
+  typeKey: 'pyramidBaseType',
+  types: PYRAMID_BASE_TYPES,
+  sidesKey: 'pyramidBaseSides',
+  triangle: ['pyramidTriangleSideRatio', 'pyramidTriangleAngleDeg'],
+  parallelogram: ['pyramidParallelogramSideRatio', 'pyramidParallelogramAngleDeg'],
+  trapezoid: {
+    key: 'pyramidTrapezoid',
+    fields: ['pyramidTrapezoidSideRatio', 'pyramidTrapezoidHeightRatio', 'pyramidTrapezoidShiftRatio'],
+  },
 };
 
 /** "Висота призми h" next to the trapezoid's own height t, "Висота h" otherwise. */
 const prismHeightLabel = (choices: ParameterChoices): string =>
   choices.prismBaseType === 'trapezoid' ? 'Висота призми h' : 'Висота h';
 
-/** The fields of the selected shape; for a prism, only those of the selected base type besides the shared ones. */
+/** The fields of the selected shape; for a prism or pyramid, only the selected base type's besides the shared ones. */
 export function parameterFields(kind: ShapeKind, choices: ParameterChoices): readonly ParameterField[] {
-  if (kind !== 'prism') return shapeParameters[kind];
-  return [
-    {
-      type: 'choice',
-      key: 'prismBaseType',
-      label: 'Основа',
-      options: PRISM_BASE_TYPES.map((type) => ({ value: type, label: baseTypeNames[type] })),
-    },
-    ...prismBaseFields[choices.prismBaseType],
-    { type: 'number', key: 'prismHeightRatio', label: prismHeightLabel(choices), suffix: '× a', range: ratioRange },
-    offsetGroup('prismOffsetXRatio', 'prismOffsetYRatio', { right: 'пряма призма', oblique: 'похила призма' }),
-  ];
+  switch (kind) {
+    case 'prism':
+      return [
+        ...baseFields(prismBaseKeys, choices.prismBaseType),
+        { type: 'number', key: 'prismHeightRatio', label: prismHeightLabel(choices), suffix: '× a', range: ratioRange },
+        offsetGroup('prismOffsetXRatio', 'prismOffsetYRatio', { centred: 'пряма призма', moved: 'похила призма' }),
+      ];
+    case 'pyramid':
+      return [
+        ...baseFields(pyramidBaseKeys, choices.pyramidBaseType),
+        { type: 'number', key: 'pyramidHeightRatio', label: 'Висота піраміди h', suffix: '× a', range: ratioRange },
+        apexGroup,
+      ];
+    default:
+      return shapeParameters[kind];
+  }
 }
 
-const shapeParameters: Readonly<Record<Exclude<ShapeKind, 'prism'>, readonly ParameterField[]>> = {
+const shapeParameters: Readonly<Record<Exclude<ShapeKind, 'prism' | 'pyramid'>, readonly ParameterField[]>> = {
   cube: [],
   cuboid: [
     { type: 'number', key: 'cuboidWidthRatio', label: 'Ширина b', suffix: '× a', range: ratioRange },
@@ -279,18 +356,9 @@ const shapeParameters: Readonly<Record<Exclude<ShapeKind, 'prism'>, readonly Par
     { type: 'number', key: 'parallelepipedHeightRatio', label: 'Висота h', suffix: '× a', range: ratioRange },
     { type: 'number', key: 'parallelepipedBaseAngleDeg', label: 'Кут α', suffix: '°', range: angleRange },
     offsetGroup('parallelepipedOffsetXRatio', 'parallelepipedOffsetYRatio', {
-      right: 'прямий паралелепіпед',
-      oblique: 'похилий паралелепіпед',
+      centred: 'прямий паралелепіпед',
+      moved: 'похилий паралелепіпед',
     }),
-  ],
-  pyramid: [
-    {
-      type: 'choice',
-      key: 'pyramidBaseSides',
-      label: 'Основа',
-      options: PYRAMID_BASE_SIDES.map((sides) => ({ value: sides, label: baseNames[sides] })),
-    },
-    { type: 'number', key: 'pyramidHeightRatio', label: 'Висота h', suffix: '× a', range: ratioRange },
   ],
   // Fixed proportions: nothing to adjust.
   tetrahedron: [],
@@ -324,17 +392,23 @@ export function parameterHint(kind: ShapeKind, scale: PhysicalScale, choices: Pa
         );
       }
       return (
-        (choices.prismBaseType === 'triangle'
-          ? 'Трикутник задається сторонами a і b та кутом α між ними. Довжина третьої сторони c обчислюється автоматично. '
-          : '') +
+        (choices.prismBaseType === 'triangle' ? triangleNote : '') +
         'a — сторона основи; висота h — відстань між площинами основ, а не бічне ребро l. ' +
         'Висоту й зміщення задано відносно a. ' +
         obliqueSizeNote(scale)
       );
     case 'pyramid':
       return (
-        'a — сторона основи, h — висота піраміди: перпендикуляр з вершини до центра основи. ' +
-        `Найбільший габаритний вимір завжди ${formatLength(scale)}, тому зміна основи чи висоти може змінити всі розміри.`
+        {
+          regular: '',
+          triangle: triangleNote,
+          parallelogram: 'Паралелограм задається сторонами a і b та кутом α між ними. ',
+          trapezoid: 'Висота трапеції t лежить у площині основи, а висота піраміди h — відстань від вершини до неї. ',
+        }[choices.pyramidBaseType] +
+        'Висоту й координати вершини задано відносно сторони a. ' +
+        `Найбільший габаритний вимір моделі (ширина, глибина чи висота, а не ребро) завжди ${formatLength(scale)}; ` +
+        'вершина поза основою розширює габарит, тож за тих самих множників модель меншає. Якщо бічні ребра чи висоти ' +
+        'бічних граней різні, показано найменше й найбільше значення.'
       );
     case 'cylinder':
     case 'cone':
@@ -365,6 +439,10 @@ export function measurementItems(
   const edge = (value: number | undefined) => ({ value: formatQuantity(value, 'мм'), widest: widestQuantity(length, 'мм') });
   const area = { value: formatQuantity(measurements?.surfaceArea, 'мм²'), widest: widestQuantity(6 * length ** 2, 'мм²') };
   const volume = { value: formatQuantity(measurements?.volume, 'мм³'), widest: widestQuantity(length ** 3, 'мм³') };
+  const baseArea = (value: number | undefined) => ({
+    value: formatQuantity(value, 'мм²'),
+    widest: widestQuantity(length ** 2, 'мм²'),
+  });
   switch (kind) {
     case 'cube': {
       const edges = shape?.kind === 'cube' ? boxEdgeLengthsMm(shape, scale) : undefined;
@@ -387,65 +465,60 @@ export function measurementItems(
     case 'parallelepiped':
     case 'prism': {
       const parallelepiped = shape?.kind === 'parallelepiped' ? parallelepipedDimensionsMm(shape, scale) : undefined;
-      const triangle =
-        shape?.kind === 'prism' && shape.baseType === 'triangle' ? trianglePrismDimensionsMm(shape, scale) : undefined;
-      const trapezoid =
-        shape?.kind === 'prism' && shape.baseType === 'trapezoid' ? trapezoidPrismDimensionsMm(shape, scale) : undefined;
-      const regular =
-        shape?.kind === 'prism' && shape.baseType === 'regular' ? regularPrismDimensionsMm(shape, scale) : undefined;
-      const dimensions = parallelepiped ?? triangle ?? trapezoid ?? regular;
-      // A slanted base side lies in a base face of at most L × L, so it is at most its diagonal √2·L: for a
-      // parallelogram with b/a = 4 and α ≈ 55° it is about 1,22·L. A lateral edge lies in the bounding box, so it is
-      // at most its diagonal √3·L.
-      const slantedSide = (label: string, value: number | undefined) => ({
-        label,
-        value: formatQuantity(value, 'мм'),
-        widest: widestQuantity(Math.SQRT2 * length, 'мм'),
-      });
+      const prism = shape?.kind === 'prism' ? prismDimensionsMm(prismShapeProportions(shape), scale) : undefined;
+      const dimensions = parallelepiped ?? prism;
+      const sides =
+        parallelepiped !== undefined
+          ? { b: parallelepiped.baseSideB }
+          : shape?.kind === 'prism' && prism !== undefined
+            ? baseSidesMm(shape, prism.edge)
+            : undefined;
       // The rows follow the selected base type even while its fields are being corrected.
       const baseType = kind === 'parallelepiped' ? 'parallelogram' : choices.prismBaseType;
-      const otherSides = {
-        parallelogram: [slantedSide('Сторона основи b', parallelepiped?.baseSideB)],
-        regular: [],
-        triangle: [slantedSide('Сторона основи b', triangle?.baseSideB), slantedSide('Сторона основи c', triangle?.baseSideC)],
-        trapezoid: [
-          slantedSide('Сторона основи b', trapezoid?.baseSideB),
-          slantedSide('Сторона основи c', trapezoid?.baseSideC),
-          slantedSide('Сторона основи d', trapezoid?.baseSideD),
-          // t is a depth of the base, so at most L.
-          { label: 'Висота трапеції t', ...edge(trapezoid?.baseHeight) },
-        ],
-      }[baseType];
       return [
         { label: 'Сторона основи a', ...edge(dimensions?.edge) },
-        ...otherSides,
+        ...baseSideRows(baseType, sides, length),
         { label: baseType === 'trapezoid' ? 'Висота призми h' : 'Висота h', ...edge(dimensions?.height) },
         {
           label: 'Бічне ребро l',
           value: formatQuantity(dimensions?.lateralEdge, 'мм'),
           widest: widestQuantity(Math.sqrt(3) * length, 'мм'),
         },
+        { label: 'Площа основи', ...baseArea(dimensions?.baseArea) },
+        { label: 'Площа поверхні', ...area },
+        { label: 'Об’єм', ...volume },
+      ];
+    }
+    case 'pyramid': {
+      const dimensions = shape?.kind === 'pyramid' ? pyramidShapeDimensionsMm(shape, scale) : undefined;
+      // A lateral edge lies in the bounding box, so it is at most its diagonal √3·L; a face height, the distance from
+      // the apex to a line through a base vertex, is at most the lateral edge to that vertex.
+      const lateral = (values: readonly number[] | undefined) => ({
+        value: formatRange(values, 'мм'),
+        widest: widestRange(Math.sqrt(3) * length, 'мм'),
+      });
+      return [
+        { label: 'Сторона основи a', ...edge(dimensions?.edge) },
+        ...baseSideRows(choices.pyramidBaseType, dimensions?.sides, length),
+        { label: 'Висота піраміди h', ...edge(dimensions?.height) },
+        { label: 'Бічні ребра', ...lateral(dimensions?.lateralEdges) },
+        { label: 'Висоти бічних граней', ...lateral(dimensions?.faceHeights) },
+        { label: 'Площа основи', ...baseArea(dimensions?.baseArea) },
         {
-          label: 'Площа основи',
-          value: formatQuantity(dimensions?.baseArea, 'мм²'),
-          widest: widestQuantity(length ** 2, 'мм²'),
+          label: 'Площа бічної поверхні',
+          value: formatQuantity(dimensions?.lateralArea, 'мм²'),
+          widest: widestQuantity(6 * length ** 2, 'мм²'),
         },
         { label: 'Площа поверхні', ...area },
         { label: 'Об’єм', ...volume },
       ];
     }
-    case 'pyramid':
     case 'tetrahedron': {
-      const parameters = shape?.kind === 'pyramid' || shape?.kind === 'tetrahedron' ? pyramidParameters(shape) : undefined;
-      const dimensions = parameters === undefined ? undefined : regularBaseDimensionsMm(parameters, scale);
-      const baseArea =
-        parameters === undefined || dimensions === undefined
-          ? undefined
-          : regularPolygonArea(parameters.baseSides, dimensions.edge);
+      const dimensions = shape?.kind === 'tetrahedron' ? pyramidShapeDimensionsMm(shape, scale) : undefined;
       return [
-        { label: kind === 'tetrahedron' ? 'Ребро a' : 'Сторона основи a', ...edge(dimensions?.edge) },
+        { label: 'Ребро a', ...edge(dimensions?.edge) },
         { label: 'Висота h', ...edge(dimensions?.height) },
-        { label: 'Площа основи', value: formatQuantity(baseArea, 'мм²'), widest: widestQuantity(length ** 2, 'мм²') },
+        { label: 'Площа основи', ...baseArea(dimensions?.baseArea) },
         { label: 'Площа поверхні', ...area },
         { label: 'Об’єм', ...volume },
       ];
@@ -482,3 +555,43 @@ export function measurementItems(
 }
 
 const widestQuantity = (bound: number, unit: string): string => formatQuantity(Math.trunc(bound) + 0.5, unit);
+
+/**
+ * One value when all agree, within rounding noise or at the displayed precision, otherwise the smallest and the largest,
+ * e.g. "40–69,3 мм". A general pyramid's lateral edges and face heights need not be equal.
+ */
+function formatRange(values: readonly number[] | undefined, unit: string): string {
+  if (values === undefined || values.length === 0) return '—';
+  const [min, max] = [Math.min(...values), Math.max(...values)];
+  const [low, high] = [numberFormat.format(min), numberFormat.format(max)];
+  return max - min <= 1e-9 * max || low === high ? `${low} ${unit}` : `${low}–${high} ${unit}`;
+}
+
+const widestRange = (bound: number, unit: string): string => {
+  const widest = numberFormat.format(Math.trunc(bound) + 0.5);
+  return `${widest}–${widest} ${unit}`;
+};
+
+/**
+ * The base sides besides a, by base type. A slanted side lies in a base face of at most L × L, so it is at most its
+ * diagonal √2·L (for a parallelogram with b/a = 4 and α ≈ 55° about 1,22·L); the trapezoid's t is a depth, at most L.
+ */
+function baseSideRows(baseType: PyramidBaseType, sides: BaseSides | undefined, length: number): MeasurementItem[] {
+  const side = (label: string, value: number | undefined): MeasurementItem => ({
+    label,
+    value: formatQuantity(value, 'мм'),
+    widest: widestQuantity(Math.SQRT2 * length, 'мм'),
+  });
+  const rows: Record<PyramidBaseType, MeasurementItem[]> = {
+    regular: [],
+    triangle: [side('Сторона основи b', sides?.b), side('Сторона основи c', sides?.c)],
+    parallelogram: [side('Сторона основи b', sides?.b)],
+    trapezoid: [
+      side('Сторона основи b', sides?.b),
+      side('Сторона основи c', sides?.c),
+      side('Сторона основи d', sides?.d),
+      { label: 'Висота трапеції t', value: formatQuantity(sides?.t, 'мм'), widest: widestQuantity(length, 'мм') },
+    ],
+  };
+  return rows[baseType];
+}

@@ -2,10 +2,10 @@ import type { PhysicalScale, PrismShape, RegularPrismShape, TrapezoidPrismShape,
 import type { Manifold } from 'manifold-3d';
 import type { GeometryKernel } from '../kernel.ts';
 import type { Track } from '../scope.ts';
+import { baseVertices } from './base.ts';
 import { buildPrism, type PrismDimensions, type PrismProportions, prismDimensionsMm } from './prism-geometry.ts';
-import { regularPolygonVertices } from './regular-polygon.ts';
-import { trapezoidLegs, trapezoidVertices } from './trapezoid.ts';
-import { triangleThirdSide, triangleVertices } from './triangle.ts';
+import { trapezoidLegs } from './trapezoid.ts';
+import { triangleThirdSide } from './triangle.ts';
 
 /**
  * The prism over a regular polygon before scaling: the base with edge 1, centred at the origin with its first edge
@@ -13,7 +13,7 @@ import { triangleThirdSide, triangleVertices } from './triangle.ts';
  */
 export function regularPrismProportions(shape: RegularPrismShape): PrismProportions {
   return {
-    base: regularPolygonVertices(shape.baseSides),
+    base: baseVertices(shape),
     height: shape.heightRatio,
     offset: [shape.offsetXRatio, shape.offsetYRatio],
   };
@@ -25,7 +25,7 @@ export function regularPrismProportions(shape: RegularPrismShape): PrismProporti
  */
 export function trianglePrismProportions(shape: TrianglePrismShape): PrismProportions {
   return {
-    base: triangleVertices(1, shape.baseSideRatio, shape.baseAngleDeg),
+    base: baseVertices(shape),
     height: shape.heightRatio,
     offset: [shape.offsetXRatio, shape.offsetYRatio],
   };
@@ -37,7 +37,7 @@ export function trianglePrismProportions(shape: TrianglePrismShape): PrismPropor
  */
 export function trapezoidPrismProportions(shape: TrapezoidPrismShape): PrismProportions {
   return {
-    base: trapezoidVertices(1, shape.parallelSideRatio, shape.baseHeightRatio, shape.baseShiftRatio),
+    base: baseVertices(shape),
     height: shape.heightRatio,
     offset: [shape.offsetXRatio, shape.offsetYRatio],
   };

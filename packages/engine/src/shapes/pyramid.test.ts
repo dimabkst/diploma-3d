@@ -21,7 +21,7 @@ import {
   vertexAt,
 } from '../mesh.ts';
 import { generateModel } from '../model.ts';
-import { pyramidParameters } from './pyramid.ts';
+import { pyramidShapeProportions } from './pyramid.ts';
 import { regularBaseDimensionsMm } from './regular-base.ts';
 
 let kernel: GeometryKernel;
@@ -130,7 +130,7 @@ describe('generateModel for a regular pyramid', () => {
     const a = 80 / Math.max(...unitBaseExtents[sides], heightRatio);
     const h = heightRatio * a;
     const reference = pyramidReference(sides, a, h);
-    const dimensions = regularBaseDimensionsMm(pyramidParameters({ kind: 'pyramid', baseSides: sides, heightRatio }), scale);
+    const dimensions = regularBaseDimensionsMm({ baseSides: sides, heightRatio }, scale);
     expectRelativelyClose(dimensions.edge, a);
     expectRelativelyClose(dimensions.height, h);
 
@@ -239,7 +239,10 @@ describe('generateModel for a regular tetrahedron', () => {
   });
 
   it('is the regular triangular pyramid with h/a = √(2/3) at full precision', () => {
-    expect(pyramidParameters({ kind: 'tetrahedron' })).toEqual({ baseSides: 3, heightRatio: TETRAHEDRON_HEIGHT_RATIO });
+    const proportions = pyramidShapeProportions({ kind: 'tetrahedron' });
+    expect(proportions.base).toHaveLength(3);
+    expect(proportions.height).toBe(TETRAHEDRON_HEIGHT_RATIO);
+    expect(proportions.apex).toEqual([0, 0]);
     expect(onlySolid(tetrahedron).mesh).toEqual(onlySolid(pyramid(3, TETRAHEDRON_HEIGHT_RATIO)).mesh);
     // The nearest control steps give visibly different solids.
     for (const stepped of [0.75, 1]) {

@@ -1,9 +1,10 @@
 import type { PhysicalScale } from '@diploma-3d/schema';
-import type { Manifold, Mat4 } from 'manifold-3d';
+import type { Manifold } from 'manifold-3d';
 import type { GeometryKernel } from '../kernel.ts';
 import { cross, length, type Vec3 } from '../mesh.ts';
 import type { Track } from '../scope.ts';
 import { baseContours, polygonSize, signedPolygonArea, type Vec2 } from './polygon.ts';
+import { shearMatrix } from './shear.ts';
 
 /**
  * A prism over any base polygon, before scaling: the base in z = 0 with a0 = 1, counter-clockwise seen from +Z, the
@@ -80,19 +81,10 @@ export function prismDimensionsMm(prism: PrismProportions, scale: PhysicalScale)
   };
 }
 
-/**
- * The shear x' = x + (dx0/h0)·z, y' = y + (dy0/h0)·z, z' = z as manifold-3d's column-major 4 × 4 matrix: elements 8
- * and 9 are rows 0 and 1 of the third (z) column. It keeps z = 0 fixed, moves z = h0 by (dx0, dy0) and every horizontal
- * section in proportion to its height, and has determinant 1, so it preserves volume and orientation.
- */
-export function shearMatrix({ height, offset: [dx, dy] }: PrismProportions): Mat4 {
-  return [1, 0, 0, 0, 0, 1, 0, 0, dx / height, dy / height, 1, 0, 0, 0, 0, 1];
-}
-
 /** The unscaled prism: the right prism extruded from the base, sheared when the upper base is displaced. */
 export function buildUnscaledPrism(kernel: GeometryKernel, track: Track, prism: PrismProportions): Manifold {
   const right = track(kernel.Manifold.extrude(baseContours(prism.base), prism.height));
-  return isOblique(prism) ? track(right.transform(shearMatrix(prism))) : right;
+  return isOblique(prism) ? track(right.transform(shearMatrix(prism.height, prism.offset))) : right;
 }
 
 /**

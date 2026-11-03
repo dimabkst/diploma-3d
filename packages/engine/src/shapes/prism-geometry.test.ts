@@ -38,10 +38,10 @@ import {
   prismBoundingSize,
   prismDimensionsMm,
   prismScaleMm,
-  shearMatrix,
 } from './prism-geometry.ts';
 import { regularBaseDimensionsMm } from './regular-base.ts';
 import { regularPolygonVertices } from './regular-polygon.ts';
+import { shearMatrix } from './shear.ts';
 
 let kernel: GeometryKernel;
 
@@ -125,7 +125,7 @@ function faceAreas(mesh: TriangleMesh): { bottom: number; top: number; lateral: 
 describe('shearMatrix and the installed manifold-3d transform', () => {
   it('stores the shear in the z column of the column-major matrix', () => {
     const prism: PrismProportions = { base: regularPolygonVertices(4), height: 2, offset: [1, -0.5] };
-    expect(shearMatrix(prism)).toEqual([1, 0, 0, 0, 0, 1, 0, 0, 0.5, -0.25, 1, 0, 0, 0, 0, 1]);
+    expect(shearMatrix(prism.height, prism.offset)).toEqual([1, 0, 0, 0, 0, 1, 0, 0, 0.5, -0.25, 1, 0, 0, 0, 0, 1]);
   });
 
   it('keeps the lower base, translates the upper base by the offset and every section in proportion to its height', () => {

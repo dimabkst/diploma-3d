@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { baseAngleSchema } from './base-angle.ts';
+import { trapezoidFields, twoSidesAndAngleFields } from './base.ts';
 import { prismOffsetFields } from './offset.ts';
 import { ratioSchema } from './ratio.ts';
 
@@ -10,17 +10,6 @@ export type PrismBaseSides = (typeof PRISM_BASE_SIDES)[number];
 export const PRISM_BASE_TYPES = ['regular', 'triangle', 'trapezoid'] as const;
 
 export type PrismBaseType = (typeof PRISM_BASE_TYPES)[number];
-
-/** The configurable triangle's defaults: b = a and α = 60°, an equilateral triangle. */
-export const DEFAULT_TRIANGLE_BASE = { baseSideRatio: 1, baseAngleDeg: 60 } as const;
-
-// Practical application limits for the trapezoid's shift δ/a of side b relative to side a.
-export const BASE_SHIFT_LIMITS = { min: -2, max: 2 } as const;
-
-export const baseShiftSchema = z.number().min(BASE_SHIFT_LIMITS.min).max(BASE_SHIFT_LIMITS.max);
-
-/** The configurable trapezoid's defaults: b = a/2 and t = a/2, with side b centred over side a. */
-export const DEFAULT_TRAPEZOID_BASE = { parallelSideRatio: 0.5, baseHeightRatio: 0.5, baseShiftRatio: 0 } as const;
 
 /**
  * Prism over a regular polygon with `baseSides` edges of length a. The base type defaults to "regular", so
@@ -38,23 +27,16 @@ export const regularPrismShapeSchema = z.strictObject({
 export const trianglePrismShapeSchema = z.strictObject({
   kind: z.literal('prism'),
   baseType: z.literal('triangle'),
-  baseSideRatio: ratioSchema,
-  baseAngleDeg: baseAngleSchema,
+  ...twoSidesAndAngleFields,
   heightRatio: ratioSchema,
   ...prismOffsetFields,
 });
 
-/**
- * Prism over a trapezoid with the parallel sides a and b = parallelSideRatio·a at the distance t = baseHeightRatio·a
- * within the base plane, the midpoint of b displaced by δ = baseShiftRatio·a along X from that of a. Either parallel
- * side may be the longer one; b = a gives a parallelogram, and a rectangle when δ = 0.
- */
+/** Prism over a trapezoid; see `trapezoidFields`. */
 export const trapezoidPrismShapeSchema = z.strictObject({
   kind: z.literal('prism'),
   baseType: z.literal('trapezoid'),
-  parallelSideRatio: ratioSchema,
-  baseHeightRatio: ratioSchema,
-  baseShiftRatio: baseShiftSchema,
+  ...trapezoidFields,
   heightRatio: ratioSchema,
   ...prismOffsetFields,
 });
