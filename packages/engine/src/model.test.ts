@@ -314,9 +314,16 @@ describe('releases Manifold objects', () => {
     ['tetrahedron', defaultModelSpecs.tetrahedron, 2],
   ];
   // Built by manifold-3d at their physical size: cylinders and cones in one step, the ball as sphere and translate.
+  const obliqueRound = {
+    cylinder: { shape: { kind: 'cylinder', heightRatio: 1, offsetRatio: 1.5 }, scale: { longestDimensionMm: 80 } },
+    cone: { shape: { kind: 'cone', heightRatio: 0.5, offsetRatio: 3 }, scale: { longestDimensionMm: 80 } },
+  } as const satisfies Record<string, ModelSpecInput>;
   const curvedSolids: readonly (readonly [string, ModelSpecInput, number])[] = [
     ['cylinder', defaultModelSpecs.cylinder, 1],
     ['cone', defaultModelSpecs.cone, 1],
+    // Oblique: the right solid, then the shear.
+    ['oblique cylinder', obliqueRound.cylinder, 2],
+    ['oblique cone', obliqueRound.cone, 2],
     ['ball', defaultModelSpecs.ball, 2],
   ];
   const solids = [...polyhedra, ...curvedSolids];
@@ -348,6 +355,7 @@ describe('releases Manifold objects', () => {
 
   it.each([
     ['an oblique prism', oblique.prism],
+    ['an oblique cone', obliqueRound.cone],
     ['a pyramid with a displaced apex', pyramids.displaced],
   ])('when the shear of %s throws', (_, spec) => {
     const { created, prototype } = trackCreatedManifolds();

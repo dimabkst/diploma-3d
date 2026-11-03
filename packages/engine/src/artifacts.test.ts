@@ -381,6 +381,57 @@ describe('buildModelArtifacts', () => {
     });
   });
 
+  describe('for the oblique cylinder and cone', () => {
+    // Cylinder h/r = d/r = 1: the box is 3r × 2r × r, so r = h = d = 80/3 mm. Cone h/r = 1, d/r = 3: the apex widens
+    // the box to 4r, so r = h = 20 mm and the apex is at (60, 0, 20) mm.
+    const cylinder: ModelSpecInput = {
+      shape: { kind: 'cylinder', heightRatio: 1, offsetRatio: 1 },
+      scale: { longestDimensionMm: 80 },
+    };
+    const cone: ModelSpecInput = { shape: { kind: 'cone', heightRatio: 1, offsetRatio: 3 }, scale: { longestDimensionMm: 80 } };
+    const polygonBase = (r: number) => (64 * r ** 2 * Math.sin((2 * Math.PI) / 64)) / 2;
+
+    it.each([
+      ['cylinder', cylinder, [-80 / 3, -80 / 3, 0], [160 / 3, 80 / 3, 80 / 3], polygonBase(80 / 3) * (80 / 3)],
+      ['cone', cone, [-20, -20, 0], [60, 20, 20], (polygonBase(20) * 20) / 3],
+    ] as const)(
+      'exports the oblique %s in millimetres with its sheared bounds and volume',
+      async (kind, spec, min, max, volume) => {
+        const { printFile } = await buildModelArtifacts(kernel, spec);
+        const { model } = readThreeMf(printFile.bytes);
+        expect(printFile.fileName).toBe(`${kind}.3mf`);
+        expect(model.unit).toBe('millimeter');
+        const mesh = model.objects[0]?.mesh;
+        if (mesh === undefined) throw new Error('No exported mesh');
+        expect(findMeshDefects(mesh)).toEqual([]);
+        const measurements = measureMesh(mesh);
+        min.forEach((value, axis) => {
+          expect(measurements.bounds.min[axis]).toBeCloseTo(value, 4);
+        });
+        max.forEach((value, axis) => {
+          expect(measurements.bounds.max[axis]).toBeCloseTo(value, 4);
+        });
+        expect(measurements.volume / volume).toBeCloseTo(1, 6);
+      },
+    );
+
+    it('previews the cone apex at glTF (60, 20, 0) mm, in metres', async () => {
+      const { previewGlb } = await buildModelArtifacts(kernel, cone);
+      const positions = await previewSurfacePositions(previewGlb);
+      const points = Array.from(
+        { length: positions.getCount() },
+        (_, index) => positions.getElement(index, []) as unknown as Vec3,
+      );
+      const apex = points.filter((point) => point[1] > 1e-6);
+      expect(apex.length).toBeGreaterThan(0);
+      for (const point of apex) {
+        expect(point[0]).toBeCloseTo(0.06, METRE_DIGITS);
+        expect(point[1]).toBeCloseTo(0.02, METRE_DIGITS);
+        expect(point[2]).toBeCloseTo(0, METRE_DIGITS);
+      }
+    });
+  });
+
   describe('for the default ball', () => {
     it('exports ball.3mf as one closed 80 mm object in millimetres resting on the build plate', async () => {
       const { printFile } = await buildModelArtifacts(kernel, defaultModelSpecs.ball);
@@ -604,6 +655,11 @@ describe('buildModelArtifacts', () => {
     ['tetrahedron', { shape: { kind: 'tetrahedron', heightRatio: 1 }, scale: { longestDimensionMm: 80 } }],
     ['cylinder', { shape: { kind: 'cylinder', heightRatio: 0 }, scale: { longestDimensionMm: 80 } }],
     ['cone', { shape: { kind: 'cone', heightRatio: Number.NaN }, scale: { longestDimensionMm: 80 } }],
+    [
+      'cylinder displaced too far',
+      { shape: { kind: 'cylinder', heightRatio: 1, offsetRatio: 4.5 }, scale: { longestDimensionMm: 80 } },
+    ],
+    ['cone displaced backwards', { shape: { kind: 'cone', heightRatio: 1, offsetRatio: -1 }, scale: { longestDimensionMm: 80 } }],
     ['ball', { shape: { kind: 'ball', radius: 40 }, scale: { longestDimensionMm: 80 } }],
   ] as const)('produces no %s artifacts for invalid input', async (_, invalid) => {
     await expect(buildModelArtifacts(kernel, invalid as unknown as ModelSpecInput)).rejects.toBeInstanceOf(InvalidModelSpecError);

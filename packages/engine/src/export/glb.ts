@@ -24,6 +24,12 @@ export interface PreviewObject {
    * stay the exported ones; only the display normals change. Polyhedra keep flat faces.
    */
   readonly smoothShading?: boolean;
+  /**
+   * For a smooth solid made by shearing a right one, x' = x + kx·z, y' = y + ky·z: the normals are smoothed, and the
+   * feature edges found, on the right solid, where a cap meets the side at 90° or more however far the solid leans,
+   * and are then mapped to the sheared surface by the inverse transpose of the shear.
+   */
+  readonly smoothingShear?: readonly [number, number];
 }
 
 export const GLB_MEDIA_TYPE = 'model/gltf-binary';
@@ -87,7 +93,9 @@ export async function createPreviewGlb(objects: readonly PreviewObject[]): Promi
   for (const object of objects) {
     assertValidSolidMesh(object.mesh);
     const smooth = object.smoothShading ?? false;
-    const { positions, normals } = shadedTriangles(object.mesh, smooth);
+    const shear = smooth ? object.smoothingShear : undefined;
+    const rightMesh = shear === undefined ? object.mesh : unshear(object.mesh, shear);
+    const { positions, normals } = shadedTriangles(object.mesh, rightMesh, smooth, shear);
     const surface = document
       .createPrimitive()
       .setMode(TRIANGLES)
@@ -96,7 +104,11 @@ export async function createPreviewGlb(objects: readonly PreviewObject[]): Promi
       .setMaterial(surfaceMaterial);
     const mesh = document.createMesh(object.name).addPrimitive(surface);
 
-    const edgePositions = featureEdgeSegments(object.mesh, smooth ? FEATURE_EDGE_MIN_COSINE : POLYHEDRON_EDGE_MIN_COSINE);
+    const edgePositions = featureEdgeSegments(
+      object.mesh,
+      rightMesh,
+      smooth ? FEATURE_EDGE_MIN_COSINE : POLYHEDRON_EDGE_MIN_COSINE,
+    );
     if (edgePositions.length > 0) {
       mesh.addPrimitive(
         document
@@ -113,25 +125,48 @@ export async function createPreviewGlb(objects: readonly PreviewObject[]): Promi
   return (await new WebIO().writeBinary(document)) as Uint8Array<ArrayBuffer>;
 }
 
+/** The right solid before the shear x' = x + kx·z, y' = y + ky·z: the same triangles with x − kx·z, y − ky·z. */
+function unshear(mesh: TriangleMesh, [kx, ky]: readonly [number, number]): TriangleMesh {
+  const positions = Float32Array.from(mesh.positions);
+  for (let index = 0; index < positions.length; index += 3) {
+    const z = positions[index + 2] as number;
+    positions[index] = (positions[index] as number) - kx * z;
+    positions[index + 1] = (positions[index + 1] as number) - ky * z;
+  }
+  return { positions, triangles: mesh.triangles };
+}
+
+/**
+ * A normal of the right solid mapped to the sheared one: normals transform by the inverse transpose of the shear,
+ * (nx, ny, nz) ↦ (nx, ny, nz − kx·nx − ky·ny), which stays perpendicular to every sheared tangent.
+ */
+function shearNormal(normal: Vec3, [kx, ky]: readonly [number, number]): Vec3 {
+  const mapped: Vec3 = [normal[0], normal[1], normal[2] - kx * normal[0] - ky * normal[1]];
+  return scale(mapped, 1 / length(mapped));
+}
+
 /**
  * Unshared vertices per triangle, so that each corner has its own normal. Flat shading uses the face normal. Smooth
  * shading averages, weighted by their angles at the vertex, the normals of the faces around the vertex that lie within
  * the feature-edge angle of this face: the facets of a curved side blend, while a rim between the side and a flat cap
  * stays sharp. At a cone's apex each side triangle thus gets a normal close to its own instead of the axis direction.
+ * For a sheared solid this happens on `rightMesh`, the solid before the shear, and the result is mapped back.
  */
 function shadedTriangles(
   mesh: TriangleMesh,
+  rightMesh: TriangleMesh,
   smooth: boolean,
+  shear: readonly [number, number] | undefined,
 ): { positions: Float32Array<ArrayBuffer>; normals: Float32Array<ArrayBuffer> } {
-  const faceNormals = Array.from({ length: triangleCount(mesh) }, (_, triangle) => unitNormal(mesh, triangle));
+  const faceNormals = Array.from({ length: triangleCount(mesh) }, (_, triangle) => unitNormal(rightMesh, triangle));
   const cornersOfVertex = new Map<number, { triangle: number; angle: number }[]>();
   if (smooth) {
     for (let triangle = 0; triangle < triangleCount(mesh); triangle += 1) {
       const corners = triangleAt(mesh, triangle);
       corners.forEach((vertex, corner) => {
-        const at = vertexAt(mesh, vertex);
-        const toNext = subtract(vertexAt(mesh, corners[(corner + 1) % 3] as number), at);
-        const toPrevious = subtract(vertexAt(mesh, corners[(corner + 2) % 3] as number), at);
+        const at = vertexAt(rightMesh, vertex);
+        const toNext = subtract(vertexAt(rightMesh, corners[(corner + 1) % 3] as number), at);
+        const toPrevious = subtract(vertexAt(rightMesh, corners[(corner + 2) % 3] as number), at);
         const angle = Math.acos(Math.max(-1, Math.min(1, dot(toNext, toPrevious) / (length(toNext) * length(toPrevious)))));
         const list = cornersOfVertex.get(vertex) ?? [];
         list.push({ triangle, angle });
@@ -155,6 +190,7 @@ function shadedTriangles(
         }
         normal = scale(sum, 1 / length(sum));
       }
+      if (shear !== undefined) normal = shearNormal(normal, shear);
       const offset = triangle * 9 + corner * 3;
       positions.set(toGltfPosition(vertexAt(mesh, vertex)), offset);
       normals.set(toGltfDirection(normal), offset);
@@ -165,9 +201,10 @@ function shadedTriangles(
 
 /**
  * Feature edges, lifted off the surface. Each vertex gets one offset shared by all its edges, so that the lines stay
- * connected at corners; offsetting every edge along its own normal bisector would leave gaps there.
+ * connected at corners; offsetting every edge along its own normal bisector would leave gaps there. The edges are
+ * found by the angle between faces of `rightMesh`, the solid before any shear, and lifted along the faces of `mesh`.
  */
-function featureEdgeSegments(mesh: TriangleMesh, minCosine: number): Float32Array<ArrayBuffer> {
+function featureEdgeSegments(mesh: TriangleMesh, rightMesh: TriangleMesh, minCosine: number): Float32Array<ArrayBuffer> {
   const firstTriangleOfEdge = new Map<string, number>();
   const edges: [number, number][] = [];
   const adjacentNormals = new Map<number, Vec3[]>();
@@ -181,7 +218,7 @@ function featureEdgeSegments(mesh: TriangleMesh, minCosine: number): Float32Arra
       const neighbour = firstTriangleOfEdge.get(key);
       if (neighbour === undefined) {
         firstTriangleOfEdge.set(key, triangle);
-      } else if (dot(unitNormal(mesh, triangle), unitNormal(mesh, neighbour)) < minCosine) {
+      } else if (dot(unitNormal(rightMesh, triangle), unitNormal(rightMesh, neighbour)) < minCosine) {
         edges.push([from, to]);
         for (const vertex of [from, to]) {
           const normals = adjacentNormals.get(vertex) ?? [];

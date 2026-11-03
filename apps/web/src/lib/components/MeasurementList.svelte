@@ -11,7 +11,15 @@ const widest = $derived(items.reduce((longest, item) => (item.widest.length > lo
   {#each items as item (item.label)}
     <div class="measurement">
       <dt>{item.label}</dt>
-      <dd data-widest={widest}><span class="value">{item.value}</span></dd>
+      <!-- No whitespace between the parts: it would become part of the value's text. -->
+      <dd data-approximate={item.approximate}
+        ><span class="placeholder" data-widest={widest} aria-hidden="true"
+          >{#if item.approximate !== undefined}<span class="approximate"></span>{/if}</span
+        ><span class="value"
+          >{#if item.approximate !== undefined}<span class={['approximate', { shown: item.approximate }]}></span
+            >{/if}{item.value}</span
+        ></dd
+      >
     </div>
   {/each}
 </dl>
@@ -39,7 +47,8 @@ const widest = $derived(items.reduce((longest, item) => (item.widest.length > lo
   }
 
   /* The value and an invisible copy of the widest possible value share one cell, so the column width and therefore
-     the row heights do not depend on the current value. */
+     the row heights do not depend on the current value. The copy's text is generated content, so that it stays out of
+     the value's text. */
   dd {
     display: grid;
     justify-items: end;
@@ -51,14 +60,32 @@ const widest = $derived(items.reduce((longest, item) => (item.widest.length > lo
     white-space: nowrap;
   }
 
-  dd::before {
-    content: attr(data-widest);
+  .placeholder {
     visibility: hidden;
   }
 
-  dd::before,
+  .placeholder::after {
+    content: attr(data-widest);
+  }
+
+  .placeholder,
   .value {
     grid-area: 1 / 1;
+  }
+
+  /* A value that may be approximate keeps room for the "≈" mark before it, shown or not, and so does its invisible
+     copy: the width never changes. The mark is generated content in both, so that it takes exactly the same width, and
+     stays out of the value's text; screen readers announce it when it is shown. */
+  .approximate {
+    visibility: hidden;
+  }
+
+  .approximate::before {
+    content: "≈\00a0";
+  }
+
+  .value .approximate.shown {
+    visibility: visible;
   }
 
   /* Decided by the available width only: below it every value moves under its label. */

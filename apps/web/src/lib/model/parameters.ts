@@ -20,7 +20,9 @@ import {
   type PyramidBaseSides,
   type PyramidBaseType,
   RATIO_LIMITS,
+  ROUND_OFFSET_LIMITS,
   ratioSchema,
+  roundOffsetSchema,
   type ShapeKind,
 } from '@diploma-3d/schema';
 import { formatDecimal, halfSumDecimal, parseDecimal } from '../decimal.ts';
@@ -53,7 +55,9 @@ export type ParameterKey =
   | 'pyramidTrapezoidHeightRatio'
   | 'pyramidTrapezoidShiftRatio'
   | 'cylinderHeightRatio'
-  | 'coneHeightRatio';
+  | 'cylinderOffsetRatio'
+  | 'coneHeightRatio'
+  | 'coneOffsetRatio';
 
 /** Raw field text, kept separately from parsed values so that empty and partially typed input stays editable. */
 export type ParameterTexts = Record<ParameterKey, string>;
@@ -106,7 +110,9 @@ export const initialParameterTexts = (): ParameterTexts => ({
   pyramidTrapezoidHeightRatio: formatDecimal(DEFAULT_TRAPEZOID_BASE.baseHeightRatio),
   pyramidTrapezoidShiftRatio: formatDecimal(DEFAULT_TRAPEZOID_BASE.baseShiftRatio),
   cylinderHeightRatio: formatDecimal(defaultModelSpecs.cylinder.shape.heightRatio),
+  cylinderOffsetRatio: formatDecimal(defaultModelSpecs.cylinder.shape.offsetRatio),
   coneHeightRatio: formatDecimal(defaultModelSpecs.cone.shape.heightRatio),
+  coneOffsetRatio: formatDecimal(defaultModelSpecs.cone.shape.offsetRatio),
 });
 
 export const initialParameterChoices = (): ParameterChoices => ({
@@ -145,6 +151,9 @@ export const validateShift = (text: string): Validation => validateNumber(text, 
 
 export const validateApex = (text: string): Validation => validateNumber(text, apexRatioSchema, APEX_LIMITS, '-0,5');
 
+export const validateRoundOffset = (text: string): Validation =>
+  validateNumber(text, roundOffsetSchema, ROUND_OFFSET_LIMITS, '0,5');
+
 const validators: Readonly<Record<ParameterKey, (text: string) => Validation>> = {
   cuboidWidthRatio: validateRatio,
   cuboidHeightRatio: validateRatio,
@@ -172,7 +181,9 @@ const validators: Readonly<Record<ParameterKey, (text: string) => Validation>> =
   pyramidTrapezoidHeightRatio: validateRatio,
   pyramidTrapezoidShiftRatio: validateShift,
   cylinderHeightRatio: validateRatio,
+  cylinderOffsetRatio: validateRoundOffset,
   coneHeightRatio: validateRatio,
+  coneOffsetRatio: validateRoundOffset,
 };
 
 function validateFields(
@@ -241,11 +252,16 @@ export function resolveModelRequest(kind: ShapeKind, texts: ParameterTexts, choi
       return resolvePyramidRequest(texts, choices);
     case 'cylinder':
     case 'cone': {
-      const key = kind === 'cylinder' ? 'cylinderHeightRatio' : 'coneHeightRatio';
-      const { values, errors } = validateFields([key], texts);
-      const heightRatio = values[key];
-      if (heightRatio === undefined) return { scale, values, errors, spec: undefined, key: undefined };
-      return withKey({ shape: { kind, heightRatio }, scale }, values);
+      const [heightKey, offsetKey] =
+        kind === 'cylinder'
+          ? (['cylinderHeightRatio', 'cylinderOffsetRatio'] as const)
+          : (['coneHeightRatio', 'coneOffsetRatio'] as const);
+      const { values, errors } = validateFields([heightKey, offsetKey], texts);
+      const [heightRatio, offsetRatio] = [values[heightKey], values[offsetKey]];
+      if (heightRatio === undefined || offsetRatio === undefined) {
+        return { scale, values, errors, spec: undefined, key: undefined };
+      }
+      return withKey({ shape: { kind, heightRatio, offsetRatio }, scale }, values);
     }
   }
 }

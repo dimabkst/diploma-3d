@@ -16,6 +16,7 @@ import {
   PYRAMID_BASE_SIDES,
   PYRAMID_BASE_TYPES,
   RATIO_LIMITS,
+  ROUND_OFFSET_LIMITS,
   TETRAHEDRON_HEIGHT_RATIO,
 } from './index.ts';
 
@@ -559,18 +560,19 @@ describe('regular tetrahedron', () => {
   });
 });
 
-describe('right circular cylinder and cone parameters', () => {
+describe('circular cylinder and cone parameters', () => {
   const { min, max } = RATIO_LIMITS;
   const round = (kind: string, heightRatio: unknown) => ({ shape: { kind, heightRatio }, scale });
 
   it.each(['cylinder', 'cone'] as const)('defaults the %s to h/r = 2', (kind) => {
-    expect(modelSpecSchema.parse(defaultModelSpecs[kind])).toEqual({ shape: { kind, heightRatio: 2 }, scale });
+    expect(modelSpecSchema.parse(defaultModelSpecs[kind])).toEqual({ shape: { kind, heightRatio: 2, offsetRatio: 0 }, scale });
   });
 
   it.each(['cylinder', 'cone'].flatMap((kind) => [min, 1.1, 2.05, max].map((heightRatio) => [kind, heightRatio] as const)))(
     'accepts a %s with h/r = %s, including the boundaries and values off the 0,25 grid',
     (kind, heightRatio) => {
-      expect(modelSpecSchema.parse(round(kind, heightRatio)).shape).toEqual({ kind, heightRatio });
+      // Without a displacement the solid keeps its earlier meaning: a right cylinder or cone.
+      expect(modelSpecSchema.parse(round(kind, heightRatio)).shape).toEqual({ kind, heightRatio, offsetRatio: 0 });
     },
   );
 
@@ -584,8 +586,36 @@ describe('right circular cylinder and cone parameters', () => {
     expect(modelSpecSchema.safeParse(round(kind, ratio)).success).toBe(false);
   });
 
+  it.each(
+    ['cylinder', 'cone'].flatMap((kind) =>
+      [ROUND_OFFSET_LIMITS.min, 0.25, 1.1, ROUND_OFFSET_LIMITS.max].map((offsetRatio) => [kind, offsetRatio] as const),
+    ),
+  )('accepts a %s with d/r = %s, including the boundaries and off-step values', (kind, offsetRatio) => {
+    expect(modelSpecSchema.parse({ shape: { kind, heightRatio: 1, offsetRatio }, scale }).shape).toEqual({
+      kind,
+      heightRatio: 1,
+      offsetRatio,
+    });
+  });
+
+  it.each(
+    ['cylinder', 'cone'].flatMap((kind) =>
+      [
+        ['negative', -0.25],
+        ['just above the maximum', ROUND_OFFSET_LIMITS.max + 1e-9],
+        ['NaN', Number.NaN],
+        ['infinite', Number.POSITIVE_INFINITY],
+        ['a numeric string', '1'],
+        ['null', null],
+      ].map(([label, offset]) => [kind, label, offset] as const),
+    ),
+  )('rejects a %s whose displacement is %s', (kind, _, offsetRatio) => {
+    expect(ROUND_OFFSET_LIMITS).toEqual({ min: 0, max: 4 });
+    expect(modelSpecSchema.safeParse({ shape: { kind, heightRatio: 1, offsetRatio }, scale }).success).toBe(false);
+  });
+
   it.each(['cylinder', 'cone'])('rejects a %s with a base, a top radius, a resolution or absolute dimensions', (kind) => {
-    for (const extra of [{ baseSides: 4 }, { topRatio: 0.5 }, { segments: 32 }, { radius: 40 }]) {
+    for (const extra of [{ baseSides: 4 }, { topRatio: 0.5 }, { segments: 32 }, { radius: 40 }, { offsetYRatio: 1 }]) {
       expect(modelSpecSchema.safeParse({ shape: { kind, heightRatio: 2, ...extra }, scale }).success).toBe(false);
     }
   });

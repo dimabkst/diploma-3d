@@ -26,6 +26,7 @@ import {
   PYRAMID_BASE_TYPES,
   type PyramidBaseType,
   RATIO_LIMITS,
+  ROUND_OFFSET_LIMITS,
   type Shape,
   type ShapeKind,
 } from '@diploma-3d/schema';
@@ -42,6 +43,8 @@ export type MeasurementItem = {
   readonly value: string;
   /** The widest text the value can take for the current scale; it reserves width so that the layout never shifts. */
   readonly widest: string;
+  /** Whether the value is approximate and marked "≈"; undefined for values that never are. */
+  readonly approximate?: boolean | undefined;
 };
 
 /**
@@ -73,7 +76,7 @@ export type OffsetGroup = {
   readonly key: string;
   readonly legend: string;
   readonly description: string;
-  readonly fields: readonly [x: NumericField, y: NumericField];
+  readonly fields: readonly [NumericField, ...NumericField[]];
   readonly resetLabel: string;
   /** The status line for both values zero and otherwise, such as "пряма призма" and "похила призма". */
   readonly status: { readonly centred: string; readonly moved: string };
@@ -150,9 +153,16 @@ export function shapeDescription(kind: ShapeKind, scale: PhysicalScale): string 
       );
     }
     case 'cylinder':
-      return `Прямий круговий циліндр: основи — рівні круги, твірні перпендикулярні до них. ${idealRoundNote}`;
+      return (
+        'Круговий циліндр: основи — рівні круги в паралельних площинах. Без зміщення циліндр прямий і твірні ' +
+        'перпендикулярні до основ; зі зміщенням верхньої основи він похилий, а твірна l довша за висоту h. ' +
+        idealRoundNote
+      );
     case 'cone':
-      return `Прямий круговий конус: основа — круг, вершина лежить точно над її центром. ${idealRoundNote}`;
+      return (
+        'Круговий конус: основа — круг, а твірні сполучають вершину з точками кола. Без зміщення вершина лежить над ' +
+        `центром основи і конус прямий; зі зміщенням він похилий, і твірні мають різну довжину. ${idealRoundNote}`
+      );
     case 'ball':
       return (
         'Суцільна куля, обмежена сферою: усі точки поверхні рівновіддалені від центра. ' +
@@ -193,6 +203,25 @@ const offsetHint =
 const apexHint =
   'Координати відлічуються від центра мас основи: X — уздовж сторони основи a, Y — перпендикулярно до неї в площині ' +
   'основи. Висота h завжди перпендикулярна до цієї площини. Вершина може лежати й над ребром, над вершиною основи чи поза нею.';
+
+const roundTiltHint =
+  'Зміщення відкладається вздовж осі X у площині основи; в іншому напрямку вийшло б те саме тіло, лише повернуте ' +
+  'навколо вертикальної осі. Висота h лишається перпендикуляром до площини основи.';
+
+/** The displacement of a cylinder's upper base or a cone's apex, with a reset to the right solid. */
+const roundTiltGroup = (
+  key: 'cylinderOffsetRatio' | 'coneOffsetRatio',
+  label: string,
+  status: OffsetGroup['status'],
+): OffsetGroup => ({
+  type: 'offset',
+  key: `${key}-group`,
+  legend: 'Нахил',
+  description: roundTiltHint,
+  fields: [{ type: 'number', key, label, suffix: '× r', range: { ...ROUND_OFFSET_LIMITS, increment: 0.25 } }],
+  resetLabel: 'Прибрати нахил',
+  status,
+});
 
 const idealRoundNote =
   'Розміри нижче — для ідеального тіла; у файлі друку коло наближено многокутником, ' +
@@ -363,8 +392,17 @@ const shapeParameters: Readonly<Record<Exclude<ShapeKind, 'prism' | 'pyramid'>, 
   // Fixed proportions: nothing to adjust.
   tetrahedron: [],
   ball: [],
-  cylinder: [{ type: 'number', key: 'cylinderHeightRatio', label: 'Висота h', suffix: '× r', range: ratioRange }],
-  cone: [{ type: 'number', key: 'coneHeightRatio', label: 'Висота h', suffix: '× r', range: ratioRange }],
+  cylinder: [
+    { type: 'number', key: 'cylinderHeightRatio', label: 'Висота h', suffix: '× r', range: ratioRange },
+    roundTiltGroup('cylinderOffsetRatio', 'Зміщення верхньої основи', {
+      centred: 'прямий циліндр',
+      moved: 'похилий циліндр',
+    }),
+  ],
+  cone: [
+    { type: 'number', key: 'coneHeightRatio', label: 'Висота h', suffix: '× r', range: ratioRange },
+    roundTiltGroup('coneOffsetRatio', 'Зміщення вершини', { centred: 'прямий конус', moved: 'похилий конус' }),
+  ],
 };
 
 export function parameterHint(kind: ShapeKind, scale: PhysicalScale, choices: ParameterChoices): string | undefined {
@@ -413,8 +451,10 @@ export function parameterHint(kind: ShapeKind, scale: PhysicalScale, choices: Pa
     case 'cylinder':
     case 'cone':
       return (
-        'Висоту h задано відносно радіуса основи r. ' +
-        `Більший із діаметра та висоти завжди дорівнює ${formatLength(scale)}, тому зміна множника може змінити і радіус, і висоту.`
+        'Висоту h і зміщення задано відносно радіуса основи r; h — перпендикуляр до площини основи, тож у похилого тіла ' +
+        `твірна довша за h. Найбільший габаритний вимір моделі завжди ${formatLength(scale)}; зміщення розширює габарит, ` +
+        'тож за тих самих множників модель меншає. Площу бічної поверхні похилого тіла обчислено чисельним ' +
+        'інтегруванням з похибкою, значно меншою за 0,1 мм², тому площу поверхні позначено «≈».'
       );
   }
 }
@@ -526,19 +566,30 @@ export function measurementItems(
     case 'cylinder':
     case 'cone': {
       const ideal = shape?.kind === 'cylinder' || shape?.kind === 'cone' ? roundSolidMeasurements(shape, scale) : undefined;
-      // The cone's slant height reaches √(L² + (L/2)²) for h = L and r = L/2.
-      const slantHeight = {
-        label: 'Твірна l',
-        value: formatQuantity(ideal?.slantHeight, 'мм'),
-        widest: widestQuantity((length * Math.sqrt(5)) / 2, 'мм'),
-      };
+      // A generatrix lies in the bounding box, so it is at most its diagonal √3·L.
+      const generatrices = ideal === undefined ? undefined : [ideal.generatrix.min, ideal.generatrix.max];
+      const generatrix =
+        kind === 'cylinder'
+          ? {
+              label: 'Твірна l',
+              value: formatQuantity(ideal?.generatrix.min, 'мм'),
+              widest: widestQuantity(Math.sqrt(3) * length, 'мм'),
+            }
+          : { label: 'Твірні', value: formatRange(generatrices, 'мм'), widest: widestRange(Math.sqrt(3) * length, 'мм') };
+
       return [
         { label: 'Радіус r', ...edge(ideal?.radius) },
         { label: 'Діаметр d', ...edge(ideal?.diameter) },
         { label: 'Висота h', ...edge(ideal?.height) },
-        ...(kind === 'cone' ? [slantHeight] : []),
+        generatrix,
         { label: 'Площа основи', value: formatQuantity(ideal?.baseArea, 'мм²'), widest: widestQuantity(length ** 2, 'мм²') },
-        { label: 'Площа поверхні', ...area, value: formatQuantity(ideal?.surfaceArea, 'мм²') },
+        // An integrated area is marked "≈".
+        {
+          label: 'Площа поверхні',
+          ...area,
+          value: formatQuantity(ideal?.surfaceArea, 'мм²'),
+          approximate: ideal?.lateralAreaIntegrated ?? false,
+        },
         { label: 'Об’єм', ...volume, value: formatQuantity(ideal?.volume, 'мм³') },
       ];
     }

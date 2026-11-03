@@ -45,7 +45,14 @@ export {
   type RegularPyramidShape,
 } from './pyramid.ts';
 export { RATIO_LIMITS, ratioSchema } from './ratio.ts';
-export { type ConeShape, type CylinderShape, coneShapeSchema, cylinderShapeSchema } from './round.ts';
+export {
+  type ConeShape,
+  type CylinderShape,
+  coneShapeSchema,
+  cylinderShapeSchema,
+  ROUND_OFFSET_LIMITS,
+  roundOffsetSchema,
+} from './round.ts';
 export {
   DEFAULT_LONGEST_DIMENSION_MM,
   MAX_LONGEST_DIMENSION_MM,

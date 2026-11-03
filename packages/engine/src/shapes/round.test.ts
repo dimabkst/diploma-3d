@@ -71,7 +71,7 @@ describe('round solid dimensions', () => {
     [2.05, 80 / 2.05, 80],
   ])('h/r = %s gives r = %s mm and h = %s mm', (heightRatio, r, h) => {
     for (const kind of KINDS) {
-      const { radius, height } = roundDimensionsMm({ kind, heightRatio }, scale());
+      const { radius, height } = roundDimensionsMm({ kind, heightRatio, offsetRatio: 0 }, scale());
       expectRelativelyClose(radius, r);
       expectRelativelyClose(height, h);
       expectRelativelyClose(Math.max(2 * radius, height), 80);
@@ -105,8 +105,11 @@ describe('circularSegments', () => {
 
 describe('roundSolidMeasurements', () => {
   it('gives the ideal cylinder: S = 2πr² + 2πrh and V = πr²h', () => {
-    const m = roundSolidMeasurements({ kind: 'cylinder', heightRatio: 2 }, scale());
-    expect(m).toMatchObject({ radius: 40, diameter: 80, height: 80, slantHeight: undefined });
+    const m = roundSolidMeasurements({ kind: 'cylinder', heightRatio: 2, offsetRatio: 0 }, scale());
+    expect(m).toMatchObject({ radius: 40, diameter: 80, height: 80, offset: 0, lateralAreaIntegrated: false });
+    // A right cylinder's generatrix is its height.
+    expect(m.generatrix).toEqual({ min: 80, max: 80 });
+    expect(m.lateralArea).toBeCloseTo(6400 * Math.PI, 9);
     expect(m.baseArea).toBeCloseTo(1600 * Math.PI, 9);
     expect(m.surfaceArea).toBeCloseTo(3200 * Math.PI + 6400 * Math.PI, 9);
     expect(m.volume).toBeCloseTo(128_000 * Math.PI, 9);
@@ -116,9 +119,11 @@ describe('roundSolidMeasurements', () => {
   });
 
   it('gives the ideal cone: l = √(h² + r²), S = πr² + πrl and V = πr²h / 3', () => {
-    const m = roundSolidMeasurements({ kind: 'cone', heightRatio: 2 }, scale());
-    expect(m).toMatchObject({ radius: 40, diameter: 80, height: 80 });
-    expect(m.slantHeight).toBeCloseTo(Math.sqrt(8000), 9);
+    const m = roundSolidMeasurements({ kind: 'cone', heightRatio: 2, offsetRatio: 0 }, scale());
+    expect(m).toMatchObject({ radius: 40, diameter: 80, height: 80, lateralAreaIntegrated: false });
+    // All generatrices of a right cone are equal.
+    expect(m.generatrix.min).toBeCloseTo(Math.sqrt(8000), 9);
+    expect(m.generatrix.max).toBe(m.generatrix.min);
     expect(m.baseArea).toBeCloseTo(1600 * Math.PI, 9);
     expect(m.surfaceArea).toBeCloseTo(1600 * Math.PI + 40 * Math.PI * Math.sqrt(8000), 9);
     expect(m.volume).toBeCloseTo((128_000 * Math.PI) / 3, 9);
@@ -128,9 +133,9 @@ describe('roundSolidMeasurements', () => {
   });
 
   it('follows the physical dimensions of other ratios', () => {
-    const m = roundSolidMeasurements({ kind: 'cone', heightRatio: 4 }, scale());
+    const m = roundSolidMeasurements({ kind: 'cone', heightRatio: 4, offsetRatio: 0 }, scale());
     expect(m).toMatchObject({ radius: 20, diameter: 40, height: 80 });
-    expect(m.slantHeight).toBeCloseTo(Math.hypot(80, 20), 9);
+    expect(m.generatrix.max).toBeCloseTo(Math.hypot(80, 20), 9);
     expect(m.volume).toBeCloseTo((Math.PI * 400 * 80) / 3, 9);
   });
 });
@@ -140,7 +145,7 @@ describe('generateModel for a cylinder and a cone', () => {
 
   it.each(cases)('builds a closed, outward %s with h/r = %s at its physical size', (kind, heightRatio) => {
     const { mesh, measurements, smoothShading } = onlySolid(spec(kind, heightRatio));
-    const { radius: r, height: h } = roundDimensionsMm({ kind, heightRatio }, scale());
+    const { radius: r, height: h } = roundDimensionsMm({ kind, heightRatio, offsetRatio: 0 }, scale());
     const segments = CIRCULAR_SEGMENTS;
     expect(smoothShading).toBe(true);
 
@@ -194,7 +199,7 @@ describe('generateModel for a cylinder and a cone', () => {
     // The mesh is the inscribed polygonal solid, so its volume is the polygon's, slightly below the ideal πr²·h.
     const base = polygonArea(segments, r);
     expectRelativelyClose(measurements.volume, kind === 'cylinder' ? base * h : (base * h) / 3);
-    expect(measurements.volume).toBeLessThan(roundSolidMeasurements({ kind, heightRatio }, scale()).volume);
+    expect(measurements.volume).toBeLessThan(roundSolidMeasurements({ kind, heightRatio, offsetRatio: 0 }, scale()).volume);
   });
 
   it.each(KINDS)('refines the %s at a larger export size to stay within 0,05 mm of the circle', (kind) => {

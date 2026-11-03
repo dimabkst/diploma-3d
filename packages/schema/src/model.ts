@@ -53,7 +53,7 @@ export const defaultModelSpecs = {
     scale: defaultScale,
   },
   tetrahedron: { shape: { kind: 'tetrahedron' }, scale: defaultScale },
-  cylinder: { shape: { kind: 'cylinder', heightRatio: 2 }, scale: defaultScale },
-  cone: { shape: { kind: 'cone', heightRatio: 2 }, scale: defaultScale },
+  cylinder: { shape: { kind: 'cylinder', heightRatio: 2, offsetRatio: 0 }, scale: defaultScale },
+  cone: { shape: { kind: 'cone', heightRatio: 2, offsetRatio: 0 }, scale: defaultScale },
   ball: { shape: { kind: 'ball' }, scale: defaultScale },
 } as const satisfies { readonly [Kind in ShapeKind]: ModelSpec & { shape: { kind: Kind } } };

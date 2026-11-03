@@ -51,12 +51,14 @@ test('cylinder: h/r drives the ideal measurements, the preview and the downloade
 
   // Default h = 2r: r = 40 mm and h = 80 mm.
   await expect(heightRatio(page)).toHaveValue('2');
-  await expect(page.getByText('× r', { exact: true })).toBeVisible();
+  // Both the height and the displacement are given in multiples of r.
+  await expect(page.getByText('× r', { exact: true })).toHaveCount(2);
   await expectPreviewOf(page, summary('cylinder', 2));
   await expect(page.getByRole('term')).toHaveText([
     'Радіус r',
     'Діаметр d',
     'Висота h',
+    'Твірна l',
     'Площа основи',
     'Площа поверхні',
     'Об’єм',
@@ -107,13 +109,14 @@ test('cone: h/r drives the slant height, the preview and the downloaded 3MF', as
     'Радіус r',
     'Діаметр d',
     'Висота h',
-    'Твірна l',
+    'Твірні',
     'Площа основи',
     'Площа поверхні',
     'Об’єм',
   ]);
   // l = √(80² + 40²) ≈ 89,4; πr² + πrl ≈ 16 266,3; πr²h / 3 ≈ 134 041,3.
-  await expect(measurementValue(page, 'Твірна l')).toHaveText('89,4 мм');
+  // A right cone: all generatrices are equal, √(80² + 40²) ≈ 89,4 mm.
+  await expect(measurementValue(page, 'Твірні')).toHaveText('89,4 мм');
   await expect(measurementValue(page, 'Площа поверхні')).toHaveText('16 266,3 мм²');
   await expect(measurementValue(page, 'Об’єм')).toHaveText('134 041,3 мм³');
   await expectDownloaded(page, 'cone', 2);

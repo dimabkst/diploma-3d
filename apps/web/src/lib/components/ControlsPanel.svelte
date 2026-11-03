@@ -54,9 +54,9 @@ const hintId = $derived(parameterHint === undefined ? undefined : 'parameter-hin
 
 /** Centred when both values are zero, moved otherwise; undefined while either is not valid. */
 function offsetState(group: OffsetGroup): 'centred' | 'moved' | undefined {
-  const [x, y] = group.fields.map((field) => values[field.key]);
-  if (x === undefined || y === undefined) return undefined;
-  return x === 0 && y === 0 ? 'centred' : 'moved';
+  const positions = group.fields.map((field) => values[field.key]);
+  if (positions.some((value) => value === undefined)) return undefined;
+  return positions.every((value) => value === 0) ? 'centred' : 'moved';
 }
 
 function resetOffset(group: OffsetGroup) {

@@ -9,6 +9,7 @@ import {
   validateApex,
   validateOffset,
   validateRatio,
+  validateRoundOffset,
 } from './parameters.ts';
 
 const texts = (overrides: Partial<ParameterTexts>): ParameterTexts => ({ ...initialParameterTexts(), ...overrides });
@@ -118,7 +119,9 @@ describe('resolveModelRequest', () => {
       pyramidTrapezoidHeightRatio: '0,5',
       pyramidTrapezoidShiftRatio: '0',
       cylinderHeightRatio: '2',
+      cylinderOffsetRatio: '0',
       coneHeightRatio: '2',
+      coneOffsetRatio: '0',
     });
     expect(initialParameterChoices()).toEqual({
       prismBaseType: 'regular',
@@ -342,10 +345,14 @@ describe('resolveModelRequest', () => {
   it.each(['cylinder', 'cone'] as const)('builds the %s from its own h/r, including precise typed values', (kind) => {
     const key = kind === 'cylinder' ? 'cylinderHeightRatio' : 'coneHeightRatio';
     expect(resolveModelRequest(kind, initialParameterTexts(), triangle).spec).toEqual({
-      shape: { kind, heightRatio: 2 },
+      shape: { kind, heightRatio: 2, offsetRatio: 0 },
       scale: { longestDimensionMm: 80 },
     });
-    expect(resolveModelRequest(kind, texts({ [key]: '2.05' }), triangle).spec?.shape).toEqual({ kind, heightRatio: 2.05 });
+    expect(resolveModelRequest(kind, texts({ [key]: '2.05' }), triangle).spec?.shape).toEqual({
+      kind,
+      heightRatio: 2.05,
+      offsetRatio: 0,
+    });
     const invalid = resolveModelRequest(kind, texts({ [key]: '4,5' }), triangle);
     expect(invalid.spec).toBeUndefined();
     expect(invalid.errors).toEqual({ [key]: 'Допустимі значення — від 0,25 до 4.' });
@@ -353,9 +360,39 @@ describe('resolveModelRequest', () => {
 
   it('keeps the cylinder and cone ratios apart', () => {
     const mixed = texts({ cylinderHeightRatio: '1,1', coneHeightRatio: '' });
-    expect(resolveModelRequest('cylinder', mixed, triangle).spec?.shape).toEqual({ kind: 'cylinder', heightRatio: 1.1 });
+    expect(resolveModelRequest('cylinder', mixed, triangle).spec?.shape).toEqual({
+      kind: 'cylinder',
+      heightRatio: 1.1,
+      offsetRatio: 0,
+    });
     expect(resolveModelRequest('cone', mixed, triangle).errors).toEqual({ coneHeightRatio: 'Введіть значення.' });
   });
+
+  it.each([
+    ['cylinder', 'cylinderOffsetRatio', 'cylinderHeightRatio'],
+    ['cone', 'coneOffsetRatio', 'coneHeightRatio'],
+  ] as const)(
+    'displaces the %s by its own d/r, keeping its height, and validates the range [0, 4]',
+    (kind, offsetKey, heightKey) => {
+      const typed = resolveModelRequest(kind, texts({ [offsetKey]: '1.35', [heightKey]: '0,5' }), triangle);
+      expect(typed.spec?.shape).toEqual({ kind, heightRatio: 0.5, offsetRatio: 1.35 });
+      expect(resolveModelRequest(kind, texts({ [offsetKey]: '4' }), triangle).spec?.shape).toMatchObject({ offsetRatio: 4 });
+      for (const [text, error] of [
+        ['-0,25', 'Допустимі значення — від 0 до 4.'],
+        ['4,25', 'Допустимі значення — від 0 до 4.'],
+        ['', 'Введіть значення.'],
+        ['abc', 'Введіть число, наприклад 0,5.'],
+      ] as const) {
+        const invalid = resolveModelRequest(kind, texts({ [offsetKey]: text }), triangle);
+        expect(invalid.spec).toBeUndefined();
+        expect(invalid.errors).toEqual({ [offsetKey]: error });
+        expect(validateRoundOffset(text)).toEqual({ error });
+      }
+      // The other round solid keeps its own, still zero, displacement.
+      const other = kind === 'cylinder' ? 'cone' : 'cylinder';
+      expect(resolveModelRequest(other, texts({ [offsetKey]: '2' }), triangle).spec?.shape).toMatchObject({ offsetRatio: 0 });
+    },
+  );
 
   it('starts the parallelepiped with b = a, h = a and α = 60°', () => {
     expect(resolveModelRequest('parallelepiped', initialParameterTexts(), triangle).spec).toEqual({

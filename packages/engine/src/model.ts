@@ -16,7 +16,7 @@ import { buildUnitBox } from './shapes/box.ts';
 import { buildParallelepiped } from './shapes/parallelepiped.ts';
 import { buildPrismShape } from './shapes/prism.ts';
 import { buildPyramidShape } from './shapes/pyramid.ts';
-import { buildRoundSolid } from './shapes/round.ts';
+import { buildRoundSolid, roundShear } from './shapes/round.ts';
 
 export interface Solid {
   /** ASCII identifier, also used as the object name in exported files. */
@@ -25,6 +25,11 @@ export interface Solid {
   readonly measurements: MeshMeasurements;
   /** Display hint: the solid approximates curved surfaces, which the preview shades smoothly. */
   readonly smoothShading: boolean;
+  /**
+   * Display hint for a smooth solid made by shearing a right one, x' = x + kx·z, y' = y + ky·z: the preview smooths
+   * its normals on the right solid and maps them through the shear. Absent for solids that were not sheared.
+   */
+  readonly smoothingShear?: readonly [number, number];
 }
 
 export interface GeneratedModel {
@@ -54,8 +59,16 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
   assertValidSolidMesh(mesh);
 
   const name = modelName(spec.shape);
-  const smoothShading = spec.shape.kind === 'cylinder' || spec.shape.kind === 'cone' || spec.shape.kind === 'ball';
-  return { kind: spec.shape.kind, name, spec, solids: [{ name, mesh, measurements: measureMesh(mesh), smoothShading }] };
+  const { shape } = spec;
+  const round = shape.kind === 'cylinder' || shape.kind === 'cone';
+  const solid: Solid = {
+    name,
+    mesh,
+    measurements: measureMesh(mesh),
+    smoothShading: round || shape.kind === 'ball',
+    ...(round && shape.offsetRatio !== 0 ? { smoothingShear: roundShear(shape) } : {}),
+  };
+  return { kind: shape.kind, name, spec, solids: [solid] };
 }
 
 /**

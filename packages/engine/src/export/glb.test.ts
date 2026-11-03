@@ -276,6 +276,59 @@ describe('createPreviewGlb shading', () => {
     expect(edgeSegments).toBe(12);
   });
 
+  it.each([
+    ['a leaning cylinder', { kind: 'cylinder', heightRatio: 1, offsetRatio: 1 }],
+    ['a strongly leaning cylinder', { kind: 'cylinder', heightRatio: 0.25, offsetRatio: 4 }],
+  ] as const)('shades %s along the sheared surface normals, with flat caps and only the rims outlined', async (_, shape) => {
+    const { positions, normals, faces, edgeSegments } = await shadedCorners({ shape, scale: { longestDimensionMm: 80 } });
+    const k = shape.offsetRatio / shape.heightRatio;
+    let sideCorners = 0;
+    let shallowestSide = 0;
+    positions.forEach((position, corner) => {
+      const normal = normals[corner] as Vec3;
+      const face = faces[Math.floor(corner / 3)] as Vec3;
+      expect(Math.hypot(...normal)).toBeCloseTo(1, 6);
+      // Every normal faces the same way as its triangle.
+      expect(dot(normal, face)).toBeGreaterThan(0);
+      if (Math.abs(face[1]) > 1 - 1e-9) {
+        // Caps (glTF ±Y): exactly the cap normal.
+        expect(normal[1]).toBeCloseTo(face[1], 9);
+        return;
+      }
+      sideCorners += 1;
+      if (face[1] < 0) shallowestSide = Math.max(shallowestSide, -face[1]);
+      // Back to Z-up millimetres; before the shear the corner lies at the angle θ on the circle, and the surface normal
+      // there, (cos θ, sin θ, 0) mapped by the inverse transpose of the shear, is (cos θ, sin θ, −k·cos θ).
+      const [x, y, z] = [position[0] * 1000, -position[2] * 1000, position[1] * 1000];
+      const theta = Math.atan2(y, x - k * z);
+      const analytic: Vec3 = [Math.cos(theta), Math.sin(theta), -k * Math.cos(theta)];
+      const gltf: Vec3 = [analytic[0], analytic[2], -analytic[1]];
+      expect(dot(normal, gltf) / Math.hypot(...gltf)).toBeGreaterThan(0.99999);
+    });
+    expect(sideCorners).toBe(64 * 2 * 3);
+    // Only the two 64-segment rims, even where the leaning side meets the base at well under 30°.
+    expect(edgeSegments).toBe(128);
+    if (k > 1) expect(shallowestSide).toBeGreaterThan(Math.cos((30 * Math.PI) / 180));
+  });
+
+  it('shades an oblique cone with its apex outside the base with finite normals and a sharp base rim', async () => {
+    const shape = { kind: 'cone', heightRatio: 0.5, offsetRatio: 4 } as const;
+    const { positions, normals, faces, edgeSegments } = await shadedCorners({ shape, scale: { longestDimensionMm: 80 } });
+    const apexHeight = Math.max(...positions.map((position) => position[1]));
+    let apexCorners = 0;
+    positions.forEach((position, corner) => {
+      const normal = normals[corner] as Vec3;
+      const face = faces[Math.floor(corner / 3)] as Vec3;
+      expect(normal.every(Number.isFinite)).toBe(true);
+      expect(Math.hypot(...normal)).toBeCloseTo(1, 6);
+      expect(dot(normal, face)).toBeGreaterThan(0);
+      if (face[1] < -1 + 1e-9) expect(normal[1]).toBeCloseTo(-1, 9);
+      if (position[1] === apexHeight) apexCorners += 1;
+    });
+    expect(apexCorners).toBe(64);
+    expect(edgeSegments).toBe(64);
+  });
+
   it('keeps exactly flat normals for polyhedra and when smooth shading is off', async () => {
     for (const [spec, smoothShading] of [
       [{ shape: { kind: 'prism', baseSides: 8, heightRatio: 0.25 }, scale: { longestDimensionMm: 80 } }, undefined],
