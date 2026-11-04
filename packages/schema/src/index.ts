@@ -66,7 +66,9 @@ export {
 } from './round.ts';
 export {
   DEFAULT_LONGEST_DIMENSION_MM,
+  longestDimensionSchema,
   MAX_LONGEST_DIMENSION_MM,
+  MIN_LONGEST_DIMENSION_MM,
   type PhysicalScale,
   physicalScaleSchema,
 } from './scale.ts';

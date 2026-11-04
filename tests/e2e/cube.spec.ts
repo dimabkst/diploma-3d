@@ -34,7 +34,7 @@ test('cube: selection, interactive preview and a valid 80 mm 3MF download', asyn
   // The dimensions describe the exported mesh, not the view: rotating and zooming leave them unchanged.
   await expect(dimensionsLine(page)).toHaveText('Габарити: 80 × 80 × 80 мм');
   // A fixed solid needs no groups: one line instead of parameters or a measurements table.
-  await expect(page.getByText('Усі ребра рівні, грані — квадрати. Параметрів немає.')).toBeVisible();
+  await expect(page.getByText('Усі ребра рівні, грані — квадрати. Пропорції фіксовані.')).toBeVisible();
   await expect(page.locator('details')).toHaveCount(0);
   await expect(page.getByRole('slider')).toHaveCount(0);
 

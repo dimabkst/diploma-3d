@@ -32,12 +32,17 @@ let {
   choices = $bindable(),
   values,
   errors,
+  canReset,
+  onreset,
 }: {
   panel: ShapePanel;
   texts: ParameterTexts;
   choices: ParameterChoices;
   values: ParameterValues;
   errors: ParameterErrors;
+  /** Whether "Скинути параметри фігури" would change anything, an invalid draft of the shape's fields included. */
+  canReset: boolean;
+  onreset: () => void;
 } = $props();
 
 // Per group, across shapes: a group keeps its open state and its fields keep their values while collapsed.
@@ -48,8 +53,8 @@ const hasError = (section: Section) => sectionNumberFields(section).some((field)
 
 /** Opens the group of the field, which may have been collapsed after the error appeared, and moves focus to it. */
 export async function focusField(key: ParameterKey): Promise<void> {
-  if (panel.type !== 'parameters') return;
-  const owner = panel.sections.find((section) => sectionNumberFields(section).some((field) => field.key === key));
+  const sections = panel.type === 'parameters' ? panel.sections : [];
+  const owner = sections.find((section) => sectionNumberFields(section).some((field) => field.key === key));
   if (owner !== undefined) openSections[owner.key] = true;
   await tick();
   document.getElementById(key)?.focus();
@@ -97,13 +102,20 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
 
 <aside class="controls-panel" aria-label="Налаштування моделі">
   <div class="controls-scroll">
+  <!-- Stays in view while the form scrolls, so the reset is one click away at any field. -->
+  <div class="panel-header">
+    <h2 class="panel-title">Параметри фігури</h2>
+    <!-- Solids with fixed proportions have nothing of their own to reset; the shared print size is never reset. -->
+    {#if panel.type === 'parameters'}
+      <Button variant="secondary" disabled={!canReset} aria-label="Скинути параметри фігури" onclick={onreset}>
+        Скинути
+      </Button>
+    {/if}
+  </div>
   {#if panel.type === 'fixed'}
     <p class="note">{panel.note}</p>
   {:else}
-    <div class="panel-header">
-      <h2 class="panel-title">Параметри</h2>
-      <HelpToggle id="reference-help" help={panel.help} />
-    </div>
+    <HelpToggle id="reference-help" help={panel.help} />
     <div class="sections">
       {#each panel.sections as section (section.key)}
         {@const offset = offsetOf(section)}
@@ -196,16 +208,27 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
 
   .note {
     margin: 0;
+    padding-block: var(--space-4) var(--space-2);
+    border-top: 1px solid var(--color-border);
     color: var(--color-text-muted);
     font-size: var(--text-small);
     line-height: 1.5;
   }
 
   .panel-header {
-    display: grid;
-    gap: var(--space-1);
-    padding-bottom: var(--space-2);
+    position: sticky;
+    z-index: 1;
+    top: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2) var(--space-3);
+    padding-block: var(--space-2);
+    background: var(--color-surface);
   }
+
+
 
   .panel-title {
     margin: 0;

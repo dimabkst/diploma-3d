@@ -4,19 +4,28 @@ import { untrack } from 'svelte';
 import AppHeader from './lib/components/AppHeader.svelte';
 import Button from './lib/components/Button.svelte';
 import ControlsPanel from './lib/components/ControlsPanel.svelte';
+import NumberField from './lib/components/NumberField.svelte';
 import PreviewPanel from './lib/components/PreviewPanel.svelte';
 import Select from './lib/components/Select.svelte';
 import { saveFile } from './lib/download.ts';
 import { buildModel } from './lib/model/buildModel.ts';
 import { describeModelError, type ModelState, visibleArtifacts } from './lib/model/modelState.ts';
-import { initialParameterChoices, initialParameterTexts, resolveModelRequest } from './lib/model/parameters.ts';
-import { isAvailableShape, sectionNumberFields, shapeLabel, shapeOptions, shapePanel } from './lib/shapes.ts';
+import {
+  canResetShapeParameters,
+  initialParameterChoices,
+  initialParameterTexts,
+  resetShapeParameters,
+  resolveModelRequest,
+} from './lib/model/parameters.ts';
+import { loadPrintSizeText, savePrintSize } from './lib/model/printSize.ts';
+import { isAvailableShape, printSizeField, sectionNumberFields, shapeLabel, shapeOptions, shapePanel } from './lib/shapes.ts';
 
 // Parameter edits are coalesced briefly so that typing "1,75" does not rebuild the model for every keystroke.
 const EDIT_DEBOUNCE_MS = 150;
 
 let selectedShape = $state<string>('cube');
-let parameterTexts = $state(initialParameterTexts());
+// The print size is the only setting remembered between visits.
+let parameterTexts = $state({ ...initialParameterTexts(), ...withStoredPrintSize() });
 let parameterChoices = $state(initialParameterChoices());
 let attempt = $state(0);
 // Raw state: the artifacts hold large typed arrays that must not be wrapped in deep reactive proxies.
@@ -34,13 +43,35 @@ const panel = $derived(
   selectedKind === undefined ? { type: 'fixed' as const, note: '' } : shapePanel(selectedKind, parameterChoices),
 );
 const invalidFields = $derived(
-  panel.type === 'fixed'
-    ? []
-    : panel.sections
-        .flatMap(sectionNumberFields)
-        .filter((field) => request?.errors[field.key] !== undefined)
-        .map(({ key, label }) => ({ key, label })),
+  [printSizeField, ...(panel.type === 'fixed' ? [] : panel.sections.flatMap(sectionNumberFields))]
+    .filter((field) => request?.errors[field.key] !== undefined)
+    .map(({ key, label }) => ({ key, label })),
 );
+const canReset = $derived(
+  selectedKind !== undefined && canResetShapeParameters(selectedKind, { texts: parameterTexts, choices: parameterChoices }),
+);
+
+function withStoredPrintSize() {
+  const stored = loadPrintSizeText();
+  return stored === undefined ? {} : { printSizeMm: stored };
+}
+
+// Only a valid size is remembered; a draft being typed, or an invalid one, leaves the stored value as it was.
+$effect(() => {
+  const size = request?.values.printSizeMm;
+  if (size !== undefined) savePrintSize(size);
+});
+
+/**
+ * Restores the selected shape's initial parameters. Its drafts and their errors go with the texts; the shared print
+ * size, other shapes' values and the viewing direction stay.
+ */
+function resetParameters() {
+  if (selectedKind === undefined) return;
+  const reset = resetShapeParameters(selectedKind, { texts: parameterTexts, choices: parameterChoices });
+  parameterTexts = reset.texts;
+  parameterChoices = reset.choices;
+}
 
 let latestRequest = 0;
 
@@ -98,9 +129,25 @@ function downloadPrintFile() {
       <label for="shape">Геометричне тіло</label>
       <Select id="shape" bind:value={selectedShape} options={shapeOptions} />
     </div>
-    <Button disabled={model.status !== 'ready'} loading={model.status === 'generating'} onclick={downloadPrintFile}>
-      Завантажити 3MF
-    </Button>
+    <!-- The print size belongs to the export, not to one shape: it is shared by all and kept between visits. -->
+    <div class="export-controls">
+      <NumberField
+        id={printSizeField.key}
+        label={printSizeField.label}
+        bind:text={parameterTexts.printSizeMm}
+        value={request?.values.printSizeMm}
+        range={printSizeField.range}
+        suffix={printSizeField.suffix}
+        error={request?.errors.printSizeMm}
+        variant="entry"
+      />
+      <Button disabled={model.status !== 'ready'} loading={model.status === 'generating'} onclick={downloadPrintFile}>
+        {#snippet leadingIcon()}
+          <svg class="download-icon" viewBox="0 0 16 16"><path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10" /></svg>
+        {/snippet}
+        Завантажити 3MF
+      </Button>
+    </div>
   </AppHeader>
 
   <main class="workspace">
@@ -112,6 +159,8 @@ function downloadPrintFile() {
         bind:choices={parameterChoices}
         values={request?.values ?? {}}
         errors={request?.errors ?? {}}
+        {canReset}
+        onreset={resetParameters}
       />
     </div>
     <div class="preview-area">
@@ -174,6 +223,34 @@ function downloadPrintFile() {
     min-width: 0;
   }
 
+  /*
+   * The size and the download stay together and wrap below the shape picker where the header is narrow. On the
+   * desktop workspace a size error is lifted out of the flow, so that it does not make the header, and with it the
+   * workspace below, move.
+   */
+  .export-controls {
+    --field-error-position: absolute;
+    --field-error-width: max-content;
+    --field-error-padding: var(--space-2) var(--space-3);
+    --field-error-background: var(--color-surface-raised);
+    --field-error-border: 1px solid var(--color-border-strong);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3) var(--space-4);
+    min-width: 0;
+  }
+
+  .download-icon {
+    width: 100%;
+    height: 100%;
+    fill: none;
+    stroke: currentcolor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.75;
+  }
+
   .shape-picker label {
     flex: none;
     color: var(--color-text-muted);
@@ -198,6 +275,15 @@ function downloadPrintFile() {
       /* The page scrolls; the controls grow with their content. */
       --controls-overflow-y: visible;
       --preview-viewport-height: clamp(260px, 55vh, 480px);
+    }
+
+    /* The page scrolls anyway: the message takes its place in the flow under the field. */
+    .export-controls {
+      --field-error-position: static;
+      --field-error-width: auto;
+      --field-error-padding: 0;
+      --field-error-background: transparent;
+      --field-error-border: 0;
     }
   }
 

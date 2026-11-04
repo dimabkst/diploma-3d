@@ -24,7 +24,7 @@ const solids = [
   {
     kind: 'octahedron',
     label: 'Октаедр',
-    note: '8 граней — рівносторонні трикутники; модель лежить на грані. Параметрів немає.',
+    note: '8 граней — рівносторонні трикутники; модель лежить на грані. Пропорції фіксовані.',
     box: [1, 2 / Math.sqrt(3), Math.sqrt(2 / 3)],
     area: 2 * Math.sqrt(3),
     volume: Math.SQRT2 / 3,
@@ -32,7 +32,7 @@ const solids = [
   {
     kind: 'icosahedron',
     label: 'Ікосаедр',
-    note: '20 граней — рівносторонні трикутники; модель лежить на грані. Параметрів немає.',
+    note: '20 граней — рівносторонні трикутники; модель лежить на грані. Пропорції фіксовані.',
     box: [PHI, (2 * PHI) / Math.sqrt(3), PHI ** 2 / Math.sqrt(3)],
     area: 5 * Math.sqrt(3),
     volume: (5 * (3 + Math.sqrt(5))) / 12,
@@ -40,7 +40,7 @@ const solids = [
   {
     kind: 'dodecahedron',
     label: 'Додекаедр',
-    note: '12 граней — правильні п’ятикутники; модель лежить на грані. Параметрів немає.',
+    note: '12 граней — правильні п’ятикутники; модель лежить на грані. Пропорції фіксовані.',
     box: [PHI ** 2, 2 * TAN_54, Math.sqrt((25 + 11 * Math.sqrt(5)) / 10)],
     area: 3 * Math.sqrt(25 + 10 * Math.sqrt(5)),
     volume: (15 + 7 * Math.sqrt(5)) / 4,
@@ -63,11 +63,13 @@ for (const solid of solids) {
     await page.goto('/');
     await shapeSelect(page).selectOption({ label: solid.label });
 
-    // Fixed proportions: one line, no groups, fields or measurements table.
+    // Fixed proportions: one line, no groups or measurements table.
     await expect(page.getByText(solid.note)).toBeVisible();
     await expect(page.locator('details')).toHaveCount(0);
     await expect(page.getByRole('slider')).toHaveCount(0);
-    await expect(page.getByRole('textbox')).toHaveCount(0);
+    // The print size is the only field, shared by every solid.
+    await expect(page.getByRole('textbox')).toHaveCount(1);
+    await expect(page.getByLabel('Найбільший габарит', { exact: true })).toHaveValue('80');
     await expect(page.getByRole('term')).toHaveCount(0);
     await expectPreviewOf(page, summary(solid));
 

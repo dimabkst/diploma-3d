@@ -1,13 +1,19 @@
 import { describe, expect, it } from 'vitest';
+import { shapePanel } from '../shapes.ts';
 import {
   alignedTrapezoidShift,
+  canResetShapeParameters,
   initialParameterChoices,
   initialParameterTexts,
+  type ParameterState,
   type ParameterTexts,
+  resetShapeParameters,
   resolveModelRequest,
+  shapeParameterKeys,
   validateAngle,
   validateApex,
   validateOffset,
+  validatePrintSize,
   validateRatio,
   validateRoundOffset,
 } from './parameters.ts';
@@ -93,6 +99,7 @@ describe('validateOffset', () => {
 describe('resolveModelRequest', () => {
   it('starts the cuboid at b/a = 1,5 and c/a = 2 and the prism at three sides and h/a = 2, at 80 mm', () => {
     expect(initialParameterTexts()).toEqual({
+      printSizeMm: '80',
       cuboidWidthRatio: '1,5',
       cuboidHeightRatio: '2',
       parallelepipedBaseSideRatio: '1',
@@ -176,7 +183,7 @@ describe('resolveModelRequest', () => {
       cuboidWidthRatio: 'Введіть значення.',
       cuboidHeightRatio: 'Допустимі значення — від 0,25 до 4.',
     });
-    expect(request.values).toEqual({});
+    expect(request.values).toEqual({ printSizeMm: 80 });
 
     const prism = resolveModelRequest('prism', texts({ prismHeightRatio: '4,5' }), triangle);
     expect(prism.spec).toBeUndefined();
@@ -186,16 +193,15 @@ describe('resolveModelRequest', () => {
   it('keeps the validated value of a correct field while the other one is being corrected', () => {
     const partial = resolveModelRequest('cuboid', texts({ cuboidWidthRatio: '1,1', cuboidHeightRatio: '-' }), triangle);
     expect(partial.spec).toBeUndefined();
-    expect(partial.values).toEqual({ cuboidWidthRatio: 1.1 });
+    expect(partial.values).toEqual({ cuboidWidthRatio: 1.1, printSizeMm: 80 });
     expect(partial.errors).toEqual({ cuboidHeightRatio: 'Введіть число, наприклад 1,5.' });
-    expect(partial.scale).toEqual({ longestDimensionMm: 80 });
   });
 
   it('uses the exact typed values between the stepping quarters for the specification', () => {
     const request = resolveModelRequest('cuboid', texts({ cuboidWidthRatio: '2,05', cuboidHeightRatio: '1.1' }), triangle);
-    expect(request.values).toEqual({ cuboidWidthRatio: 2.05, cuboidHeightRatio: 1.1 });
+    expect(request.values).toEqual({ cuboidWidthRatio: 2.05, cuboidHeightRatio: 1.1, printSizeMm: 80 });
     expect(request.spec?.shape).toEqual({ kind: 'cuboid', widthRatio: 2.05, heightRatio: 1.1 });
-    expect(request.scale).toBe(request.spec?.scale);
+    expect(request.spec?.scale).toEqual({ longestDimensionMm: 80 });
     expect(resolveModelRequest('prism', texts({ prismHeightRatio: '1,1' }), triangle).spec?.shape).toEqual({
       kind: 'prism',
       baseType: 'regular',
@@ -216,7 +222,7 @@ describe('resolveModelRequest', () => {
       offsetXRatio: 0,
       offsetYRatio: 0,
     });
-    expect(request.values).toEqual({ prismHeightRatio: 0.75, prismOffsetXRatio: 0, prismOffsetYRatio: 0 });
+    expect(request.values).toEqual({ prismHeightRatio: 0.75, prismOffsetXRatio: 0, prismOffsetYRatio: 0, printSizeMm: 80 });
   });
 
   it('gives equal keys to texts that denote the same model and different keys otherwise', () => {
@@ -335,8 +341,11 @@ describe('resolveModelRequest', () => {
     expect(pyramid.errors).toEqual({ pyramidHeightRatio: 'Введіть значення.' });
   });
 
-  it('builds the tetrahedron without reading any field', () => {
-    const empty = Object.fromEntries(Object.keys(initialParameterTexts()).map((key) => [key, ''])) as ParameterTexts;
+  it('builds the tetrahedron without reading any shape field', () => {
+    const empty = {
+      ...Object.fromEntries(Object.keys(initialParameterTexts()).map((key) => [key, ''])),
+      printSizeMm: '80',
+    } as ParameterTexts;
     const request = resolveModelRequest('tetrahedron', empty, triangle);
     expect(request.spec).toEqual({ shape: { kind: 'tetrahedron' }, scale: { longestDimensionMm: 80 } });
     expect(request.errors).toEqual({});
@@ -419,6 +428,7 @@ describe('resolveModelRequest', () => {
       parallelepipedBaseAngleDeg: 62,
       parallelepipedOffsetXRatio: 0,
       parallelepipedOffsetYRatio: 0,
+      printSizeMm: 80,
     });
     expect(request.spec?.shape).toEqual({
       kind: 'parallelepiped',
@@ -442,6 +452,7 @@ describe('resolveModelRequest', () => {
       parallelepipedHeightRatio: 0.5,
       parallelepipedOffsetXRatio: 0,
       parallelepipedOffsetYRatio: 0,
+      printSizeMm: 80,
     });
     expect(request.errors).toEqual({
       parallelepipedBaseSideRatio: 'Допустимі значення — від 0,25 до 4.',
@@ -623,11 +634,149 @@ describe('resolveModelRequest', () => {
     expect(alignedTrapezoidShift(side, 'centre')).toBe(0);
   });
 
-  it('builds the ball without reading any field', () => {
-    const empty = Object.fromEntries(Object.keys(initialParameterTexts()).map((key) => [key, 'abc'])) as ParameterTexts;
+  it('builds the ball without reading any shape field', () => {
+    const empty = {
+      ...Object.fromEntries(Object.keys(initialParameterTexts()).map((key) => [key, 'abc'])),
+      printSizeMm: '80',
+    } as ParameterTexts;
     const request = resolveModelRequest('ball', empty, triangle);
     expect(request.spec).toEqual({ shape: { kind: 'ball' }, scale: { longestDimensionMm: 80 } });
     expect(request.errors).toEqual({});
-    expect(request.values).toEqual({});
+    expect(request.values).toEqual({ printSizeMm: 80 });
+  });
+});
+
+describe('print size', () => {
+  it.each([
+    ['120', 120],
+    ['1', 1],
+    ['1000', 1000],
+    ['62,5', 62.5],
+    ['80.25', 80.25],
+  ])('accepts %s mm, including the limits', (text, value) => {
+    expect(validatePrintSize(text)).toEqual({ value });
+  });
+
+  it.each([
+    ['', 'Введіть значення.'],
+    ['12,5,', 'Введіть число, наприклад 80.'],
+    ['-', 'Введіть число, наприклад 80.'],
+    ['1e3', 'Введіть число, наприклад 80.'],
+    ['0,5', 'Допустимі значення — від 1 мм до 1000 мм.'],
+    ['0', 'Допустимі значення — від 1 мм до 1000 мм.'],
+    ['1000,5', 'Допустимі значення — від 1 мм до 1000 мм.'],
+  ])('rejects %j with an explanation', (text, error) => {
+    expect(validatePrintSize(text)).toEqual({ error });
+  });
+
+  it.each(['cube', 'cuboid', 'prism', 'pyramid', 'octahedron', 'cylinder', 'cone', 'ball'] as const)(
+    'scales the %s to the typed size, with the shape unchanged',
+    (kind) => {
+      const at80 = resolveModelRequest(kind, initialParameterTexts(), triangle);
+      const at120 = resolveModelRequest(kind, texts({ printSizeMm: '120' }), triangle);
+      expect(at120.spec?.scale).toEqual({ longestDimensionMm: 120 });
+      expect(at120.spec?.shape).toEqual(at80.spec?.shape);
+      expect(at120.key).not.toBe(at80.key);
+    },
+  );
+
+  it('blocks the model, also of a fixed shape, while the size is being typed or invalid', () => {
+    for (const printSizeMm of ['', '-', '2000']) {
+      const request = resolveModelRequest('cube', texts({ printSizeMm }), triangle);
+      expect(request.spec).toBeUndefined();
+      expect(request.key).toBeUndefined();
+      expect(Object.keys(request.errors)).toEqual(['printSizeMm']);
+    }
+    // Shape errors and the size error are reported together.
+    const both = resolveModelRequest('cuboid', texts({ printSizeMm: '0', cuboidWidthRatio: '9' }), triangle);
+    expect(Object.keys(both.errors).sort()).toEqual(['cuboidWidthRatio', 'printSizeMm']);
+  });
+});
+
+describe('resetShapeParameters', () => {
+  const edited: ParameterState = {
+    texts: texts({
+      printSizeMm: '120',
+      prismHeightRatio: '1,1',
+      prismOffsetXRatio: '0,5',
+      prismOffsetYRatio: '-1',
+      prismTriangleSideRatio: '2',
+      prismTriangleAngleDeg: '97,5',
+      prismTrapezoidSideRatio: '3',
+      prismTrapezoidHeightRatio: '0,8',
+      prismTrapezoidShiftRatio: '-0,35',
+      cuboidWidthRatio: '3',
+      pyramidHeightRatio: '2,5',
+      coneOffsetRatio: '1',
+    }),
+    choices: { ...triangle, prismBaseType: 'trapezoid', prismBaseSides: 6, pyramidBaseType: 'parallelogram' },
+  };
+
+  it('returns the prism, with all its base variants, to its initial values and keeps the shared size', () => {
+    const reset = resetShapeParameters('prism', edited);
+    // A default prism at the size that was set: 120 mm.
+    const fresh = resolveModelRequest('prism', texts({ printSizeMm: '120' }), initialParameterChoices());
+    expect(resolveModelRequest('prism', reset.texts, reset.choices).spec).toEqual(fresh.spec);
+    expect(fresh.spec?.scale).toEqual({ longestDimensionMm: 120 });
+    for (const key of shapeParameterKeys.prism.texts) expect(reset.texts[key]).toBe(initialParameterTexts()[key]);
+    expect(reset.texts.printSizeMm).toBe('120');
+    expect(reset.choices.prismBaseType).toBe('regular');
+    expect(reset.choices.prismBaseSides).toBe(3);
+  });
+
+  it('keeps the parameters of every other shape', () => {
+    const reset = resetShapeParameters('prism', edited);
+    expect(reset.texts.cuboidWidthRatio).toBe('3');
+    expect(reset.texts.pyramidHeightRatio).toBe('2,5');
+    expect(reset.texts.coneOffsetRatio).toBe('1');
+    expect(reset.choices.pyramidBaseType).toBe('parallelogram');
+    expect(edited.texts.prismHeightRatio).toBe('1,1');
+  });
+
+  it('clears invalid drafts of the shape, so that one click recovers a valid model at the same size', () => {
+    const broken = { ...edited, texts: { ...edited.texts, prismHeightRatio: '', prismOffsetXRatio: '-' } };
+    expect(resolveModelRequest('prism', broken.texts, broken.choices).spec).toBeUndefined();
+    expect(canResetShapeParameters('prism', broken)).toBe(true);
+    const reset = resetShapeParameters('prism', broken);
+    const request = resolveModelRequest('prism', reset.texts, reset.choices);
+    expect(request.errors).toEqual({});
+    expect(request.spec?.scale).toEqual({ longestDimensionMm: 120 });
+  });
+
+  it('never touches the print size, not even an invalid draft of it', () => {
+    const drafting = { ...edited, texts: { ...edited.texts, printSizeMm: '-' } };
+    expect(resetShapeParameters('prism', drafting).texts.printSizeMm).toBe('-');
+    expect(resetShapeParameters('cube', drafting)).toEqual(drafting);
+  });
+
+  it('is offered only when the shape itself has changed parameters, not for the size alone', () => {
+    const initial = { texts: initialParameterTexts(), choices: initialParameterChoices() };
+    const resized = { ...initial, texts: { ...initial.texts, printSizeMm: '120' } };
+    for (const kind of Object.keys(shapeParameterKeys) as (keyof typeof shapeParameterKeys)[]) {
+      expect(canResetShapeParameters(kind, initial)).toBe(false);
+      expect(canResetShapeParameters(kind, resized)).toBe(false);
+    }
+    expect(canResetShapeParameters('prism', edited)).toBe(true);
+    expect(canResetShapeParameters('prism', resetShapeParameters('prism', edited))).toBe(false);
+    // Another shape's changes do not count: the cuboid's b/a is edited, the cone's offset too.
+    expect(canResetShapeParameters('pyramid', { ...resized, texts: { ...resized.texts, cuboidWidthRatio: '3' } })).toBe(false);
+    // A choice alone counts, and so does the same value written differently: the reset normalises the text.
+    expect(canResetShapeParameters('prism', { ...initial, choices: { ...initial.choices, prismBaseSides: 6 } })).toBe(true);
+    expect(canResetShapeParameters('prism', { ...initial, texts: { ...initial.texts, prismHeightRatio: '2,0' } })).toBe(true);
+  });
+
+  it('gives exactly the solids without parameters of their own a panel without a reset', () => {
+    for (const kind of Object.keys(shapeParameterKeys) as (keyof typeof shapeParameterKeys)[]) {
+      const { texts: keys, choices } = shapeParameterKeys[kind];
+      expect(shapePanel(kind, triangle).type === 'fixed').toBe(keys.length === 0 && choices.length === 0);
+    }
+  });
+
+  it('assigns every shape field to exactly one shape, so that a reset reaches all of them', () => {
+    const owned = Object.values(shapeParameterKeys).flatMap(({ texts: keys }) => keys);
+    expect(new Set(owned).size).toBe(owned.length);
+    expect([...owned, 'printSizeMm'].sort()).toEqual(Object.keys(initialParameterTexts()).sort());
+    const choices = Object.values(shapeParameterKeys).flatMap(({ choices: keys }) => keys);
+    expect(choices.sort()).toEqual(Object.keys(initialParameterChoices()).sort());
   });
 });

@@ -12,6 +12,7 @@ let {
   suffix,
   error,
   describedBy,
+  variant = 'slider',
 }: {
   id: string;
   label: string;
@@ -25,6 +26,8 @@ let {
   error?: string | undefined;
   /** Further descriptions of both the entry and the slider, after the error. */
   describedBy?: string | undefined;
+  /** `entry`: only the compact text entry, for a value typed rather than explored, such as a size in millimetres. */
+  variant?: 'slider' | 'entry';
 } = $props();
 
 const description = $derived(
@@ -100,9 +103,10 @@ function onsliderinput(event: Event & { currentTarget: HTMLInputElement }) {
         aria-invalid={error !== undefined || undefined}
         aria-describedby={description}
       />
-      {#if suffix !== undefined}<span class="suffix" aria-hidden="true">{suffix}</span>{/if}
+      {#if suffix}<span class="suffix" aria-hidden="true">{suffix}</span>{/if}
     </span>
   {/snippet}
+  {#if variant === 'slider'}
   <div class="slider-group">
     <Button
       variant="secondary"
@@ -142,6 +146,7 @@ function onsliderinput(event: Event & { currentTarget: HTMLInputElement }) {
       <span>{formatDecimal(range.max)}</span>
     </span>
   </div>
+  {/if}
 </Field>
 
 <style>

@@ -7,6 +7,11 @@ type Props = Omit<HTMLButtonAttributes, 'class' | 'children'> & {
   /** `icon`: a square button for a single icon; it needs an `aria-label`. */
   size?: 'default' | 'icon';
   loading?: boolean;
+  /**
+   * An icon before the label. A button with an icon keeps a fixed slot for it, where the spinner replaces the icon while
+   * loading, so the button's size never changes between the two states.
+   */
+  leadingIcon?: Snippet | undefined;
   children: Snippet;
 };
 
@@ -16,6 +21,7 @@ let {
   loading = false,
   disabled = false,
   type = 'button',
+  leadingIcon,
   children,
   ...rest
 }: Props = $props();
@@ -28,7 +34,13 @@ let {
   disabled={disabled || loading}
   aria-busy={loading || undefined}
 >
-  {#if loading}<span class="spinner" aria-hidden="true"></span>{/if}
+  {#if leadingIcon !== undefined}
+    <span class="icon-slot" aria-hidden="true">
+      {#if loading}<span class="spinner"></span>{:else}{@render leadingIcon()}{/if}
+    </span>
+  {:else if loading}
+    <span class="spinner" aria-hidden="true"></span>
+  {/if}
   {@render children()}
 </button>
 
@@ -85,6 +97,14 @@ let {
 
   .button[aria-busy="true"] {
     cursor: progress;
+  }
+
+  .icon-slot {
+    display: inline-grid;
+    flex: none;
+    width: 1rem;
+    height: 1rem;
+    place-items: center;
   }
 
   .spinner {

@@ -9,6 +9,7 @@ import {
   DEFAULT_TRIANGLE_BASE,
   defaultModelSpecs,
   MAX_LONGEST_DIMENSION_MM,
+  MIN_LONGEST_DIMENSION_MM,
   modelSpecSchema,
   OFFSET_LIMITS,
   PRISM_BASE_SIDES,
@@ -57,16 +58,21 @@ describe('modelSpecSchema', () => {
     });
   });
 
-  it.each([0.001, 1, 12.5, MAX_LONGEST_DIMENSION_MM])('accepts a longest dimension of %s mm', (longestDimensionMm) => {
-    expect(modelSpecSchema.safeParse(cubeWithLongestDimension(longestDimensionMm)).success).toBe(true);
-  });
-
-  it.each([...invalidNumbers, ['above the maximum', MAX_LONGEST_DIMENSION_MM + 0.001] as const])(
-    'rejects a longest dimension that is %s',
-    (_, longestDimensionMm) => {
-      expect(modelSpecSchema.safeParse(cubeWithLongestDimension(longestDimensionMm)).success).toBe(false);
+  it.each([MIN_LONGEST_DIMENSION_MM, 1.5, 12.5, 120, MAX_LONGEST_DIMENSION_MM])(
+    'accepts a longest dimension of %s mm',
+    (longestDimensionMm) => {
+      expect(modelSpecSchema.safeParse(cubeWithLongestDimension(longestDimensionMm)).success).toBe(true);
     },
   );
+
+  it.each([
+    ...invalidNumbers,
+    ['below the minimum', MIN_LONGEST_DIMENSION_MM - 0.001] as const,
+    ['a fraction of a millimetre', 0.001] as const,
+    ['above the maximum', MAX_LONGEST_DIMENSION_MM + 0.001] as const,
+  ])('rejects a longest dimension that is %s', (_, longestDimensionMm) => {
+    expect(modelSpecSchema.safeParse(cubeWithLongestDimension(longestDimensionMm)).success).toBe(false);
+  });
 
   it('rejects independent cube dimensions because all cube edges are equal by definition', () => {
     const result = modelSpecSchema.safeParse({ shape: { kind: 'cube', width: 1, depth: 2, height: 3 }, scale });

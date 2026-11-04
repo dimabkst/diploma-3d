@@ -5,16 +5,19 @@ import {
   BASE_SHIFT_LIMITS,
   baseAngleSchema,
   baseShiftSchema,
+  DEFAULT_LONGEST_DIMENSION_MM,
   DEFAULT_PARALLELOGRAM_BASE,
   DEFAULT_TRAPEZOID_BASE,
   DEFAULT_TRIANGLE_BASE,
   defaultModelSpecs,
+  longestDimensionSchema,
+  MAX_LONGEST_DIMENSION_MM,
+  MIN_LONGEST_DIMENSION_MM,
   type ModelSpec,
   type ModelSpecInput,
   modelSpecSchema,
   OFFSET_LIMITS,
   offsetRatioSchema,
-  type PhysicalScale,
   type PrismBaseSides,
   type PrismBaseType,
   type PyramidBaseSides,
@@ -27,8 +30,12 @@ import {
 } from '@diploma-3d/schema';
 import { formatDecimal, halfSumDecimal, parseDecimal } from '../decimal.ts';
 
-/** Numeric fields, kept per shape so that switching shapes never carries a value into a different meaning. */
+/**
+ * Numeric fields: the shape ratios, kept per shape so that switching shapes never carries a value into a different
+ * meaning, and the print size, shared by every shape.
+ */
 export type ParameterKey =
+  | 'printSizeMm'
   | 'cuboidWidthRatio'
   | 'cuboidHeightRatio'
   | 'parallelepipedBaseSideRatio'
@@ -78,12 +85,13 @@ export type ParameterErrors = Partial<Record<ParameterKey, string>>;
 export type ParameterValues = Partial<Record<ParameterKey, number>>;
 
 export type ModelRequest = {
-  readonly scale: PhysicalScale;
   readonly values: ParameterValues;
   readonly errors: ParameterErrors;
 } & ({ readonly spec: ModelSpec; readonly key: string } | { readonly spec: undefined; readonly key: undefined });
 
+/** The texts every field starts with, and returns to on reset: the single source of the defaults in the interface. */
 export const initialParameterTexts = (): ParameterTexts => ({
+  printSizeMm: formatDecimal(DEFAULT_LONGEST_DIMENSION_MM),
   cuboidWidthRatio: formatDecimal(defaultModelSpecs.cuboid.shape.widthRatio),
   cuboidHeightRatio: formatDecimal(defaultModelSpecs.cuboid.shape.heightRatio),
   parallelepipedBaseSideRatio: formatDecimal(defaultModelSpecs.parallelepiped.shape.baseSideRatio),
@@ -154,7 +162,17 @@ export const validateApex = (text: string): Validation => validateNumber(text, a
 export const validateRoundOffset = (text: string): Validation =>
   validateNumber(text, roundOffsetSchema, ROUND_OFFSET_LIMITS, '0,5');
 
+export const validatePrintSize = (text: string): Validation =>
+  validateNumber(
+    text,
+    longestDimensionSchema,
+    { min: MIN_LONGEST_DIMENSION_MM, max: MAX_LONGEST_DIMENSION_MM },
+    formatDecimal(DEFAULT_LONGEST_DIMENSION_MM),
+    ' мм',
+  );
+
 const validators: Readonly<Record<ParameterKey, (text: string) => Validation>> = {
+  printSizeMm: validatePrintSize,
   cuboidWidthRatio: validateRatio,
   cuboidHeightRatio: validateRatio,
   parallelepipedBaseSideRatio: validateRatio,
@@ -200,12 +218,34 @@ function validateFields(
   return { values, errors };
 }
 
+type ShapeInput = ModelSpecInput['shape'];
+
+/** The validated fields of a shape, and the shape itself once all of them are valid. */
+type ShapeResolution = {
+  readonly values: ParameterValues;
+  readonly errors: ParameterErrors;
+  readonly shape: ShapeInput | undefined;
+};
+
 /**
  * Turns the selected shape, field texts and choices into a validated specification, or field errors when it is not
- * valid. Only the fields of the selected shape are read.
+ * valid. Only the fields of the selected shape and the shared print size are read; the size scales the shape uniformly.
  */
 export function resolveModelRequest(kind: ShapeKind, texts: ParameterTexts, choices: ParameterChoices): ModelRequest {
-  const { scale } = defaultModelSpecs[kind];
+  const resolved = resolveShape(kind, texts, choices);
+  const values = { ...resolved.values };
+  const errors = { ...resolved.errors };
+  const size = validatePrintSize(texts.printSizeMm);
+  if ('error' in size) errors.printSizeMm = size.error;
+  else values.printSizeMm = size.value;
+  if (resolved.shape === undefined || 'error' in size) return { values, errors, spec: undefined, key: undefined };
+  const spec = modelSpecSchema.parse({ shape: resolved.shape, scale: { longestDimensionMm: size.value } });
+  return { values, errors, spec, key: JSON.stringify(spec) };
+}
+
+const valid = (values: ParameterValues, shape: ShapeInput): ShapeResolution => ({ values, errors: {}, shape });
+
+function resolveShape(kind: ShapeKind, texts: ParameterTexts, choices: ParameterChoices): ShapeResolution {
   switch (kind) {
     case 'cube':
     case 'tetrahedron':
@@ -213,25 +253,15 @@ export function resolveModelRequest(kind: ShapeKind, texts: ParameterTexts, choi
     case 'icosahedron':
     case 'dodecahedron':
     case 'ball':
-      return withKey({ shape: { kind }, scale }, {});
+      return valid({}, { kind });
     case 'cuboid': {
       const { values, errors } = validateFields(['cuboidWidthRatio', 'cuboidHeightRatio'], texts);
       const { cuboidWidthRatio: widthRatio, cuboidHeightRatio: heightRatio } = values;
-      if (widthRatio === undefined || heightRatio === undefined)
-        return { scale, values, errors, spec: undefined, key: undefined };
-      return withKey({ shape: { kind, widthRatio, heightRatio }, scale }, values);
+      if (widthRatio === undefined || heightRatio === undefined) return { values, errors, shape: undefined };
+      return valid(values, { kind, widthRatio, heightRatio });
     }
     case 'parallelepiped': {
-      const { values, errors } = validateFields(
-        [
-          'parallelepipedBaseSideRatio',
-          'parallelepipedHeightRatio',
-          'parallelepipedBaseAngleDeg',
-          'parallelepipedOffsetXRatio',
-          'parallelepipedOffsetYRatio',
-        ],
-        texts,
-      );
+      const { values, errors } = validateFields(shapeParameterKeys.parallelepiped.texts, texts);
       const {
         parallelepipedBaseSideRatio: baseSideRatio,
         parallelepipedHeightRatio: heightRatio,
@@ -246,13 +276,13 @@ export function resolveModelRequest(kind: ShapeKind, texts: ParameterTexts, choi
         offsetXRatio === undefined ||
         offsetYRatio === undefined
       )
-        return { scale, values, errors, spec: undefined, key: undefined };
-      return withKey({ shape: { kind, baseSideRatio, heightRatio, baseAngleDeg, offsetXRatio, offsetYRatio }, scale }, values);
+        return { values, errors, shape: undefined };
+      return valid(values, { kind, baseSideRatio, heightRatio, baseAngleDeg, offsetXRatio, offsetYRatio });
     }
     case 'prism':
-      return resolvePrismRequest(texts, choices);
+      return resolveBasedSolid('prism', texts, choices.prismBaseType, choices.prismBaseSides);
     case 'pyramid':
-      return resolvePyramidRequest(texts, choices);
+      return resolveBasedSolid('pyramid', texts, choices.pyramidBaseType, choices.pyramidBaseSides);
     case 'cylinder':
     case 'cone': {
       const [heightKey, offsetKey] =
@@ -261,10 +291,8 @@ export function resolveModelRequest(kind: ShapeKind, texts: ParameterTexts, choi
           : (['coneHeightRatio', 'coneOffsetRatio'] as const);
       const { values, errors } = validateFields([heightKey, offsetKey], texts);
       const [heightRatio, offsetRatio] = [values[heightKey], values[offsetKey]];
-      if (heightRatio === undefined || offsetRatio === undefined) {
-        return { scale, values, errors, spec: undefined, key: undefined };
-      }
-      return withKey({ shape: { kind, heightRatio, offsetRatio }, scale }, values);
+      if (heightRatio === undefined || offsetRatio === undefined) return { values, errors, shape: undefined };
+      return valid(values, { kind, heightRatio, offsetRatio });
     }
   }
 }
@@ -313,13 +341,12 @@ function baseFields(baseType: PyramidBaseType, keys: BaseFieldKeys, values: Para
  * A prism or pyramid: its height and the position of its upper base or apex are shared by every base type; only the
  * selected base's own fields are read.
  */
-function resolveBasedSolidRequest(
+function resolveBasedSolid(
   kind: 'prism' | 'pyramid',
   texts: ParameterTexts,
   baseType: PyramidBaseType,
   baseSides: PrismBaseSides,
-): ModelRequest {
-  const { scale } = defaultModelSpecs[kind];
+): ShapeResolution {
   const [keys, heightKey, xKey, yKey] =
     kind === 'prism'
       ? ([prismBaseKeys, 'prismHeightRatio', 'prismOffsetXRatio', 'prismOffsetYRatio'] as const)
@@ -328,18 +355,12 @@ function resolveBasedSolidRequest(
   const [heightRatio, x, y] = [values[heightKey], values[xKey], values[yKey]];
   const base = baseFields(baseType, keys, values, baseSides);
   if (heightRatio === undefined || x === undefined || y === undefined || base === undefined) {
-    return { scale, values, errors, spec: undefined, key: undefined };
+    return { values, errors, shape: undefined };
   }
   const position = kind === 'prism' ? { offsetXRatio: x, offsetYRatio: y } : { apexXRatio: x, apexYRatio: y };
   // The schema checks the combination: a prism never receives the parallelogram base, which it does not offer.
-  return withKey({ shape: { kind, heightRatio, ...position, ...base }, scale } as ModelSpecInput, values);
+  return valid(values, { kind, heightRatio, ...position, ...base } as ShapeInput);
 }
-
-const resolvePrismRequest = (texts: ParameterTexts, choices: ParameterChoices): ModelRequest =>
-  resolveBasedSolidRequest('prism', texts, choices.prismBaseType, choices.prismBaseSides);
-
-const resolvePyramidRequest = (texts: ParameterTexts, choices: ParameterChoices): ModelRequest =>
-  resolveBasedSolidRequest('pyramid', texts, choices.pyramidBaseType, choices.pyramidBaseSides);
 
 export type TrapezoidAlignment = 'left' | 'centre' | 'right';
 
@@ -353,7 +374,73 @@ export function alignedTrapezoidShift(sideRatio: number, alignment: TrapezoidAli
   return alignment === 'left' ? halfSumDecimal(sideRatio, -1) : halfSumDecimal(1, -sideRatio);
 }
 
-function withKey(candidate: ModelSpecInput, values: ParameterValues): ModelRequest {
-  const spec = modelSpecSchema.parse(candidate);
-  return { scale: spec.scale, values, errors: {}, spec, key: JSON.stringify(spec) };
+/**
+ * Every field and choice a shape owns, including those of its inactive base variants. Resetting a shape restores
+ * exactly these, so the values of other shapes stay as they are; the shared print size belongs to no shape and is
+ * never reset.
+ */
+export const shapeParameterKeys: Readonly<
+  Record<ShapeKind, { readonly texts: readonly ParameterKey[]; readonly choices: readonly ChoiceKey[] }>
+> = {
+  cube: { texts: [], choices: [] },
+  cuboid: { texts: ['cuboidWidthRatio', 'cuboidHeightRatio'], choices: [] },
+  parallelepiped: {
+    texts: [
+      'parallelepipedBaseSideRatio',
+      'parallelepipedHeightRatio',
+      'parallelepipedBaseAngleDeg',
+      'parallelepipedOffsetXRatio',
+      'parallelepipedOffsetYRatio',
+    ],
+    choices: [],
+  },
+  prism: {
+    texts: ['prismHeightRatio', 'prismOffsetXRatio', 'prismOffsetYRatio', ...prismBaseKeys.triangle, ...prismBaseKeys.trapezoid],
+    choices: ['prismBaseType', 'prismBaseSides'],
+  },
+  pyramid: {
+    texts: [
+      'pyramidHeightRatio',
+      'pyramidApexXRatio',
+      'pyramidApexYRatio',
+      ...pyramidBaseKeys.triangle,
+      ...(pyramidBaseKeys.parallelogram ?? []),
+      ...pyramidBaseKeys.trapezoid,
+    ],
+    choices: ['pyramidBaseType', 'pyramidBaseSides'],
+  },
+  tetrahedron: { texts: [], choices: [] },
+  octahedron: { texts: [], choices: [] },
+  icosahedron: { texts: [], choices: [] },
+  dodecahedron: { texts: [], choices: [] },
+  cylinder: { texts: ['cylinderHeightRatio', 'cylinderOffsetRatio'], choices: [] },
+  cone: { texts: ['coneHeightRatio', 'coneOffsetRatio'], choices: [] },
+  ball: { texts: [], choices: [] },
+};
+
+export type ParameterState = { readonly texts: ParameterTexts; readonly choices: ParameterChoices };
+
+/**
+ * The state after "Скинути параметри фігури": the shape's own fields and choices, also of its inactive base variants,
+ * return to their initial values, drafts included. The print size and every other shape keep theirs.
+ */
+export function resetShapeParameters(kind: ShapeKind, { texts, choices }: ParameterState): ParameterState {
+  const [initialTexts, initialChoices] = [initialParameterTexts(), initialParameterChoices()];
+  const nextTexts = { ...texts };
+  for (const key of shapeParameterKeys[kind].texts) nextTexts[key] = initialTexts[key];
+  const nextChoices: ParameterChoices = { ...choices };
+  for (const key of shapeParameterKeys[kind].choices) Object.assign(nextChoices, { [key]: initialChoices[key] });
+  return { texts: nextTexts, choices: nextChoices };
+}
+
+/**
+ * Whether a reset would change anything: one of the shape's own texts, an invalid draft included, or choices differs
+ * from its initial value. The print size does not count.
+ */
+export function canResetShapeParameters(kind: ShapeKind, state: ParameterState): boolean {
+  const reset = resetShapeParameters(kind, state);
+  return (
+    shapeParameterKeys[kind].texts.some((key) => reset.texts[key] !== state.texts[key]) ||
+    shapeParameterKeys[kind].choices.some((key) => reset.choices[key] !== state.choices[key])
+  );
 }

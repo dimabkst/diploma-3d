@@ -293,6 +293,11 @@ for (const [layout, viewport, deviceScaleFactor] of [
       // while it is on screen.
       await page.evaluate(() => window.scrollTo(0, 0));
       await expect(downloadButton(page)).toBeInViewport();
+      // The export controls wrap below the shape picker, inside the window.
+      const picker = await windowBox(shapeSelect(page));
+      const size = await windowBox(page.getByRole('banner').getByLabel('Найбільший габарит', { exact: true }));
+      expect(size.y).toBeGreaterThanOrEqual(picker.y + picker.height);
+      expect(size.x + size.width).toBeLessThanOrEqual(page.viewportSize()?.width ?? 0);
       await expectPreviewOf(page, 'Призма · 40 × 30 × 80 мм');
       expect(await previewPlace(page)).toEqual(preview);
       expect((await downloadThreeMf(page)).fileName).toBe('prism-trapezoid.3mf');
@@ -393,3 +398,60 @@ test.describe('touch scrolling on a phone (Chromium mobile emulation)', () => {
     expect(errors).toEqual([]);
   });
 });
+
+for (const [layout, viewport] of [
+  ['desktop', { width: 1366, height: 768 }],
+  // The export controls wrap below the shape picker here.
+  ['narrow phone', { width: 360, height: 740 }],
+] as const) {
+  test(`the toolbar keeps its controls in place while the model regenerates (${layout})`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.goto('/');
+    await shapeSelect(page).selectOption({ label: 'Призма' });
+    await expectPreviewOf(page, `Призма · ${['40', '34,6', '80'].join(' × ')} мм`);
+
+    /** Sets the height and measures the toolbar in the same task, while the download is busy, then once it is ready. */
+    const measure = (height: string) =>
+      page.evaluate(async (text) => {
+        const box = (element: Element | null) => {
+          const rect = element?.getBoundingClientRect();
+          return rect === undefined ? undefined : [rect.x, rect.y, rect.width, rect.height];
+        };
+        const download = [...document.querySelectorAll('button')].find((button) => button.textContent?.includes('3MF')) ?? null;
+        const toolbar = () => ({
+          download: box(download),
+          size: box(document.getElementById('printSizeMm')),
+          shape: box(document.getElementById('shape')),
+        });
+        const input = document.getElementById('prismHeightRatio') as HTMLInputElement;
+        input.value = text;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        return { busy: download?.getAttribute('aria-busy') ?? null, ...toolbar() };
+      }, height);
+    const ready = () =>
+      page.evaluate(() => {
+        const box = (element: Element | null) => {
+          const rect = element?.getBoundingClientRect();
+          return rect === undefined ? undefined : [rect.x, rect.y, rect.width, rect.height];
+        };
+        const download = [...document.querySelectorAll('button')].find((button) => button.textContent?.includes('3MF')) ?? null;
+        return {
+          busy: download?.getAttribute('aria-busy') ?? null,
+          download: box(download),
+          size: box(document.getElementById('printSizeMm')),
+          shape: box(document.getElementById('shape')),
+        };
+      });
+
+    const reference = await ready();
+    expect(reference.busy).toBeNull();
+    for (const height of ['1', '1,5', '3', '0,25', '2']) {
+      const busy = await measure(height);
+      expect(busy.busy).toBe('true');
+      expect({ ...busy, busy: null }).toEqual(reference);
+      await expect(downloadButton(page)).toBeEnabled({ timeout: 30_000 });
+      expect(await ready()).toEqual(reference);
+    }
+  });
+}

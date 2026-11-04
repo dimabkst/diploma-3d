@@ -1,4 +1,4 @@
-import type { ModelSpecInput, PhysicalScale } from '@diploma-3d/schema';
+import { MAX_LONGEST_DIMENSION_MM, MIN_LONGEST_DIMENSION_MM, type ModelSpecInput, type PhysicalScale } from '@diploma-3d/schema';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { InvalidModelSpecError } from '../errors.ts';
 import { type GeometryKernel, loadGeometryKernel } from '../kernel.ts';
@@ -15,6 +15,7 @@ import {
   vertexAt,
 } from '../mesh.ts';
 import { generateModel } from '../model.ts';
+import { ballSegments } from './ball.ts';
 import {
   CIRCULAR_SEGMENTS,
   circularSegments,
@@ -211,6 +212,22 @@ describe('generateModel for a cylinder and a cone', () => {
     expect(vertices(mesh).filter((vertex) => vertex[2] === 0)).toHaveLength(segments);
     expect(Math.abs(measurements.size[0] - 2 * r)).toBeLessThan(1e-3);
     expect(r * (1 - Math.cos(Math.PI / segments))).toBeLessThanOrEqual(MAX_CIRCLE_DEVIATION_MM);
+  });
+
+  it('keeps the circle and sphere subdivisions within the deviation limit and bounded for every allowed size', () => {
+    // The longest dimension bounds every radius: r ≤ L/2 for circles and r = L/2 for the ball.
+    let [previousCircle, previousBall] = [0, 0];
+    for (const longest of [MIN_LONGEST_DIMENSION_MM, 12.5, 80, 120, 333.3, 640, MAX_LONGEST_DIMENSION_MM]) {
+      const r = longest / 2;
+      const [circle, sphere] = [circularSegments(r), ballSegments(r)];
+      expect(r * (1 - Math.cos(Math.PI / circle))).toBeLessThanOrEqual(MAX_CIRCLE_DEVIATION_MM);
+      expect(circle).toBeGreaterThanOrEqual(previousCircle);
+      expect(sphere).toBeGreaterThanOrEqual(previousBall);
+      [previousCircle, previousBall] = [circle, sphere];
+    }
+    // At the largest allowed size: 224 circle segments and 368 sphere segments, 8·92² = 67 712 triangles.
+    expect(previousCircle).toBe(224);
+    expect(previousBall).toBe(368);
   });
 
   it('names the solids and files after the shape', () => {

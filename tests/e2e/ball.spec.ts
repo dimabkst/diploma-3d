@@ -9,7 +9,7 @@ test('ball: a fixed 80 mm ball with no parameter controls', async ({ page }) => 
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: BALL });
 
-  await expect(page.getByText('Суцільна куля. Параметрів немає.')).toBeVisible();
+  await expect(page.getByText('Суцільна куля. Пропорції фіксовані.')).toBeVisible();
   await expect(page.getByRole('slider')).toHaveCount(0);
   await expect(page.getByLabel('Висота h', { exact: true })).toHaveCount(0);
   await expect(page.getByLabel('Тип основи', { exact: true })).toHaveCount(0);

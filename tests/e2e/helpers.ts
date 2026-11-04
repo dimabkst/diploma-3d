@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { expect, type Locator, type Page } from '@playwright/test';
 import { EDGE_LIFT_RELATIVE } from '../../packages/engine/src/export/glb.ts';
 import { readThreeMf } from '../../packages/engine/src/export/three-mf.test-helper.ts';
-import { findMeshDefects, type MeshMeasurements, measureMesh } from '../../packages/engine/src/mesh.ts';
+import { findMeshDefects, type MeshMeasurements, measureMesh, type TriangleMesh } from '../../packages/engine/src/mesh.ts';
 
 export type ModelViewerElement = {
   loaded: boolean;
@@ -69,8 +69,10 @@ export async function expectViewerBox(page: Page, [x, y, z]: readonly [number, n
   expectSizesClose(await viewerDimensionsMm(page), [x + 2 * lift, z + 2 * lift, y + 2 * lift], 0.01);
 }
 
-/** Downloads the print file and returns its name with the measurements of its only, verified closed object. */
-export async function downloadThreeMf(page: Page): Promise<{ fileName: string; measurements: MeshMeasurements }> {
+/** Downloads the print file and returns its name with its only, verified closed object and that object's measurements. */
+export async function downloadThreeMf(
+  page: Page,
+): Promise<{ fileName: string; mesh: TriangleMesh; measurements: MeshMeasurements }> {
   const [download] = await Promise.all([page.waitForEvent('download'), downloadButton(page).click()]);
   const { model } = readThreeMf(new Uint8Array(await readFile(await download.path())));
   expect(model.unit).toBe('millimeter');
@@ -79,7 +81,7 @@ export async function downloadThreeMf(page: Page): Promise<{ fileName: string; m
   const mesh = model.objects[0]?.mesh;
   if (mesh === undefined) throw new Error('The 3MF file contains no mesh.');
   expect(findMeshDefects(mesh)).toEqual([]);
-  return { fileName: download.suggestedFilename(), measurements: measureMesh(mesh) };
+  return { fileName: download.suggestedFilename(), mesh, measurements: measureMesh(mesh) };
 }
 
 export function expectSizesClose(actual: readonly number[], expected: readonly number[], toleranceMm: number): void {

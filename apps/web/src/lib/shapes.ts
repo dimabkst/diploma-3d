@@ -4,6 +4,8 @@ import {
   BASE_ANGLE_LIMITS,
   BASE_SHIFT_LIMITS,
   defaultModelSpecs,
+  MAX_LONGEST_DIMENSION_MM,
+  MIN_LONGEST_DIMENSION_MM,
   OFFSET_LIMITS,
   PRISM_BASE_SIDES,
   PRISM_BASE_TYPES,
@@ -14,7 +16,7 @@ import {
   ROUND_OFFSET_LIMITS,
   type ShapeKind,
 } from '@diploma-3d/schema';
-import { formatDecimal, type StepRange } from './decimal.ts';
+import type { StepRange } from './decimal.ts';
 import type { ChoiceKey, ParameterChoices, ParameterKey } from './model/parameters.ts';
 
 export type ShapeOption = {
@@ -36,6 +38,7 @@ export type NumericField = {
   readonly type: 'number';
   readonly key: ParameterKey;
   readonly label: string;
+  /** The unit after the entry, such as "× a" or "°"; empty when the label names it. */
   readonly suffix: string;
   readonly range: StepRange;
 };
@@ -117,23 +120,34 @@ export const formatSize = (size: readonly number[] | undefined): string =>
 type FixedShapeKind = 'cube' | 'tetrahedron' | 'octahedron' | 'icosahedron' | 'dodecahedron' | 'ball';
 
 const fixedNotes: Readonly<Record<FixedShapeKind, string>> = {
-  cube: 'Усі ребра рівні, грані — квадрати. Параметрів немає.',
-  tetrahedron: 'Усі ребра рівні, грані — рівносторонні трикутники. Параметрів немає.',
-  octahedron: '8 граней — рівносторонні трикутники; модель лежить на грані. Параметрів немає.',
-  icosahedron: '20 граней — рівносторонні трикутники; модель лежить на грані. Параметрів немає.',
-  dodecahedron: '12 граней — правильні п’ятикутники; модель лежить на грані. Параметрів немає.',
-  ball: 'Суцільна куля. Параметрів немає.',
+  cube: 'Усі ребра рівні, грані — квадрати. Пропорції фіксовані.',
+  tetrahedron: 'Усі ребра рівні, грані — рівносторонні трикутники. Пропорції фіксовані.',
+  octahedron: '8 граней — рівносторонні трикутники; модель лежить на грані. Пропорції фіксовані.',
+  icosahedron: '20 граней — рівносторонні трикутники; модель лежить на грані. Пропорції фіксовані.',
+  dodecahedron: '12 граней — правильні п’ятикутники; модель лежить на грані. Пропорції фіксовані.',
+  ball: 'Суцільна куля. Пропорції фіксовані.',
 };
 
-/** "Що означає × a?": what the reference length is and how the fixed export size rescales everything. */
-function referenceHelp(kind: ShapeKind, reference: string, meaning: string): Help {
-  const length = formatDecimal(defaultModelSpecs[kind].scale.longestDimensionMm);
+/**
+ * The shared print size: the longest of the exported model's width, depth and height. Arrow keys step by 5 mm; any
+ * typed value within the limits is kept.
+ */
+export const printSizeField: NumericField = {
+  type: 'number',
+  key: 'printSizeMm',
+  label: 'Найбільший габарит',
+  suffix: 'мм',
+  range: { min: MIN_LONGEST_DIMENSION_MM, max: MAX_LONGEST_DIMENSION_MM, increment: 5 },
+};
+
+/** "Що означає × a?": what the reference length is and how the print size rescales everything. */
+function referenceHelp(reference: string, meaning: string): Help {
   return {
     label: `Що означає × ${reference}?`,
     text:
       `${meaning} Множник задає розмір відносно ${reference}: «2 × ${reference}» — удвічі більше за ${reference}. ` +
-      `Міліметри окремо не задаються: модель завжди масштабується так, щоб її найбільший габарит дорівнював ${length} мм, ` +
-      `тому зміна множників змінює й саме ${reference}. Поточні габарити показано під переглядом.`,
+      `Міліметри задає поле «${printSizeField.label}»: модель рівномірно масштабується так, щоб її найбільший вимір ` +
+      `дорівнював цьому значенню, тому зміна множників змінює й саме ${reference}. Поточні габарити показано під переглядом.`,
   };
 }
 
@@ -327,7 +341,7 @@ export function shapePanel(kind: ShapeKind, choices: ParameterChoices): ShapePan
     case 'cuboid':
       return {
         type: 'parameters',
-        help: referenceHelp(kind, 'a', 'a — довжина; ширину b і висоту c задано відносно неї.'),
+        help: referenceHelp('a', 'a — довжина; ширину b і висоту c задано відносно неї.'),
         sections: [
           section('cuboid-size', 'Розміри', [
             ratioField('cuboidWidthRatio', 'Ширина b'),
@@ -338,7 +352,7 @@ export function shapePanel(kind: ShapeKind, choices: ParameterChoices): ShapePan
     case 'parallelepiped':
       return {
         type: 'parameters',
-        help: referenceHelp(kind, 'a', sideAMeaning),
+        help: referenceHelp('a', sideAMeaning),
         sections: [
           section(
             'parallelepiped-base',
@@ -364,7 +378,7 @@ export function shapePanel(kind: ShapeKind, choices: ParameterChoices): ShapePan
     case 'prism':
       return {
         type: 'parameters',
-        help: referenceHelp(kind, 'a', sideAMeaning),
+        help: referenceHelp('a', sideAMeaning),
         sections: [
           baseSection('prism', prismBaseKeys, choices.prismBaseType),
           // "Висота призми h" next to the trapezoid's own height t.
@@ -386,7 +400,7 @@ export function shapePanel(kind: ShapeKind, choices: ParameterChoices): ShapePan
     case 'pyramid':
       return {
         type: 'parameters',
-        help: referenceHelp(kind, 'a', sideAMeaning),
+        help: referenceHelp('a', sideAMeaning),
         sections: [
           baseSection('pyramid', pyramidBaseKeys, choices.pyramidBaseType),
           section('pyramid-height', 'Висота', [ratioField('pyramidHeightRatio', 'Висота піраміди h')]),
@@ -411,7 +425,7 @@ export function shapePanel(kind: ShapeKind, choices: ParameterChoices): ShapePan
       const offsetLabel = kind === 'cylinder' ? 'Зміщення верхньої основи' : 'Зміщення вершини';
       return {
         type: 'parameters',
-        help: referenceHelp(kind, 'r', 'r — радіус основи.'),
+        help: referenceHelp('r', 'r — радіус основи.'),
         sections: [
           section(`${kind}-height`, 'Висота', [ratioField(heightKey, 'Висота h', 'r')]),
           offsetSection(

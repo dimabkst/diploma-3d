@@ -132,7 +132,7 @@ test('tetrahedron: a fixed preset with six equal edges and no adjustable paramet
   await expect(baseSelect(page)).toHaveCount(0);
   await expect(heightRatio(page)).toHaveCount(0);
   await expect(page.getByRole('slider')).toHaveCount(0);
-  await expect(page.getByText('Усі ребра рівні, грані — рівносторонні трикутники. Параметрів немає.')).toBeVisible();
+  await expect(page.getByText('Усі ребра рівні, грані — рівносторонні трикутники. Пропорції фіксовані.')).toBeVisible();
   await expect(page.locator('details')).toHaveCount(0);
 
   // The base edge is the longest dimension: a = 80 mm, h = a·√(2/3) ≈ 65,3 mm and the base is √3/2·a ≈ 69,3 mm deep.
