@@ -202,12 +202,19 @@ describe('releases Manifold objects', () => {
       return manifold;
     };
     const prototype = instancePrototype();
-    const { cube: originalCube, extrude: originalExtrude, cylinder: originalCylinder, sphere: originalSphere } = kernel.Manifold;
+    const {
+      cube: originalCube,
+      extrude: originalExtrude,
+      cylinder: originalCylinder,
+      sphere: originalSphere,
+      hull: originalHull,
+    } = kernel.Manifold;
     const { translate, scale, transform } = prototype;
     vi.spyOn(kernel.Manifold, 'cube').mockImplementation((...args) => record(originalCube.apply(kernel.Manifold, args)));
     vi.spyOn(kernel.Manifold, 'extrude').mockImplementation((...args) => record(originalExtrude.apply(kernel.Manifold, args)));
     vi.spyOn(kernel.Manifold, 'cylinder').mockImplementation((...args) => record(originalCylinder.apply(kernel.Manifold, args)));
     vi.spyOn(kernel.Manifold, 'sphere').mockImplementation((...args) => record(originalSphere.apply(kernel.Manifold, args)));
+    vi.spyOn(kernel.Manifold, 'hull').mockImplementation((...args) => record(originalHull.apply(kernel.Manifold, args)));
     vi.spyOn(prototype, 'translate').mockImplementation(function (this: Manifold, ...args) {
       return record(translate.apply(this, args));
     });
@@ -326,7 +333,13 @@ describe('releases Manifold objects', () => {
     ['oblique cone', obliqueRound.cone, 2],
     ['ball', defaultModelSpecs.ball, 2],
   ];
-  const solids = [...polyhedra, ...curvedSolids];
+  // The convex hull of the vertices in millimetres, in one step.
+  const regularPolyhedra: readonly (readonly [string, ModelSpecInput, number])[] = [
+    ['octahedron', defaultModelSpecs.octahedron, 1],
+    ['icosahedron', defaultModelSpecs.icosahedron, 1],
+    ['dodecahedron', defaultModelSpecs.dodecahedron, 1],
+  ];
+  const solids = [...polyhedra, ...curvedSolids, ...regularPolyhedra];
 
   it.each(solids)('after successful generation of a %s', (_, spec, objects) => {
     const { created } = trackCreatedManifolds();
@@ -367,13 +380,25 @@ describe('releases Manifold objects', () => {
     expect(created.every(isDeleted)).toBe(true);
   });
 
-  it.each(curvedSolids)('when copying the mesh of a %s out of the kernel throws', (_, spec, objects) => {
-    const { created, prototype } = trackCreatedManifolds();
-    vi.spyOn(prototype, 'getMesh').mockImplementation(() => {
+  it.each(regularPolyhedra)('when the convex hull of a %s throws', (_, spec) => {
+    const { created } = trackCreatedManifolds();
+    vi.spyOn(kernel.Manifold, 'hull').mockImplementation(() => {
       throw new Error('out of memory');
     });
     expect(() => generateModel(kernel, spec)).toThrow('out of memory');
-    expect(created).toHaveLength(objects);
-    expect(created.every(isDeleted)).toBe(true);
+    expect(created).toHaveLength(0);
   });
+
+  it.each([...curvedSolids, ...regularPolyhedra])(
+    'when copying the mesh of a %s out of the kernel throws',
+    (_, spec, objects) => {
+      const { created, prototype } = trackCreatedManifolds();
+      vi.spyOn(prototype, 'getMesh').mockImplementation(() => {
+        throw new Error('out of memory');
+      });
+      expect(() => generateModel(kernel, spec)).toThrow('out of memory');
+      expect(created).toHaveLength(objects);
+      expect(created.every(isDeleted)).toBe(true);
+    },
+  );
 });

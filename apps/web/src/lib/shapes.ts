@@ -9,6 +9,7 @@ import {
   prismDimensionsMm,
   prismShapeProportions,
   pyramidShapeDimensionsMm,
+  regularPolyhedronMeasurements,
   roundSolidMeasurements,
   type TrapezoidKind,
   trapezoidKind,
@@ -26,6 +27,7 @@ import {
   PYRAMID_BASE_TYPES,
   type PyramidBaseType,
   RATIO_LIMITS,
+  type RegularPolyhedronKind,
   ROUND_OFFSET_LIMITS,
   type Shape,
   type ShapeKind,
@@ -105,6 +107,9 @@ export const shapeOptions: readonly ShapeOption[] = [
   { value: 'cylinder', label: 'Циліндр' },
   { value: 'cone', label: 'Конус' },
   { value: 'ball', label: 'Куля' },
+  { value: 'octahedron', label: 'Октаедр' },
+  { value: 'icosahedron', label: 'Ікосаедр' },
+  { value: 'dodecahedron', label: 'Додекаедр' },
 ];
 
 export const isAvailableShape = (value: string): value is ShapeKind => Object.hasOwn(defaultModelSpecs, value);
@@ -152,6 +157,10 @@ export function shapeDescription(kind: ShapeKind, scale: PhysicalScale): string 
         `Ребро моделі — ${formatDecimal(edge)} мм.`
       );
     }
+    case 'octahedron':
+    case 'icosahedron':
+    case 'dodecahedron':
+      return `${polyhedronFaces[kind]} ${polyhedronPlacement(kind, scale)}`;
     case 'cylinder':
       return (
         'Круговий циліндр: основи — рівні круги в паралельних площинах. Без зміщення циліндр прямий і твірні ' +
@@ -171,6 +180,16 @@ export function shapeDescription(kind: ShapeKind, scale: PhysicalScale): string 
       );
   }
 }
+
+const polyhedronFaces: Readonly<Record<RegularPolyhedronKind, string>> = {
+  octahedron: 'Правильний многогранник: вісім граней — рівносторонні трикутники, у кожній вершині сходяться чотири.',
+  icosahedron: 'Правильний многогранник: двадцять граней — рівносторонні трикутники, у кожній вершині сходяться п’ять.',
+  dodecahedron: 'Правильний многогранник: дванадцять граней — правильні п’ятикутники, у кожній вершині сходяться три.',
+};
+
+const polyhedronPlacement = (kind: RegularPolyhedronKind, scale: PhysicalScale): string =>
+  `Модель лежить на грані; її найбільший габаритний вимір — ${formatLength(scale)}, а ребро a — ` +
+  `${formatQuantity(regularPolyhedronMeasurements(kind, scale).edge, 'мм')}.`;
 
 const triangleNote =
   'Трикутник задається сторонами a і b та кутом α між ними. Довжина третьої сторони c обчислюється автоматично. ';
@@ -391,6 +410,9 @@ const shapeParameters: Readonly<Record<Exclude<ShapeKind, 'prism' | 'pyramid'>, 
   ],
   // Fixed proportions: nothing to adjust.
   tetrahedron: [],
+  octahedron: [],
+  icosahedron: [],
+  dodecahedron: [],
   ball: [],
   cylinder: [
     { type: 'number', key: 'cylinderHeightRatio', label: 'Висота h', suffix: '× r', range: ratioRange },
@@ -409,6 +431,9 @@ export function parameterHint(kind: ShapeKind, scale: PhysicalScale, choices: Pa
   switch (kind) {
     case 'cube':
     case 'tetrahedron':
+    case 'octahedron':
+    case 'icosahedron':
+    case 'dodecahedron':
     case 'ball':
       return undefined;
     case 'cuboid':
@@ -561,6 +586,25 @@ export function measurementItems(
         { label: 'Площа основи', ...baseArea(dimensions?.baseArea) },
         { label: 'Площа поверхні', ...area },
         { label: 'Об’єм', ...volume },
+      ];
+    }
+    case 'octahedron':
+    case 'icosahedron':
+    case 'dodecahedron': {
+      // Exact values from the edge a; the mesh, with the same flat faces, agrees with them up to float rounding.
+      const exact = shape?.kind === kind ? regularPolyhedronMeasurements(kind, scale) : undefined;
+      const count = (label: string, value: number | undefined): MeasurementItem => ({
+        label,
+        value: value === undefined ? '—' : numberFormat.format(value),
+        widest: '30',
+      });
+      return [
+        { label: 'Ребро a', ...edge(exact?.edge) },
+        { label: 'Площа поверхні', ...area, value: formatQuantity(exact?.surfaceArea, 'мм²') },
+        { label: 'Об’єм', ...volume, value: formatQuantity(exact?.volume, 'мм³') },
+        count('Кількість вершин', exact?.vertexCount),
+        count('Кількість ребер', exact?.edgeCount),
+        count('Кількість граней', exact?.faceCount),
       ];
     }
     case 'cylinder':

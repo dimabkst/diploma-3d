@@ -209,6 +209,9 @@ export function resolveModelRequest(kind: ShapeKind, texts: ParameterTexts, choi
   switch (kind) {
     case 'cube':
     case 'tetrahedron':
+    case 'octahedron':
+    case 'icosahedron':
+    case 'dodecahedron':
     case 'ball':
       return withKey({ shape: { kind }, scale }, {});
     case 'cuboid': {

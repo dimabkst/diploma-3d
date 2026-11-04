@@ -46,6 +46,17 @@ export {
 } from './pyramid.ts';
 export { RATIO_LIMITS, ratioSchema } from './ratio.ts';
 export {
+  type DodecahedronShape,
+  dodecahedronShapeSchema,
+  type IcosahedronShape,
+  icosahedronShapeSchema,
+  type OctahedronShape,
+  octahedronShapeSchema,
+  REGULAR_POLYHEDRON_KINDS,
+  type RegularPolyhedronKind,
+  type RegularPolyhedronShape,
+} from './regular-polyhedron.ts';
+export {
   type ConeShape,
   type CylinderShape,
   coneShapeSchema,

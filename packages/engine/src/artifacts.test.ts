@@ -32,6 +32,9 @@ describe('buildModelArtifacts', () => {
     ['prism', 'prism-3-sided.3mf'],
     ['pyramid', 'pyramid-4-sided.3mf'],
     ['tetrahedron', 'tetrahedron.3mf'],
+    ['octahedron', 'octahedron.3mf'],
+    ['icosahedron', 'icosahedron.3mf'],
+    ['dodecahedron', 'dodecahedron.3mf'],
     ['cylinder', 'cylinder.3mf'],
     ['cone', 'cone.3mf'],
     ['ball', 'ball.3mf'],
@@ -429,6 +432,64 @@ describe('buildModelArtifacts', () => {
         expect(point[1]).toBeCloseTo(0.02, METRE_DIGITS);
         expect(point[2]).toBeCloseTo(0, METRE_DIGITS);
       }
+    });
+  });
+
+  describe('for the octahedron, icosahedron and dodecahedron', () => {
+    // a = 80 mm divided by the depth in edges: 2/√3, 2φ/√3 and 2·tan 54°; the heights 2·inradius follow from a.
+    const phi = (1 + Math.sqrt(5)) / 2;
+    const tan54 = Math.tan((54 * Math.PI) / 180);
+    const cases = [
+      ['octahedron', 40 * Math.sqrt(3), [1, 2 / Math.sqrt(3), Math.sqrt(2 / 3)], Math.SQRT2 / 3],
+      [
+        'icosahedron',
+        (40 * Math.sqrt(3)) / phi,
+        [phi, (2 * phi) / Math.sqrt(3), phi ** 2 / Math.sqrt(3)],
+        (5 * (3 + Math.sqrt(5))) / 12,
+      ],
+      ['dodecahedron', 40 / tan54, [phi ** 2, 2 * tan54, Math.sqrt((25 + 11 * Math.sqrt(5)) / 10)], (15 + 7 * Math.sqrt(5)) / 4],
+    ] as const;
+
+    it.each(cases)(
+      'exports the %s as one closed object in millimetres with the analytic box and volume',
+      async (kind, a, box, volumeFactor) => {
+        for (const longestDimensionMm of [80, 160]) {
+          const factor = longestDimensionMm / 80;
+          const { printFile } = await buildModelArtifacts(kernel, { shape: { kind }, scale: { longestDimensionMm } });
+          const { model } = readThreeMf(printFile.bytes);
+          expect(printFile.fileName).toBe(`${kind}.3mf`);
+          expect(model.unit).toBe('millimeter');
+          expect(model.objects.map(({ name }) => name)).toEqual([kind]);
+          const mesh = model.objects[0]?.mesh;
+          if (mesh === undefined) throw new Error('No exported mesh');
+          expect(findMeshDefects(mesh)).toEqual([]);
+          const { bounds, volume } = measureMesh(mesh);
+          const size = box.map((value) => value * a * factor);
+          expect(Math.max(...size)).toBeCloseTo(longestDimensionMm, 9);
+          size.forEach((value, axis) => {
+            expect(bounds.min[axis]).toBeCloseTo(axis === 2 ? 0 : -value / 2, 4);
+            expect(bounds.max[axis]).toBeCloseTo(axis === 2 ? value : value / 2, 4);
+          });
+          expect(volume / (volumeFactor * (a * factor) ** 3)).toBeCloseTo(1, 6);
+        }
+      },
+    );
+
+    it.each(cases)('previews the %s resting on its face in the glTF ground plane, in metres', async (kind, a, box) => {
+      const { previewGlb } = await buildModelArtifacts(kernel, defaultModelSpecs[kind]);
+      const positions = await previewSurfacePositions(previewGlb);
+      const points = Array.from(
+        { length: positions.getCount() },
+        (_, index) => positions.getElement(index, []) as unknown as Vec3,
+      );
+      const heights = points.map((point) => point[1]);
+      expect(Math.min(...heights)).toBe(0);
+      expect(Math.max(...heights)).toBeCloseTo((box[2] * a) / 1000, METRE_DIGITS);
+      // The Z-up depth, the largest dimension, becomes glTF −Z: 80 mm in all three cases.
+      const depths = points.map((point) => point[2]);
+      expect(Math.max(...depths) - Math.min(...depths)).toBeCloseTo(0.08, METRE_DIGITS);
+      const ground = new Set(points.filter((point) => point[1] === 0).map((point) => point.join(',')));
+      expect(ground.size).toBe(kind === 'dodecahedron' ? 5 : 3);
     });
   });
 

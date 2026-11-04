@@ -6,6 +6,7 @@ import { GeometryError } from '../errors.ts';
 import { loadGeometryKernel } from '../kernel.ts';
 import { cross, dot, subtract, type TriangleMesh, triangleAt, triangleCount, type Vec3, vertexAt } from '../mesh.ts';
 import { generateModel } from '../model.ts';
+import { regularPolyhedronMeasurements } from '../shapes/regular-polyhedron.ts';
 import { rightTetrahedron } from '../test-fixtures.ts';
 import { createPreviewGlb, EDGE_LIFT_RELATIVE, toGltfPosition } from './glb.ts';
 
@@ -342,4 +343,46 @@ describe('createPreviewGlb shading', () => {
       });
     }
   });
+
+  it.each([
+    ['octahedron', 8, 12],
+    ['icosahedron', 20, 30],
+    ['dodecahedron', 12, 30],
+  ] as const)(
+    'shades the %s with one normal per face and outlines its edges but no triangulation diagonals',
+    async (kind, faceCount, edgeCount) => {
+      const { normals, faces } = await shadedCorners(defaultModelSpecs[kind]);
+      // Flat: every corner takes its triangle's normal.
+      normals.forEach((normal, corner) => {
+        expect(dot(normal, faces[Math.floor(corner / 3)] as Vec3)).toBeGreaterThan(1 - 1e-6);
+      });
+      // The triangles of one face, such as the three of a pentagon, share their normal up to float32 rounding, far below
+      // a visible seam; distinct faces are at least the icosahedron's 41,8° apart. The sine of the angle, |n₁ × n₂|, stays
+      // accurate for tiny angles, where acos(n₁·n₂) of float32 normals only resolves about 2e-4 rad.
+      const faceNormals: Vec3[] = [];
+      for (const normal of normals) {
+        const same = faceNormals.find((candidate) => dot(candidate, normal) > Math.cos((1 * Math.PI) / 180));
+        if (same === undefined) faceNormals.push(normal);
+        else expect(Math.hypot(...cross(same, normal))).toBeLessThan(1e-5);
+      }
+      expect(faceNormals).toHaveLength(faceCount);
+
+      const kernel = await loadGeometryKernel();
+      const solid = generateModel(kernel, defaultModelSpecs[kind]).solids[0];
+      if (solid === undefined) throw new Error('No solid');
+      const { edges } = await readPrimitives(await createPreviewGlb([solid]));
+      const endpoints = vectors(edges?.getAttribute('POSITION') ?? null);
+      expect(endpoints).toHaveLength(2 * edgeCount);
+      // Lifted alike at every vertex, all outlines have one length, close to the edge a and far from a diagonal φa.
+      const edge = regularPolyhedronMeasurements(kind, defaultModelSpecs[kind].scale).edge / 1000;
+      const lift = (EDGE_LIFT_RELATIVE * Math.hypot(...solid.measurements.size)) / 1000;
+      const lengths = Array.from({ length: edgeCount }, (_, segment) =>
+        Math.hypot(...subtract(endpoints[2 * segment + 1] as Vec3, endpoints[2 * segment] as Vec3)),
+      );
+      for (const value of lengths) {
+        expect(value).toBeCloseTo(lengths[0] as number, METRE_DIGITS);
+        expect(Math.abs(value - edge)).toBeLessThan(6 * lift);
+      }
+    },
+  );
 });

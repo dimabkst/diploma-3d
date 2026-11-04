@@ -16,6 +16,7 @@ import { buildUnitBox } from './shapes/box.ts';
 import { buildParallelepiped } from './shapes/parallelepiped.ts';
 import { buildPrismShape } from './shapes/prism.ts';
 import { buildPyramidShape } from './shapes/pyramid.ts';
+import { buildRegularPolyhedron } from './shapes/regular-polyhedron.ts';
 import { buildRoundSolid, roundShear } from './shapes/round.ts';
 
 export interface Solid {
@@ -84,7 +85,8 @@ export function modelName(shape: Shape): string {
 
 /**
  * The solid in millimetres: boxes are built in model units and scaled once; prisms and pyramids are scaled once after
- * their complete unnormalised construction, including a displaced upper base or apex; curved solids are built at size.
+ * their complete unnormalised construction, including a displaced upper base or apex; curved solids are built at size,
+ * and regular polyhedra as the convex hull of their vertices in millimetres.
  */
 function buildShape(kernel: GeometryKernel, track: Track, shape: Shape, scale: PhysicalScale): Manifold {
   const toMillimetres = (unitSolid: Manifold) => track(unitSolid.scale(scale.longestDimensionMm));
@@ -102,6 +104,10 @@ function buildShape(kernel: GeometryKernel, track: Track, shape: Shape, scale: P
     case 'cylinder':
     case 'cone':
       return buildRoundSolid(kernel, track, shape, scale);
+    case 'octahedron':
+    case 'icosahedron':
+    case 'dodecahedron':
+      return buildRegularPolyhedron(kernel, track, shape.kind, scale);
     case 'ball':
       return buildBall(kernel, track, scale);
   }

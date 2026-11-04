@@ -16,6 +16,7 @@ import {
   PYRAMID_BASE_SIDES,
   PYRAMID_BASE_TYPES,
   RATIO_LIMITS,
+  REGULAR_POLYHEDRON_KINDS,
   ROUND_OFFSET_LIMITS,
   TETRAHEDRON_HEIGHT_RATIO,
 } from './index.ts';
@@ -73,7 +74,7 @@ describe('modelSpecSchema', () => {
   });
 
   it.each([
-    ['an unknown shape', { shape: { kind: 'dodecahedron' }, scale }],
+    ['an unknown shape', { shape: { kind: 'torus' }, scale }],
     ['a missing shape', { scale }],
     ['a missing scale', { shape: { kind: 'cube' } }],
     ['extra scale fields', { shape: { kind: 'cube' }, scale: { longestDimensionMm: 80, factor: 2 } }],
@@ -557,6 +558,30 @@ describe('regular tetrahedron', () => {
     expect(TETRAHEDRON_HEIGHT_RATIO).toBe(Math.sqrt(2 / 3));
     expect(TETRAHEDRON_HEIGHT_RATIO ** 2).toBeCloseTo(2 / 3, 15);
     expect(Number.isInteger(TETRAHEDRON_HEIGHT_RATIO * 4)).toBe(false);
+  });
+});
+
+describe('octahedron, icosahedron and dodecahedron', () => {
+  it.each(REGULAR_POLYHEDRON_KINDS)('accepts the %s with no independent parameters', (kind) => {
+    expect(modelSpecSchema.parse(defaultModelSpecs[kind])).toEqual({ shape: { kind }, scale });
+    for (const extra of [{ heightRatio: 1 }, { baseSides: 5 }, { offsetXRatio: 0 }, { edge: 40 }, { subdivisions: 2 }]) {
+      expect(modelSpecSchema.safeParse({ shape: { kind, ...extra }, scale }).success).toBe(false);
+    }
+  });
+
+  it.each(REGULAR_POLYHEDRON_KINDS)('validates the export size of the %s like every other solid', (kind) => {
+    for (const [, longestDimensionMm] of [...invalidNumbers, ['above the maximum', MAX_LONGEST_DIMENSION_MM + 0.001]]) {
+      expect(modelSpecSchema.safeParse({ shape: { kind }, scale: { longestDimensionMm } }).success).toBe(false);
+    }
+    expect(modelSpecSchema.safeParse({ shape: { kind }, scale: { longestDimensionMm: MAX_LONGEST_DIMENSION_MM } }).success).toBe(
+      true,
+    );
+  });
+
+  it('rejects other names for them', () => {
+    for (const kind of ['octahedra', 'icosahedra', 'Dodecahedron', 'regular-polyhedron', '']) {
+      expect(modelSpecSchema.safeParse({ shape: { kind }, scale }).success).toBe(false);
+    }
   });
 });
 

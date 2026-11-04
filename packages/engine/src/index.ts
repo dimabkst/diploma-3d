@@ -71,6 +71,18 @@ export {
 } from './shapes/regular-base.ts';
 export { regularPolygonArea, regularPolygonVertices } from './shapes/regular-polygon.ts';
 export {
+  orientedRegularPolyhedronVertices,
+  PHI,
+  type RegularPolyhedronFacts,
+  type RegularPolyhedronMeasurements,
+  regularPolyhedronBoundingSize,
+  regularPolyhedronFacts,
+  regularPolyhedronMeasurements,
+  regularPolyhedronScaleMm,
+  regularPolyhedronVerticesMm,
+  unitRegularPolyhedronVertices,
+} from './shapes/regular-polyhedron.ts';
+export {
   CIRCULAR_SEGMENTS,
   circularSegments,
   MAX_CIRCLE_DEVIATION_MM,
