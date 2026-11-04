@@ -1,14 +1,14 @@
 import { expect, type Page, test } from '@playwright/test';
 import {
-  type Box,
-  boxesOf,
   collectErrors,
   downloadButton,
   downloadThreeMf,
   expectPreviewOf,
   expectSizesClose,
   expectViewerBox,
-  measurementValue,
+  hasNoHorizontalOverflow,
+  parameterSection,
+  previewPlace,
   previewViewport,
   shapeSelect,
 } from './helpers.ts';
@@ -75,20 +75,12 @@ test('prism: base and height drive the preview and the downloaded 3MF', async ({
   await expect(baseSelect(page).locator('option:checked')).toHaveText(baseNames[3]);
   await expect(heightRatio(page)).toHaveValue('2');
   await expectPreviewOf(page, summary(3, 2));
-  await expect(page.getByRole('term')).toHaveText([
-    'Сторона основи a',
-    'Висота h',
-    'Бічне ребро l',
-    'Площа основи',
-    'Площа поверхні',
-    'Об’єм',
-  ]);
-  // A right prism: the lateral edge equals the height.
-  await expect(measurementValue(page, 'Бічне ребро l')).toHaveText('80 мм');
-  await expect(measurementValue(page, 'Сторона основи a')).toHaveText('40 мм');
-  await expect(measurementValue(page, 'Висота h')).toHaveText('80 мм');
-  // √3/4 · 40² ≈ 692,8 mm².
-  await expect(measurementValue(page, 'Площа основи')).toHaveText('692,8 мм²');
+  // The base and the height are open; the optional tilt waits collapsed, and no derived measurements are listed.
+  await expect(parameterSection(page, 'Основа')).toHaveAttribute('open', '');
+  await expect(parameterSection(page, 'Висота')).toHaveAttribute('open', '');
+  await expect(parameterSection(page, 'Нахил')).not.toHaveAttribute('open');
+  await expect(page.getByRole('term')).toHaveCount(0);
+  await expect(page.getByText('Площа поверхні')).toHaveCount(0);
   await expectDownloadedPrism(page, 3, 2);
 
   // The hexagon is two edges wide: with h = 2a both are 80 mm, so a = 40 mm.
@@ -97,7 +89,6 @@ test('prism: base and height drive the preview and the downloaded 3MF', async ({
   await expectPreviewOf(page, summary(6, 2));
   await heightRatio(page).fill('0,5');
   await expectPreviewOf(page, summary(6, 0.5));
-  await expect(measurementValue(page, 'Висота h')).toHaveText('20 мм');
   await expectDownloadedPrism(page, 6, 0.5);
 
   // The height ratio is kept when the base changes; a square base with h = 0,5a is an 80 × 80 × 40 mm box.
@@ -124,7 +115,6 @@ test('prism: base and height drive the preview and the downloaded 3MF', async ({
   await chooseBase(page, 8);
   await expect(heightRatio(page)).toHaveValue('1.1');
   await expectPreviewOf(page, summary(8, 1.1));
-  await expect(measurementValue(page, 'Сторона основи a')).toHaveText(`${sizeFormat.format(80 / (1 + Math.SQRT2))} мм`);
   await expectDownloadedPrism(page, 8, 1.1);
 
   expect(errors).toEqual([]);
@@ -202,7 +192,6 @@ test('prism: an invalid height is explained, blocks the download and survives ba
   await expect(heightRatio(page)).toHaveValue('4');
   await expect(stepButton(page, 'збільшити')).toBeDisabled();
   await expectPreviewOf(page, summary(6, 4));
-  await expect(measurementValue(page, 'Сторона основи a')).toHaveText('20 мм');
 
   expect(errors).toEqual([]);
 });
@@ -228,15 +217,13 @@ for (const [layout, width] of [
   ['desktop', 1440],
   ['narrow phone', 320],
 ] as const) {
-  test(`prism: measurements keep their positions across bases and heights (${layout}, ${width} px)`, async ({ page }) => {
-    // Tall enough to keep the 3D viewer, which loads only when visible, on screen below the stacked controls.
-    await page.setViewportSize({ width, height: 2600 });
+  test(`prism: the preview keeps its place across bases and heights (${layout}, ${width} px)`, async ({ page }) => {
+    // Tall enough on a phone to keep the 3D viewer, which loads models only while visible, on screen above the controls.
+    await page.setViewportSize({ width, height: width < 600 ? 2400 : 900 });
     await page.goto('/');
     await shapeSelect(page).selectOption({ label: NAME });
-    const values = page.getByRole('definition');
-    const footnote = page.getByText('Розміри наведено для файлу друку');
 
-    let reference: { values: Box[]; footnote: Box } | undefined;
+    let reference: Awaited<ReturnType<typeof previewPlace>> | undefined;
     for (const [sides, ratio] of [
       [3, 2],
       [3, 1.1],
@@ -249,10 +236,10 @@ for (const [layout, width] of [
       await chooseBase(page, sides);
       await heightRatio(page).fill(String(ratio).replace('.', ','));
       await expectPreviewOf(page, summary(sides, ratio));
-      const current = { values: await boxesOf(values), footnote: (await footnote.boundingBox()) as Box };
+      const current = await previewPlace(page);
       reference ??= current;
       expect(current).toEqual(reference);
-      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      expect(await hasNoHorizontalOverflow(page)).toBe(true);
     }
   });
 }

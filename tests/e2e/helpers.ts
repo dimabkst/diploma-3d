@@ -6,7 +6,7 @@ import { findMeshDefects, type MeshMeasurements, measureMesh } from '../../packa
 
 export type ModelViewerElement = {
   loaded: boolean;
-  getCameraOrbit(): { theta: number; radius: number };
+  getCameraOrbit(): { theta: number; phi: number; radius: number };
   getDimensions(): { x: number; y: number; z: number };
 };
 
@@ -24,11 +24,34 @@ export const previewViewport = (page: Page) => page.locator('[data-preview-statu
 export const downloadButton = (page: Page) => page.getByRole('button', { name: 'Завантажити 3MF' });
 export const modelViewer = (page: Page) => page.locator('model-viewer');
 
-/** Waits until the model described by `summary` (e.g. "Куб · 80 × 80 × 80 мм") is generated and shown in the viewer. */
+export const dimensionsLine = (page: Page) => page.getByText(/^Габарити: /);
+
+/**
+ * Waits until the model described by `summary`, the selected shape and its exported size (e.g. "Куб · 80 × 80 × 80 мм"),
+ * is generated and shown in the viewer.
+ */
 export async function expectPreviewOf(page: Page, summary: string): Promise<void> {
-  await expect(page.getByText(`Фігура: ${summary}`)).toBeVisible({ timeout: 30_000 });
+  const [shape, size] = summary.split(' · ');
+  await expect(shapeSelect(page).locator('option:checked')).toHaveText(shape as string);
+  await expect(dimensionsLine(page)).toHaveText(`Габарити: ${size}`, { timeout: 30_000 });
   await expect(previewViewport(page)).toHaveAttribute('data-preview-status', 'loaded', { timeout: 30_000 });
   await expect(downloadButton(page)).toBeEnabled();
+}
+
+/** A collapsible group of the sidebar, such as "Основа" or "Нахил", by its title. */
+export const parameterSection = (page: Page, title: string) =>
+  page
+    .getByRole('complementary', { name: 'Налаштування моделі' })
+    .locator('details')
+    .filter({
+      has: page.locator('summary').filter({ hasText: new RegExp(`^${title}`) }),
+    });
+
+/** Opens the group, such as the initially collapsed "Нахил", unless it is open already. */
+export async function openSection(page: Page, title: string): Promise<void> {
+  const section = parameterSection(page, title);
+  if ((await section.getAttribute('open')) === null) await section.locator('summary').click();
+  await expect(section).toHaveAttribute('open', '');
 }
 
 /** Bounding box of the model shown by model-viewer, in its Y-up frame and in millimetres. */
@@ -66,14 +89,23 @@ export function expectSizesClose(actual: readonly number[], expected: readonly n
   });
 }
 
-/** The value shown in the measurement row with exactly this label. */
-export const measurementValue = (page: Page, label: string) =>
-  page
-    .getByRole('term')
-    .filter({ hasText: new RegExp(`^${label}$`) })
-    .locator('xpath=following-sibling::dd');
-
 export type Box = { x: number; y: number; width: number; height: number };
 
-export const boxesOf = async (locator: Locator): Promise<Box[]> =>
-  Promise.all((await locator.all()).map(async (item) => (await item.boundingBox()) as Box));
+/** The element's box relative to the document, so that scrolling the page, e.g. to a field on a phone, does not move it. */
+export const documentBox = (locator: Locator): Promise<Box> =>
+  locator.evaluate((element) => {
+    const { x, y, width, height } = element.getBoundingClientRect();
+    return { x: x + window.scrollX, y: y + window.scrollY, width, height };
+  });
+
+/**
+ * Where the preview and its dimensions line are. The dimensions' width follows their text, so only their position is
+ * compared.
+ */
+export const previewPlace = async (page: Page): Promise<{ preview: Box; dimensions: Box }> => ({
+  preview: await documentBox(previewViewport(page)),
+  dimensions: { ...(await documentBox(dimensionsLine(page))), width: 0 },
+});
+
+export const hasNoHorizontalOverflow = (page: Page): Promise<boolean> =>
+  page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);

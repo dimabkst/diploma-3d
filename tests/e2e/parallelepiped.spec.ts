@@ -1,14 +1,14 @@
 import { expect, type Page, test } from '@playwright/test';
 import {
-  type Box,
-  boxesOf,
   collectErrors,
   downloadButton,
   downloadThreeMf,
   expectPreviewOf,
   expectSizesClose,
   expectViewerBox,
-  measurementValue,
+  hasNoHorizontalOverflow,
+  openSection,
+  previewPlace,
   previewViewport,
   shapeSelect,
 } from './helpers.ts';
@@ -66,7 +66,7 @@ async function expectDownloadedParallelepiped(page: Page, b0: number, h0: number
   expect(Math.abs(measurements.surfaceArea / expected.surfaceArea - 1)).toBeLessThan(1e-6);
 }
 
-test('parallelepiped: side ratio, height and angle drive the measurements, the preview and the downloaded 3MF', async ({
+test('parallelepiped: side ratio, height and angle drive the preview, its dimensions and the downloaded 3MF', async ({
   page,
 }) => {
   const errors = collectErrors(page);
@@ -77,33 +77,17 @@ test('parallelepiped: side ratio, height and angle drive the measurements, the p
   await expect(entry(page, 'Сторона основи b')).toHaveValue('1');
   await expect(entry(page, 'Висота h')).toHaveValue('1');
   await expect(entry(page, 'Кут α')).toHaveValue('60');
-  await expect(page.getByText('Основа — паралелограм зі сторонами a і b та кутом α між ними.')).toBeVisible();
-  await expect(page.getByText('α — кут між сторонами a і b, у градусах.', { exact: false })).toBeVisible();
+  // Groups: the base and the height open, the optional tilt collapsed; the base explains itself on demand.
+  await expect(page.locator('summary')).toHaveText([/^Основа/, /^Висота/, /^Нахил/]);
+  await page.getByRole('button', { name: 'Як задано паралелограм?' }).click();
+  await expect(page.getByText('Сторонами a і b та кутом α між ними')).toBeVisible();
+  await expect(page.getByRole('term')).toHaveCount(0);
   await expectPreviewOf(page, summary(1, 1, 60));
-  await expect(page.getByRole('term')).toHaveText([
-    'Сторона основи a',
-    'Сторона основи b',
-    'Висота h',
-    'Бічне ребро l',
-    'Площа основи',
-    'Площа поверхні',
-    'Об’єм',
-  ]);
-  const defaults = geometry(1, 1, 60);
-  await expect(measurementValue(page, 'Сторона основи a')).toHaveText('53,3 мм');
-  await expect(measurementValue(page, 'Сторона основи b')).toHaveText('53,3 мм');
-  await expect(measurementValue(page, 'Висота h')).toHaveText('53,3 мм');
-  await expect(measurementValue(page, 'Площа основи')).toHaveText(`${numberFormat.format(defaults.baseArea)} мм²`);
-  await expect(measurementValue(page, 'Площа поверхні')).toHaveText(`${numberFormat.format(defaults.surfaceArea)} мм²`);
-  await expect(measurementValue(page, 'Об’єм')).toHaveText(`${numberFormat.format(defaults.volume)} мм³`);
   await expectDownloadedParallelepiped(page, 1, 1, 60);
 
   // b = 2a and α = 120°: the base is 1 + 2·0,5 = 2 edges wide, so a = 40 mm, b = 80 mm and h = 0,5a = 20 mm.
   await setFields(page, '2', '0,5', '120');
   await expectPreviewOf(page, summary(2, 0.5, 120));
-  await expect(measurementValue(page, 'Сторона основи a')).toHaveText('40 мм');
-  await expect(measurementValue(page, 'Сторона основи b')).toHaveText('80 мм');
-  await expect(measurementValue(page, 'Висота h')).toHaveText('20 мм');
   await expectDownloadedParallelepiped(page, 2, 0.5, 120);
 
   expect(errors).toEqual([]);
@@ -243,23 +227,19 @@ test('parallelepiped: switching shapes keeps its values apart and never offers o
   await expectDownloadedParallelepiped(page, 1.75, 0.75, 130);
 });
 
-for (const [layout, width] of [
-  ['desktop', 1440],
-  ['narrow phone', 320],
+for (const [layout, width, height] of [
+  ['desktop', 1440, 900],
+  // Tall enough to keep the 3D viewer, which loads models only while visible, on screen above the controls.
+  ['narrow phone', 320, 2400],
 ] as const) {
-  test(`parallelepiped: measurements keep their positions without horizontal overflow (${layout}, ${width} px)`, async ({
-    page,
-  }) => {
-    // Tall enough to keep the 3D viewer, which loads only when visible, on screen below the stacked controls.
-    await page.setViewportSize({ width, height: 2800 });
+  test(`parallelepiped: the preview keeps its place without horizontal overflow (${layout}, ${width} px)`, async ({ page }) => {
+    await page.setViewportSize({ width, height });
     await page.goto('/');
     await shapeSelect(page).selectOption({ label: NAME });
-    const values = page.getByRole('definition');
-    const footnote = page.getByText('Розміри наведено для файлу друку');
-
-    let reference: { values: Box[]; footnote: Box } | undefined;
+    await openSection(page, 'Нахил');
+    await expectPreviewOf(page, summary(1, 1, 60));
+    const reference = await previewPlace(page);
     for (const [b, h, angle] of [
-      [1, 1, 60],
       [4, 0.25, 15],
       [0.25, 4, 165],
       // b ≈ 1,22·L: the longest side, beyond the 80 mm bounding box.
@@ -268,11 +248,8 @@ for (const [layout, width] of [
     ] as const) {
       await setFields(page, String(b).replace('.', ','), String(h).replace('.', ','), String(angle));
       await expectPreviewOf(page, summary(b, h, angle));
-      const current = { values: await boxesOf(values), footnote: (await footnote.boundingBox()) as Box };
-      reference ??= current;
-      expect(current).toEqual(reference);
-      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      expect(await previewPlace(page)).toEqual(reference);
+      expect(await hasNoHorizontalOverflow(page)).toBe(true);
     }
-    await expect(measurementValue(page, 'Сторона основи b')).not.toHaveText('—');
   });
 }

@@ -2,22 +2,15 @@
 import { THREE_MF_MEDIA_TYPE } from '@diploma-3d/engine';
 import { untrack } from 'svelte';
 import AppHeader from './lib/components/AppHeader.svelte';
+import Button from './lib/components/Button.svelte';
 import ControlsPanel from './lib/components/ControlsPanel.svelte';
-import PageHeading from './lib/components/PageHeading.svelte';
 import PreviewPanel from './lib/components/PreviewPanel.svelte';
+import Select from './lib/components/Select.svelte';
 import { saveFile } from './lib/download.ts';
 import { buildModel } from './lib/model/buildModel.ts';
 import { describeModelError, type ModelState, visibleArtifacts } from './lib/model/modelState.ts';
 import { initialParameterChoices, initialParameterTexts, resolveModelRequest } from './lib/model/parameters.ts';
-import {
-  isAvailableShape,
-  measurementItems,
-  parameterFields,
-  parameterHint,
-  shapeDescription,
-  shapeLabel,
-  shapeOptions,
-} from './lib/shapes.ts';
+import { isAvailableShape, sectionNumberFields, shapeLabel, shapeOptions, shapePanel } from './lib/shapes.ts';
 
 // Parameter edits are coalesced briefly so that typing "1,75" does not rebuild the model for every keystroke.
 const EDIT_DEBOUNCE_MS = 150;
@@ -28,6 +21,7 @@ let parameterChoices = $state(initialParameterChoices());
 let attempt = $state(0);
 // Raw state: the artifacts hold large typed arrays that must not be wrapped in deep reactive proxies.
 let model = $state.raw<ModelState>({ status: 'generating', stale: undefined });
+let controls = $state<ControlsPanel>();
 
 const selectedKind = $derived(isAvailableShape(selectedShape) ? selectedShape : undefined);
 const selectedShapeName = $derived(shapeLabel(selectedShape));
@@ -36,23 +30,17 @@ const request = $derived(
 );
 // Texts that denote the same specification ("1,5" and "1.50") share a key and do not trigger a rebuild.
 const requestKey = $derived(request?.key);
-const description = $derived(
-  selectedKind === undefined || request === undefined ? '' : shapeDescription(selectedKind, request.scale),
+const panel = $derived(
+  selectedKind === undefined ? { type: 'fixed' as const, note: '' } : shapePanel(selectedKind, parameterChoices),
 );
-const hint = $derived(
-  selectedKind === undefined || request === undefined ? undefined : parameterHint(selectedKind, request.scale, parameterChoices),
+const invalidFields = $derived(
+  panel.type === 'fixed'
+    ? []
+    : panel.sections
+        .flatMap(sectionNumberFields)
+        .filter((field) => request?.errors[field.key] !== undefined)
+        .map(({ key, label }) => ({ key, label })),
 );
-const measurements = $derived.by(() => {
-  if (selectedKind === undefined || request === undefined) return [];
-  const ready = model.status === 'ready' && model.key === requestKey ? model.artifacts : undefined;
-  return measurementItems(
-    selectedKind,
-    request.scale,
-    request.spec?.shape,
-    ready?.model.solids[0]?.measurements,
-    parameterChoices,
-  );
-});
 
 let latestRequest = 0;
 
@@ -104,82 +92,123 @@ function downloadPrintFile() {
   <title>Стереометрія 3D</title>
 </svelte:head>
 
-<AppHeader />
+<div class="app-shell">
+  <AppHeader>
+    <div class="shape-picker">
+      <label for="shape">Геометричне тіло</label>
+      <Select id="shape" bind:value={selectedShape} options={shapeOptions} />
+    </div>
+    <Button disabled={model.status !== 'ready'} loading={model.status === 'generating'} onclick={downloadPrintFile}>
+      Завантажити 3MF
+    </Button>
+  </AppHeader>
 
-<main>
-  <section class="intro" aria-labelledby="page-title">
-    <p class="eyebrow">Від формули до фізичної моделі</p>
-    <PageHeading id="page-title" title="Створіть геометричне тіло" />
-    <p class="lead">Оберіть фігуру, налаштуйте параметри та підготуйте модель до 3D-друку.</p>
-  </section>
-
-  <div class="workspace">
-    <ControlsPanel
-      shapes={shapeOptions}
-      bind:selectedShape
-      {description}
-      fields={selectedKind === undefined ? [] : parameterFields(selectedKind, parameterChoices)}
-      bind:texts={parameterTexts}
-      bind:choices={parameterChoices}
-      values={request?.values ?? {}}
-      errors={request?.errors ?? {}}
-      parameterHint={hint}
-      {measurements}
-    />
-    <PreviewPanel
-      shapeName={selectedShapeName}
-      {model}
-      onretry={() => (attempt += 1)}
-      ondownload={downloadPrintFile}
-    />
-  </div>
-</main>
+  <main class="workspace">
+    <div class="controls-area">
+      <ControlsPanel
+        bind:this={controls}
+        {panel}
+        bind:texts={parameterTexts}
+        bind:choices={parameterChoices}
+        values={request?.values ?? {}}
+        errors={request?.errors ?? {}}
+      />
+    </div>
+    <div class="preview-area">
+      <PreviewPanel
+        shapeName={selectedShapeName}
+        {model}
+        {invalidFields}
+        onfocusfield={(key) => controls?.focusField(key)}
+        onretry={() => (attempt += 1)}
+      />
+    </div>
+  </main>
+</div>
 
 <style>
-  main {
-    width: 100%;
-    max-width: var(--page-max);
-    margin: 0 auto;
-    padding: var(--space-8) var(--page-gutter) var(--space-24);
-  }
-
-  .intro {
-    margin-bottom: var(--space-6);
-  }
-
-  .eyebrow {
-    margin-bottom: var(--space-2);
-    color: var(--color-text-dim);
-    font-family: var(--font-heading);
-    font-size: var(--text-tiny);
-    font-variant-ligatures: none;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-  }
-
-  .lead {
-    max-width: var(--prose-width);
-    margin-bottom: 0;
-    color: var(--color-text-muted);
-    font-size: var(--text-lead);
+  /*
+   * The workspace takes the browser's height: the header row keeps its size, the content row gets the rest and may
+   * shrink below its content, so only the sidebar scrolls while the preview keeps its position and size.
+   */
+  .app-shell {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    height: 100vh;
+    height: 100dvh;
   }
 
   .workspace {
+    --controls-overflow-y: auto;
     display: grid;
-    grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
-    gap: var(--space-6);
+    grid-template-areas: "controls preview";
+    grid-template-columns: clamp(300px, 25vw, 340px) minmax(0, 1fr);
+    gap: var(--space-4);
+    min-height: 0;
+    padding: var(--space-4);
   }
 
-  @media (max-width: 860px) {
+  /* Each area passes its bounded height on to its panel, which may shrink below its content. */
+  .controls-area,
+  .preview-area {
+    display: grid;
+    grid-template-rows: minmax(0, 1fr);
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .controls-area {
+    grid-area: controls;
+  }
+
+  .preview-area {
+    grid-area: preview;
+  }
+
+  .shape-picker {
+    display: flex;
+    flex: 1 1 18rem;
+    align-items: center;
+    gap: var(--space-3);
+    max-width: 30rem;
+    min-width: 0;
+  }
+
+  .shape-picker label {
+    flex: none;
+    color: var(--color-text-muted);
+    font-size: var(--text-small);
+  }
+
+  /*
+   * Narrow screens and high zoom levels (1366 × 768 at 200 % leaves 683 × 384 CSS pixels): one column with the preview
+   * above the controls and ordinary page scrolling.
+   */
+  @media (max-width: 860px), (max-height: 480px) {
+    .app-shell {
+      display: block;
+      height: auto;
+    }
+
     .workspace {
-      grid-template-columns: 1fr;
+      grid-template-areas:
+        "preview"
+        "controls";
+      grid-template-columns: minmax(0, 1fr);
+      /* The page scrolls; the controls grow with their content. */
+      --controls-overflow-y: visible;
+      --preview-viewport-height: clamp(260px, 55vh, 480px);
     }
   }
 
-  @media (max-width: 600px) {
-    main {
-      padding-top: var(--space-6);
-      padding-bottom: var(--space-16);
+  @media (max-width: 480px) {
+    .workspace {
+      padding: var(--space-3);
+    }
+
+    .shape-picker {
+      flex-wrap: wrap;
+      gap: var(--space-1);
     }
   }
 </style>

@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import {
   collectErrors,
+  dimensionsLine,
   downloadButton,
   downloadThreeMf,
   expectPreviewOf,
@@ -30,7 +31,12 @@ test('cube: selection, interactive preview and a valid 80 mm 3MF download', asyn
   await page.mouse.wheel(0, -400);
   await expect.poll(async () => (await orbit()).radius).toBeLessThan(initial.radius);
 
-  await expect(page.getByRole('definition').filter({ hasText: /^80 мм$/ })).toBeVisible();
+  // The dimensions describe the exported mesh, not the view: rotating and zooming leave them unchanged.
+  await expect(dimensionsLine(page)).toHaveText('Габарити: 80 × 80 × 80 мм');
+  // A fixed solid needs no groups: one line instead of parameters or a measurements table.
+  await expect(page.getByText('Усі ребра рівні, грані — квадрати. Параметрів немає.')).toBeVisible();
+  await expect(page.locator('details')).toHaveCount(0);
+  await expect(page.getByRole('slider')).toHaveCount(0);
 
   const { fileName, measurements } = await downloadThreeMf(page);
   expect(fileName).toBe('cube.3mf');

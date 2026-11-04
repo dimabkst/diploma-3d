@@ -1,13 +1,13 @@
 import { expect, type Page, test } from '@playwright/test';
 import {
-  type Box,
-  boxesOf,
   collectErrors,
   downloadButton,
   downloadThreeMf,
   expectPreviewOf,
   expectSizesClose,
-  measurementValue,
+  hasNoHorizontalOverflow,
+  openSection,
+  previewPlace,
   previewViewport,
   shapeSelect,
 } from './helpers.ts';
@@ -18,12 +18,11 @@ const entry = (page: Page, field: Field) => page.getByLabel(field, { exact: true
 const slider = (page: Page, field: Field) => page.getByRole('slider', { name: `${field}: повзунок`, exact: true });
 const stepButton = (page: Page, field: Field, action: 'зменшити' | 'збільшити') =>
   page.getByRole('button', { name: `${field}: ${action}`, exact: true });
-const baseType = (page: Page) => page.getByLabel('Основа', { exact: true });
+const baseType = (page: Page) => page.getByLabel('Тип основи', { exact: true });
 const polygonSelect = (page: Page) => page.getByLabel('Багатокутник', { exact: true });
 const chooseBaseType = (page: Page, label: 'Правильний багатокутник' | 'Трикутник') => baseType(page).selectOption({ label });
 
 const numberFormat = new Intl.NumberFormat('uk-UA', { maximumFractionDigits: 1 });
-const format = (value: number, unit: string) => `${numberFormat.format(value)} ${unit}`;
 
 /**
  * The prism over the triangle P0 = (0, 0), P1 = (1, 0), P2 = b0·(cos α, sin α), with height h0 and the upper base moved
@@ -69,9 +68,7 @@ async function expectDownloadedTriangle(page: Page, expected: ReturnType<typeof 
   expect(Math.abs(measurements.surfaceArea / expected.surfaceArea - 1)).toBeLessThan(1e-6);
 }
 
-test('triangle prism: the base type shows its own fields and measurements, and the right triangle is exported', async ({
-  page,
-}) => {
+test('triangle prism: the base type shows its own fields and help, and the right triangle is exported', async ({ page }) => {
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Призма' });
@@ -82,38 +79,18 @@ test('triangle prism: the base type shows its own fields and measurements, and t
   await expect(polygonSelect(page)).toHaveCount(0);
   await expect(entry(page, 'Сторона основи b')).toHaveValue('1');
   await expect(entry(page, 'Кут α')).toHaveValue('60');
-  await expect(
-    page.getByText(
-      'Трикутник задається сторонами a і b та кутом α між ними. Довжина третьої сторони c обчислюється автоматично.',
-    ),
-  ).toBeVisible();
-  await expect(page.getByRole('term')).toHaveText([
-    'Сторона основи a',
-    'Сторона основи b',
-    'Сторона основи c',
-    'Висота h',
-    'Бічне ребро l',
-    'Площа основи',
-    'Площа поверхні',
-    'Об’єм',
-  ]);
+  await page.getByRole('button', { name: 'Як задано трикутник?' }).click();
+  await expect(page.getByText('Сторонами a і b та кутом α між ними; третя сторона обчислюється автоматично.')).toBeVisible();
   // The default b = a, α = 60° with the prism's h = 2a: the equilateral triangle, a = b = c = 40 mm.
   await expectPreviewOf(page, summary(geometry(1, 60, 2)));
-  for (const side of ['a', 'b', 'c']) await expect(measurementValue(page, `Сторона основи ${side}`)).toHaveText('40 мм');
+  await expectDownloadedTriangle(page, geometry(1, 60, 2));
 
   // The right-triangle reference: a = 80, b = 60, c = 100, h = 80 mm.
   await entry(page, 'Сторона основи b').fill('0,75');
   await entry(page, 'Кут α').fill('90');
   await entry(page, 'Висота h').fill('1');
+  // V = 2400 · 80 = 192 000 mm³ and S = 2 · 2400 + (80 + 60 + 100) · 80 = 24 000 mm².
   await expectPreviewOf(page, 'Призма · 80 × 60 × 80 мм');
-  await expect(measurementValue(page, 'Сторона основи a')).toHaveText('80 мм');
-  await expect(measurementValue(page, 'Сторона основи b')).toHaveText('60 мм');
-  await expect(measurementValue(page, 'Сторона основи c')).toHaveText('100 мм');
-  await expect(measurementValue(page, 'Висота h')).toHaveText('80 мм');
-  await expect(measurementValue(page, 'Бічне ребро l')).toHaveText('80 мм');
-  await expect(measurementValue(page, 'Площа основи')).toHaveText(format(2400, 'мм²'));
-  await expect(measurementValue(page, 'Площа поверхні')).toHaveText(format(24_000, 'мм²'));
-  await expect(measurementValue(page, 'Об’єм')).toHaveText(format(192_000, 'мм³'));
   await expectDownloadedTriangle(page, geometry(0.75, 90, 1));
 
   expect(errors).toEqual([]);
@@ -150,12 +127,11 @@ test('triangle prism: side, angle and displacement controls step and keep typed 
 
   // An obtuse oblique prism: the base is wider than a, and the upper base moves by (−0,5a, 0,75a).
   await entry(page, 'Висота h').fill('1');
+  await openSection(page, 'Нахил');
   await entry(page, 'Зміщення X').fill('-0,5');
   await entry(page, 'Зміщення Y').fill('0,75');
   const oblique = geometry(1.3, 97.5, 1, -0.5, 0.75);
   await expectPreviewOf(page, summary(oblique));
-  await expect(measurementValue(page, 'Сторона основи c')).toHaveText(format(oblique.c, 'мм'));
-  await expect(measurementValue(page, 'Бічне ребро l')).toHaveText(format(oblique.lateralEdge, 'мм'));
   await expectDownloadedTriangle(page, oblique);
 
   await page.getByRole('button', { name: 'Прибрати нахил', exact: true }).click();
@@ -172,6 +148,7 @@ test('triangle prism: switching base types keeps the shared height and displacem
   await shapeSelect(page).selectOption({ label: 'Призма' });
   await polygonSelect(page).selectOption({ label: 'Правильний шестикутник' });
   await entry(page, 'Висота h').fill('1,5');
+  await openSection(page, 'Нахил');
   await entry(page, 'Зміщення X').fill('0,5');
   // The hexagon is 2a wide and √3·a deep; with dx = 0,5a and h = 1,5a the box is 2,5a × √3·a × 1,5a, so a = 32 mm.
   await expectPreviewOf(page, `Призма · 80 × ${numberFormat.format(32 * Math.sqrt(3))} × 48 мм`);
@@ -215,18 +192,15 @@ for (const [layout, width] of [
   ['desktop', 1440],
   ['narrow phone', 320],
 ] as const) {
-  test(`triangle prism: measurements keep their positions without horizontal overflow (${layout}, ${width} px)`, async ({
-    page,
-  }) => {
-    // Tall enough to keep the 3D viewer, which loads only when visible, on screen below the stacked controls.
-    await page.setViewportSize({ width, height: 3400 });
+  test(`triangle prism: the preview keeps its place without horizontal overflow (${layout}, ${width} px)`, async ({ page }) => {
+    // Tall enough on a phone to keep the 3D viewer, which loads models only while visible, on screen above the controls.
+    await page.setViewportSize({ width, height: width < 600 ? 2400 : 900 });
     await page.goto('/');
     await shapeSelect(page).selectOption({ label: 'Призма' });
     await chooseBaseType(page, 'Трикутник');
-    const values = page.getByRole('definition');
-    const footnote = page.getByText('Розміри наведено для файлу друку');
+    await openSection(page, 'Нахил');
 
-    let reference: { values: Box[]; footnote: Box } | undefined;
+    let reference: Awaited<ReturnType<typeof previewPlace>> | undefined;
     for (const [b, angle, h, x] of [
       [1, 60, 2, 0],
       [0.75, 90, 1, 0],
@@ -239,10 +213,10 @@ for (const [layout, width] of [
       await entry(page, 'Висота h').fill(String(h).replace('.', ','));
       await entry(page, 'Зміщення X').fill(String(x));
       await expectPreviewOf(page, summary(geometry(b, angle, h, x)));
-      const current = { values: await boxesOf(values), footnote: (await footnote.boundingBox()) as Box };
+      const current = await previewPlace(page);
       reference ??= current;
       expect(current).toEqual(reference);
-      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      expect(await hasNoHorizontalOverflow(page)).toBe(true);
     }
   });
 }

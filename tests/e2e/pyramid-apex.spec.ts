@@ -1,13 +1,14 @@
 import { expect, type Page, test } from '@playwright/test';
 import {
-  type Box,
-  boxesOf,
   collectErrors,
   downloadButton,
   downloadThreeMf,
   expectPreviewOf,
   expectSizesClose,
-  measurementValue,
+  hasNoHorizontalOverflow,
+  openSection,
+  parameterSection,
+  previewPlace,
   previewViewport,
   shapeSelect,
 } from './helpers.ts';
@@ -27,17 +28,12 @@ const entry = (page: Page, field: Field) => page.getByLabel(field, { exact: true
 const slider = (page: Page, field: Field) => page.getByRole('slider', { name: `${field}: повзунок`, exact: true });
 const stepButton = (page: Page, field: Field, action: 'зменшити' | 'збільшити') =>
   page.getByRole('button', { name: `${field}: ${action}`, exact: true });
-const baseType = (page: Page) => page.getByLabel('Основа', { exact: true });
-const apexGroup = (page: Page) => page.getByRole('group', { name: 'Положення вершини' });
-const apexStatus = (page: Page) => apexGroup(page).getByText(/^Зараз:/);
+const baseType = (page: Page) => page.getByLabel('Тип основи', { exact: true });
+/** The summary of the "Вершина" group, which reports the apex position also while collapsed. */
+const apexStatus = (page: Page) => parameterSection(page, 'Вершина').locator('summary');
 const resetApex = (page: Page) => page.getByRole('button', { name: 'Над центром основи', exact: true });
 
 const numberFormat = new Intl.NumberFormat('uk-UA', { maximumFractionDigits: 1 });
-const format = (value: number, unit: string) => `${numberFormat.format(value)} ${unit}`;
-const formatRange = (values: readonly number[], unit: string) => {
-  const [low, high] = [numberFormat.format(Math.min(...values)), numberFormat.format(Math.max(...values))];
-  return low === high ? `${low} ${unit}` : `${low}–${high} ${unit}`;
-};
 
 const radians = (degrees: number) => (degrees * Math.PI) / 180;
 const centred = (points: readonly Vec2[], [gx, gy]: Vec2): Vec2[] => points.map(([x, y]): Vec2 => [x - gx, y - gy]);
@@ -127,42 +123,30 @@ async function expectDownloadedPyramid(page: Page, fileName: string, expected: R
   expect(Math.abs(measurements.surfaceArea / expected.surfaceArea - 1)).toBeLessThan(1e-6);
 }
 
-async function expectPyramidMeasurements(page: Page, expected: ReturnType<typeof geometry>): Promise<void> {
-  await expect(measurementValue(page, 'Висота піраміди h')).toHaveText(format(expected.h, 'мм'));
-  await expect(measurementValue(page, 'Бічні ребра')).toHaveText(formatRange(expected.lateralEdges, 'мм'));
-  await expect(measurementValue(page, 'Висоти бічних граней')).toHaveText(formatRange(expected.faceHeights, 'мм'));
-  await expect(measurementValue(page, 'Площа основи')).toHaveText(format(expected.baseArea, 'мм²'));
-  await expect(measurementValue(page, 'Площа бічної поверхні')).toHaveText(format(expected.lateralArea, 'мм²'));
-}
-
 test('pyramid: the apex moves within and beyond the square base, and returns above its centre', async ({ page }) => {
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Піраміда' });
-  await expect(apexGroup(page).getByText('Координати відлічуються від центра мас основи')).toBeVisible();
+  await expect(apexStatus(page)).toHaveText(/^Вершина\s*над центром\s*$/);
+  await openSection(page, 'Вершина');
+  await page.getByRole('button', { name: 'Як задано вершину?' }).click();
+  await expect(page.getByText('Зміщення відлічується від центра мас основи')).toBeVisible();
   await expect(entry(page, 'Зміщення X')).toHaveValue('0');
-  await expect(apexStatus(page)).toHaveText('Зараз: вершина над центром основи');
   await expect(resetApex(page)).toBeDisabled();
 
   // The reference: the apex above the corner (−a/2, −a/2) of the square with h = a. The box stays 1 × 1 × 1, so
   // a = h = 80 mm; the lateral edges are 80, 80√2, 80√3 and 80√2 mm.
   await entry(page, 'Зміщення X').fill('-0,5');
   await entry(page, 'Зміщення Y').fill('-0,5');
-  await expect(apexStatus(page)).toHaveText('Зараз: вершина зміщена');
+  await expect(apexStatus(page)).toHaveText(/^Вершина\s*зміщена\s*$/);
   const corner = geometry(bases.square(), 1, -0.5, -0.5);
   await expectPreviewOf(page, 'Піраміда · 80 × 80 × 80 мм');
-  await expect(measurementValue(page, 'Бічні ребра')).toHaveText(`80–${numberFormat.format(80 * Math.sqrt(3))} мм`);
-  await expect(measurementValue(page, 'Висоти бічних граней')).toHaveText(`80–${numberFormat.format(80 * Math.SQRT2)} мм`);
-  await expect(measurementValue(page, 'Площа поверхні')).toHaveText(format(6400 * (2 + Math.SQRT2), 'мм²'));
-  await expect(measurementValue(page, 'Об’єм')).toHaveText(format(512_000 / 3, 'мм³'));
-  await expectPyramidMeasurements(page, corner);
   await expectDownloadedPyramid(page, 'pyramid-4-sided.3mf', corner);
 
   // Outside the base: the apex at (a, 0) widens the box to 1,5a, so a = h = 160/3 mm.
   await entry(page, 'Зміщення X').fill('1');
   await entry(page, 'Зміщення Y').fill('0');
   await expectPreviewOf(page, summary(geometry(bases.square(), 1, 1, 0)));
-  await expectPyramidMeasurements(page, geometry(bases.square(), 1, 1, 0));
 
   // Negative and typed values with the quarter steps; the limits are ±4.
   const x = entry(page, 'Зміщення X');
@@ -181,7 +165,6 @@ test('pyramid: the apex moves within and beyond the square base, and returns abo
   await entry(page, 'Зміщення Y').fill('-3,05');
   const far = geometry(bases.square(), 1, 2.35, -3.05);
   await expectPreviewOf(page, summary(far));
-  await expectPyramidMeasurements(page, far);
   await expectDownloadedPyramid(page, 'pyramid-4-sided.3mf', far);
 
   // Back above the centre: only the apex changes.
@@ -190,7 +173,7 @@ test('pyramid: the apex moves within and beyond the square base, and returns abo
   await expect(x).toHaveValue('0');
   await expect(entry(page, 'Зміщення Y')).toHaveValue('0');
   await expect(entry(page, 'Висота піраміди h')).toHaveValue('1,5');
-  await expect(apexStatus(page)).toHaveText('Зараз: вершина над центром основи');
+  await expect(apexStatus(page)).toHaveText(/^Вершина\s*над центром\s*$/);
   await expect(resetApex(page)).toBeDisabled();
   await expectPreviewOf(page, summary(geometry(bases.square(), 1.5)));
 
@@ -203,6 +186,7 @@ test('pyramid: triangle, parallelogram and trapezoid bases with their own fields
   await shapeSelect(page).selectOption({ label: 'Піраміда' });
   await expect(baseType(page).locator('option')).toHaveText(['Правильний багатокутник', 'Трикутник', 'Паралелограм', 'Трапеція']);
   await entry(page, 'Висота піраміди h').fill('1');
+  await openSection(page, 'Вершина');
   await entry(page, 'Зміщення X').fill('0,25');
 
   // The right triangle a = 4, b = 3 (in units of a/4); the apex keeps its offset.
@@ -210,22 +194,8 @@ test('pyramid: triangle, parallelogram and trapezoid bases with their own fields
   await expect(page.getByLabel('Багатокутник', { exact: true })).toHaveCount(0);
   await entry(page, 'Сторона основи b').fill('0,75');
   await entry(page, 'Кут α').fill('90');
-  await expect(page.getByRole('term')).toHaveText([
-    'Сторона основи a',
-    'Сторона основи b',
-    'Сторона основи c',
-    'Висота піраміди h',
-    'Бічні ребра',
-    'Висоти бічних граней',
-    'Площа основи',
-    'Площа бічної поверхні',
-    'Площа поверхні',
-    'Об’єм',
-  ]);
   const triangle = geometry(bases.triangle(0.75, 90), 1, 0.25, 0);
   await expectPreviewOf(page, summary(triangle));
-  await expect(measurementValue(page, 'Сторона основи c')).toHaveText(format(1.25 * triangle.a, 'мм'));
-  await expectPyramidMeasurements(page, triangle);
   await expectDownloadedPyramid(page, 'pyramid-triangle.3mf', triangle);
 
   // The parallelogram with b = 2a and α = 120°, with an off-step angle.
@@ -233,10 +203,8 @@ test('pyramid: triangle, parallelogram and trapezoid bases with their own fields
   await expect(entry(page, 'Сторона основи b')).toHaveValue('1');
   await entry(page, 'Сторона основи b').fill('2');
   await entry(page, 'Кут α').fill('117,5');
-  await expect(page.getByRole('term').nth(1)).toHaveText('Сторона основи b');
   const parallelogram = geometry(bases.parallelogram(2, 117.5), 1, 0.25, 0);
   await expectPreviewOf(page, summary(parallelogram));
-  await expectPyramidMeasurements(page, parallelogram);
   await expectDownloadedPyramid(page, 'pyramid-parallelogram.3mf', parallelogram);
 
   // The right trapezoid of the prism reference, aligned with the existing action, and the apex across the base.
@@ -245,10 +213,8 @@ test('pyramid: triangle, parallelogram and trapezoid bases with their own fields
   await page.getByRole('button', { name: 'Вирівняти зліва', exact: true }).click();
   await expect(entry(page, 'Зміщення сторони b')).toHaveValue('-0,25');
   await entry(page, 'Зміщення Y').fill('-0,75');
-  await expect(measurementValue(page, 'Висота трапеції t')).not.toHaveText('—');
   const trapezoid = geometry(bases.trapezoid(0.5, 0.375, -0.25), 1, 0.25, -0.75);
   await expectPreviewOf(page, summary(trapezoid));
-  await expectPyramidMeasurements(page, trapezoid);
   await expectDownloadedPyramid(page, 'pyramid-trapezoid.3mf', trapezoid);
 
   expect(errors).toEqual([]);
@@ -258,6 +224,7 @@ test('pyramid: switching bases keeps the height and apex and validates only the 
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Піраміда' });
   await entry(page, 'Висота піраміди h').fill('0,75');
+  await openSection(page, 'Вершина');
   await entry(page, 'Зміщення Y').fill('1,5');
   await expectPreviewOf(page, summary(geometry(bases.square(), 0.75, 0, 1.5)));
 
@@ -289,7 +256,7 @@ test('pyramid: switching bases keeps the height and apex and validates only the 
   await entry(page, 'Зміщення X').fill('4,5');
   await expect(page.getByText('Допустимі значення — від -4 до 4.')).toBeVisible();
   await expect(downloadButton(page)).toBeDisabled();
-  await expect(apexStatus(page)).toHaveCount(0);
+  await expect(apexStatus(page)).toHaveText(/^Вершина\s*помилка\s*$/);
   await resetApex(page).click();
   await expect(entry(page, 'Зміщення Y')).toHaveValue('0');
   await baseType(page).selectOption({ label: 'Правильний багатокутник' });
@@ -302,18 +269,15 @@ for (const [layout, width] of [
   ['desktop', 1440],
   ['narrow phone', 320],
 ] as const) {
-  test(`pyramid: apex measurements keep their positions without horizontal overflow (${layout}, ${width} px)`, async ({
-    page,
-  }) => {
-    // Tall enough to keep the 3D viewer, which loads only when visible, on screen below the stacked controls.
-    await page.setViewportSize({ width, height: 4200 });
+  test(`pyramid apex: the preview keeps its place without horizontal overflow (${layout}, ${width} px)`, async ({ page }) => {
+    // Tall enough on a phone to keep the 3D viewer, which loads models only while visible, on screen above the controls.
+    await page.setViewportSize({ width, height: width < 600 ? 2400 : 900 });
     await page.goto('/');
     await shapeSelect(page).selectOption({ label: 'Піраміда' });
     await baseType(page).selectOption({ label: 'Трапеція' });
-    const values = page.getByRole('definition');
-    const footnote = page.getByText('Розміри наведено для файлу друку');
+    await openSection(page, 'Вершина');
 
-    let reference: { values: Box[]; footnote: Box } | undefined;
+    let reference: Awaited<ReturnType<typeof previewPlace>> | undefined;
     // Equal and unequal lateral edges, the apex inside, on the border and far outside, flat and tall pyramids.
     for (const [x, y, h] of [
       ['0', '0', '1'],
@@ -327,10 +291,10 @@ for (const [layout, width] of [
       await entry(page, 'Висота піраміди h').fill(h);
       const [qx, qy, h0] = [x, y, h].map((text) => Number(text.replace(',', '.'))) as [number, number, number];
       await expectPreviewOf(page, summary(geometry(bases.trapezoid(0.5, 0.5, 0), h0, qx, qy)));
-      const current = { values: await boxesOf(values), footnote: (await footnote.boundingBox()) as Box };
+      const current = await previewPlace(page);
       reference ??= current;
       expect(current).toEqual(reference);
-      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      expect(await hasNoHorizontalOverflow(page)).toBe(true);
     }
   });
 }

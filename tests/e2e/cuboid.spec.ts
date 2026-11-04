@@ -1,13 +1,13 @@
 import { expect, type Page, test } from '@playwright/test';
 import {
-  type Box,
-  boxesOf,
   collectErrors,
   downloadButton,
   downloadThreeMf,
   expectPreviewOf,
   expectSizesClose,
   expectViewerBox,
+  hasNoHorizontalOverflow,
+  previewPlace,
   previewViewport,
   shapeSelect,
 } from './helpers.ts';
@@ -20,7 +20,6 @@ const heightRatio = (page: Page) => entry(page, 'Висота c');
 const slider = (page: Page, field: RatioField) => page.getByRole('slider', { name: `${field}: повзунок`, exact: true });
 const stepButton = (page: Page, field: RatioField, action: 'зменшити' | 'збільшити') =>
   page.getByRole('button', { name: `${field}: ${action}`, exact: true });
-const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const NAME = 'Прямокутний паралелепіпед';
 
 const sizeFormat = new Intl.NumberFormat('uk-UA', { maximumFractionDigits: 1 });
@@ -283,8 +282,9 @@ test('cuboid: invalid ratios are explained and block stepping and the download u
   ] as const) {
     await widthRatio(page).fill(text);
     await expect(widthRatio(page)).toHaveAttribute('aria-invalid', 'true');
-    // The error is announced first, followed by the general explanation of the multipliers.
-    await expect(widthRatio(page)).toHaveAccessibleDescription(new RegExp(`^${escapeRegExp(message)} Множники задають`));
+    // The error stays visible next to the field and is its accessible description.
+    await expect(page.getByText(message)).toBeVisible();
+    await expect(widthRatio(page)).toHaveAccessibleDescription(message);
     await expect(previewViewport(page)).toHaveAttribute('data-preview-status', 'invalid');
     await expect(page.getByRole('alert')).toContainText('Модель не оновлено');
     await expect(downloadButton(page)).toBeDisabled();
@@ -330,63 +330,34 @@ test('cuboid: switching back to the cube restores equal edges and keeps the cubo
   expect(errors).toEqual([]);
 });
 
-for (const [layout, width, stacked] of [
-  ['desktop', 1440, false],
-  ['phone', 390, false],
-  ['narrow phone', 320, true],
+for (const [layout, width, height] of [
+  ['desktop', 1440, 900],
+  ['phone', 390, 844],
+  ['narrow phone', 320, 640],
 ] as const) {
-  test(`cuboid: measurements keep their positions while the ratios change (${layout}, ${width} px)`, async ({ page }) => {
-    // Tall enough to keep the 3D viewer, which loads only when visible, on screen below the stacked controls.
-    await page.setViewportSize({ width, height: 2400 });
+  test(`cuboid: the preview and its dimensions keep their place while the ratios change (${layout}, ${width} px)`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height });
     await page.goto('/');
     await shapeSelect(page).selectOption('cuboid');
-    const labels = page.getByRole('term');
-    const values = page.getByRole('definition');
-    const footnote = page.getByText('Розміри наведено для файлу друку');
-    await expect(labels).toHaveText(['Довжина a', 'Ширина b', 'Висота c', 'Площа поверхні', 'Об’єм']);
+    await expectPreviewOf(page, `${NAME} · 40 × 60 × 80 мм`);
+    const reference = await previewPlace(page);
 
-    let reference: { labels: Box[]; values: Box[]; footnote: Box } | undefined;
-    // Integer, fractional and boundary ratios give values of very different lengths, e.g. "5 мм" and "26,7 мм".
+    // Integer, fractional and boundary ratios give dimensions of very different lengths, e.g. "5 мм" and "26,7 мм".
     for (const [widthRatioValue, heightRatioValue] of [
-      [1, 1],
       [1.1, 1],
       [1.25, 1.1],
       [0.25, 0.25],
       [4, 0.25],
       [0.25, 4],
-      [4, 4],
       [1.1, 2.05],
     ] as const) {
       await widthRatio(page).fill(String(widthRatioValue).replace('.', ','));
       await heightRatio(page).fill(String(heightRatioValue).replace('.', ','));
       await expectPreviewOf(page, cuboidSummary(widthRatioValue, heightRatioValue));
-      await expect(values.last()).not.toHaveText('—');
-
-      const current = {
-        labels: await boxesOf(labels),
-        values: await boxesOf(values),
-        footnote: (await footnote.boundingBox()) as Box,
-      };
-      reference ??= current;
-      expect(current).toEqual(reference);
-
-      // Every value fits completely on a single line, and the page never scrolls sideways.
-      for (const value of await values.all()) {
-        expect(await value.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-      }
-      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-    }
-
-    // Two columns where there is room; below a fixed container width each value sits under its label.
-    const [firstLabel] = await boxesOf(labels);
-    const [firstValue] = await boxesOf(values);
-    if (firstLabel === undefined || firstValue === undefined) throw new Error('The measurements are missing.');
-    if (stacked) {
-      expect(firstValue.y).toBeGreaterThanOrEqual(firstLabel.y + firstLabel.height - 1);
-      expect(Math.abs(firstValue.x - firstLabel.x)).toBeLessThan(1);
-    } else {
-      expect(Math.abs(firstValue.y - firstLabel.y)).toBeLessThan(firstLabel.height);
-      expect(firstValue.x).toBeGreaterThan(firstLabel.x + firstLabel.width);
+      expect(await previewPlace(page)).toEqual(reference);
+      expect(await hasNoHorizontalOverflow(page)).toBe(true);
     }
   });
 }

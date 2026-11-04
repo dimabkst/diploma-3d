@@ -1,63 +1,68 @@
 <script lang="ts">
+import { tick } from 'svelte';
 import { formatSteppedDecimal } from '../decimal.ts';
 import {
   alignedTrapezoidShift,
   type ParameterChoices,
   type ParameterErrors,
+  type ParameterKey,
   type ParameterTexts,
   type ParameterValues,
   type TrapezoidAlignment,
 } from '../model/parameters.ts';
 import {
-  type MeasurementItem,
   type NumericField,
   type OffsetGroup,
-  type ParameterField,
-  type ShapeOption,
+  type ParameterSection as Section,
+  type ShapePanel,
+  sectionNumberFields,
   type TrapezoidGroup,
-  trapezoidHint,
   trapezoidKindName,
 } from '../shapes.ts';
 import Button from './Button.svelte';
 import Field from './Field.svelte';
-import FieldGroup from './FieldGroup.svelte';
-import MeasurementList from './MeasurementList.svelte';
+import HelpToggle from './HelpToggle.svelte';
 import NumberField from './NumberField.svelte';
-import SectionHeading from './SectionHeading.svelte';
+import ParameterSection from './ParameterSection.svelte';
+import Select from './Select.svelte';
 
 let {
-  shapes,
-  selectedShape = $bindable(),
-  description,
-  fields,
+  panel,
   texts = $bindable(),
   choices = $bindable(),
   values,
   errors,
-  parameterHint,
-  measurements,
 }: {
-  shapes: readonly ShapeOption[];
-  selectedShape: string;
-  description: string;
-  fields: readonly ParameterField[];
+  panel: ShapePanel;
   texts: ParameterTexts;
   choices: ParameterChoices;
   values: ParameterValues;
   errors: ParameterErrors;
-  parameterHint: string | undefined;
-  measurements: readonly MeasurementItem[];
 } = $props();
 
-const describedBy = (...ids: (string | undefined)[]) => ids.filter((id) => id !== undefined).join(' ') || undefined;
-const hintId = $derived(parameterHint === undefined ? undefined : 'parameter-hint');
+// Per group, across shapes: a group keeps its open state and its fields keep their values while collapsed.
+let openSections = $state<Record<string, boolean>>({});
+const isOpen = (section: Section) => openSections[section.key] ?? section.initiallyOpen;
 
-/** Centred when both values are zero, moved otherwise; undefined while either is not valid. */
+const hasError = (section: Section) => sectionNumberFields(section).some((field) => errors[field.key] !== undefined);
+
+/** Opens the group of the field, which may have been collapsed after the error appeared, and moves focus to it. */
+export async function focusField(key: ParameterKey): Promise<void> {
+  if (panel.type !== 'parameters') return;
+  const owner = panel.sections.find((section) => sectionNumberFields(section).some((field) => field.key === key));
+  if (owner !== undefined) openSections[owner.key] = true;
+  await tick();
+  document.getElementById(key)?.focus();
+}
+
+/** Centred when every value is zero, moved otherwise; undefined while any is not valid. */
 function offsetState(group: OffsetGroup): 'centred' | 'moved' | undefined {
   const positions = group.fields.map((field) => values[field.key]);
   if (positions.some((value) => value === undefined)) return undefined;
   return positions.every((value) => value === 0) ? 'centred' : 'moved';
 }
+
+const offsetOf = (section: Section) => section.fields.find((field): field is OffsetGroup => field.type === 'offset');
 
 function resetOffset(group: OffsetGroup) {
   for (const field of group.fields) texts[field.key] = '0';
@@ -78,7 +83,7 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
 ];
 </script>
 
-{#snippet numberField(field: NumericField, description: string | undefined)}
+{#snippet numberField(field: NumericField)}
   <NumberField
     id={field.key}
     label={field.label}
@@ -87,147 +92,134 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
     range={field.range}
     suffix={field.suffix}
     error={errors[field.key]}
-    describedBy={description}
   />
 {/snippet}
 
 <aside class="controls-panel" aria-label="Налаштування моделі">
-  <section aria-labelledby="shape-heading">
-    <SectionHeading id="shape-heading" step="01" title="Вибір фігури" />
-    <Field label="Геометричне тіло" forId="shape">
-      <select id="shape" bind:value={selectedShape}>
-        {#each shapes as shape (shape.value)}
-          <option value={shape.value}>{shape.label}</option>
-        {/each}
-      </select>
-    </Field>
-  </section>
-
-  <section aria-labelledby="parameters-heading">
-    <SectionHeading id="parameters-heading" step="02" title="Параметри" />
-    <div class="section-body">
-      <p class="hint">{description}</p>
-      {#if fields.length > 0}
-        <div class="field-grid">
-          {#each fields as field (field.key)}
+  <div class="controls-scroll">
+  {#if panel.type === 'fixed'}
+    <p class="note">{panel.note}</p>
+  {:else}
+    <div class="panel-header">
+      <h2 class="panel-title">Параметри</h2>
+      <HelpToggle id="reference-help" help={panel.help} />
+    </div>
+    <div class="sections">
+      {#each panel.sections as section (section.key)}
+        {@const offset = offsetOf(section)}
+        {@const state = offset === undefined ? undefined : offsetState(offset)}
+        <ParameterSection
+          title={section.title}
+          bind:open={() => isOpen(section), (open) => (openSections[section.key] = open)}
+          status={offset === undefined || state === undefined ? undefined : offset.status[state]}
+          highlighted={state === 'moved'}
+          invalid={hasError(section)}
+        >
+          {#each section.fields as field (field.key)}
             {#if field.type === 'choice'}
               <Field label={field.label} forId={field.key}>
-                <select id={field.key} bind:value={choices[field.key]}>
-                  {#each field.options as option (option.value)}
-                    <option value={option.value}>{option.label}</option>
-                  {/each}
-                </select>
+                <Select id={field.key} bind:value={choices[field.key]} options={field.options} />
               </Field>
             {:else if field.type === 'offset'}
-              {@const state = offsetState(field)}
-              <FieldGroup id={field.key} legend={field.legend} description={field.description}>
-                {#each field.fields as offsetField (offsetField.key)}
-                  {@render numberField(offsetField, describedBy(`${field.key}-description`, hintId))}
-                {/each}
-                <div class="offset-footer">
-                  <p class="group-status" aria-live="polite">
-                    {#if state !== undefined}Зараз: {field.status[state]}{/if}
-                  </p>
-                  <Button variant="secondary" disabled={state === 'centred'} onclick={() => resetOffset(field)}>
-                    {field.resetLabel}
-                  </Button>
-                </div>
-              </FieldGroup>
+              {#each field.fields as offsetField (offsetField.key)}
+                {@render numberField(offsetField)}
+              {/each}
+              <div class="group-actions">
+                <!-- Also enabled while a value is invalid: resetting is a way to correct it. -->
+                <Button variant="secondary" disabled={state === 'centred'} onclick={() => resetOffset(field)}>
+                  {field.resetLabel}
+                </Button>
+              </div>
             {:else if field.type === 'trapezoid'}
               {@const sideRatio = values[field.fields[0].key]}
               {@const kindName = trapezoidKindName(sideRatio, values[field.fields[2].key])}
-              <FieldGroup id={field.key} legend={field.legend} description={trapezoidHint}>
-                {#each field.fields as trapezoidField (trapezoidField.key)}
-                  {@render numberField(trapezoidField, describedBy(`${field.key}-description`, hintId))}
+              {#each field.fields as trapezoidField (trapezoidField.key)}
+                {@render numberField(trapezoidField)}
+              {/each}
+              <div class="group-actions" role="group" aria-label="Вирівнювання сторони b">
+                {#each alignments as { alignment, label } (alignment)}
+                  <Button
+                    variant="secondary"
+                    disabled={alignment !== 'centre' && sideRatio === undefined}
+                    onclick={() => alignSideB(field, alignment)}
+                  >
+                    {label}
+                  </Button>
                 {/each}
-                <div class="actions" role="group" aria-label="Вирівнювання сторони b">
-                  {#each alignments as { alignment, label } (alignment)}
-                    <Button
-                      variant="secondary"
-                      disabled={alignment !== 'centre' && sideRatio === undefined}
-                      onclick={() => alignSideB(field, alignment)}
-                    >
-                      {label}
-                    </Button>
-                  {/each}
-                </div>
-                <p class="group-status" aria-live="polite">{#if kindName !== undefined}Зараз: {kindName}{/if}</p>
-              </FieldGroup>
+              </div>
+              <p class="group-status" aria-live="polite">{#if kindName !== undefined}Зараз: {kindName}{/if}</p>
             {:else}
-              {@render numberField(field, hintId)}
+              {@render numberField(field)}
             {/if}
           {/each}
-        </div>
-      {/if}
-      {#if parameterHint !== undefined}
-        <p class="hint" id="parameter-hint">{parameterHint}</p>
-      {/if}
-      <MeasurementList items={measurements} />
-      <p class="hint">Розміри наведено для файлу друку. За потреби змініть масштаб у слайсері.</p>
+          {#if section.help !== undefined}
+            <HelpToggle id={`${section.key}-help`} help={section.help} />
+          {/if}
+        </ParameterSection>
+      {/each}
     </div>
-  </section>
+  {/if}
+  </div>
 </aside>
 
 <style>
+  /*
+   * The outline follows the content up to the height the page allows. The vertical padding equals the corner radius,
+   * so a scrollbar of the inner element runs along the straight part of the border and its ends stay inside the
+   * rounded outline. `clip`, unlike `hidden`, does not make the panel a scroll container.
+   */
   .controls-panel {
+    display: flex;
+    flex-direction: column;
     align-self: start;
-    padding: var(--space-6);
+    min-width: 0;
+    min-height: 0;
+    max-height: 100%;
+    padding-block: var(--radius-card);
+    overflow: clip;
     background: var(--color-surface);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-card);
   }
 
-  section + section {
-    margin-top: var(--space-8);
-    padding-top: var(--space-8);
-    border-top: 1px solid var(--color-border);
+  /*
+   * Scrolls only where the page asks for it with --controls-overflow-y: auto, in the two-column layout. Elsewhere it
+   * is no scroll container at all, so a touch gesture that starts on the controls scrolls the page. The small vertical
+   * padding keeps focus outlines of the first and last controls clear of the clipping edge.
+   */
+  .controls-scroll {
+    min-height: 0;
+    padding: var(--space-1) var(--space-6);
+    overflow-y: var(--controls-overflow-y, visible);
+    scrollbar-gutter: stable;
   }
 
-  select {
-    width: 100%;
-    min-height: 44px;
-    padding: 0 var(--space-3);
-    color: var(--color-text);
-    background: var(--color-surface-raised);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-input);
-    color-scheme: dark;
-    transition: border-color 200ms ease;
+  .note {
+    margin: 0;
+    color: var(--color-text-muted);
+    font-size: var(--text-small);
+    line-height: 1.5;
   }
 
-  select:hover:not(:disabled):not(:focus-visible):not(:open) {
-    border-color: var(--color-border-strong);
-  }
-
-  select:focus-visible,
-  select:open {
-    border-color: var(--color-border);
-  }
-
-  select:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
-  .section-body {
+  .panel-header {
     display: grid;
-    gap: var(--space-4);
+    gap: var(--space-1);
+    padding-bottom: var(--space-2);
   }
 
-  .field-grid {
-    display: grid;
-    gap: var(--space-4);
+  .panel-title {
+    margin: 0;
+    font-size: var(--text-small);
+    color: var(--color-text-dim);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
   }
 
-  .offset-footer {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-2) var(--space-4);
+  .sections {
+    border-bottom: 1px solid var(--color-border);
   }
 
-  .actions {
+  .group-actions {
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-2);
@@ -239,16 +231,9 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
     font-size: var(--text-small);
   }
 
-  .hint {
-    margin: 0;
-    color: var(--color-text-muted);
-    font-size: var(--text-small);
-    line-height: 1.5;
-  }
-
   @media (max-width: 420px) {
-    .controls-panel {
-      padding: var(--space-4);
+    .controls-scroll {
+      padding-inline: var(--space-4);
     }
   }
 </style>

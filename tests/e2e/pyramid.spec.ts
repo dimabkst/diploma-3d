@@ -1,13 +1,12 @@
 import { expect, type Page, test } from '@playwright/test';
 import {
-  type Box,
-  boxesOf,
   collectErrors,
   downloadButton,
   downloadThreeMf,
   expectPreviewOf,
   expectSizesClose,
-  measurementValue,
+  hasNoHorizontalOverflow,
+  previewPlace,
   previewViewport,
   shapeSelect,
 } from './helpers.ts';
@@ -86,25 +85,7 @@ test('pyramid: base and height drive the preview and the downloaded 3MF', async 
   await expect(baseSelect(page).locator('option:checked')).toHaveText(baseNames[4]);
   await expect(heightRatio(page)).toHaveValue('1');
   await expectPreviewOf(page, `${PYRAMID} · 80 × 80 × 80 мм`);
-  await expect(page.getByRole('term')).toHaveText([
-    'Сторона основи a',
-    'Висота піраміди h',
-    'Бічні ребра',
-    'Висоти бічних граней',
-    'Площа основи',
-    'Площа бічної поверхні',
-    'Площа поверхні',
-    'Об’єм',
-  ]);
-  await expect(measurementValue(page, 'Сторона основи a')).toHaveText('80 мм');
-  // With the apex above the centre all lateral edges, √(80² + 2·40²) ≈ 98 mm, and all face heights, √(80² + 40²)
-  // ≈ 89,4 mm, are equal: one value each.
-  await expect(measurementValue(page, 'Бічні ребра')).toHaveText('98 мм');
-  await expect(measurementValue(page, 'Висоти бічних граней')).toHaveText('89,4 мм');
-  await expect(measurementValue(page, 'Площа основи')).toHaveText('6 400 мм²');
-  // V = 80² · 80 / 3 ≈ 170 666,67 and S = 80² + 4 · 80 · √(80² + 40²) / 2 ≈ 20 710,84.
-  await expect(measurementValue(page, 'Об’єм')).toHaveText('170 666,7 мм³');
-  await expect(measurementValue(page, 'Площа поверхні')).toHaveText('20 710,8 мм²');
+  await expect(page.locator('summary')).toHaveText([/^Основа/, /^Висота/, /^Вершина\s*над центром/]);
   await expectDownloadedPyramid(page, 4, 1);
 
   // The hexagon is two edges wide; h/a = 1 is kept, so a = h = 40 mm.
@@ -121,7 +102,6 @@ test('pyramid: base and height drive the preview and the downloaded 3MF', async 
   await expect(heightRatio(page)).toHaveValue('4');
   await expect(stepButton(page, 'збільшити')).toBeDisabled();
   await expectPreviewOf(page, pyramidSummary(3, 4));
-  await expect(measurementValue(page, 'Сторона основи a')).toHaveText('20 мм');
   await expectDownloadedPyramid(page, 3, 4);
 
   // A precise typed value with the pentagon, and quarter steps from it.
@@ -139,7 +119,6 @@ test('pyramid: base and height drive the preview and the downloaded 3MF', async 
   await chooseBase(page, 8);
   await expect(heightRatio(page)).toHaveValue('1');
   await expectPreviewOf(page, pyramidSummary(8, 1));
-  await expect(measurementValue(page, 'Сторона основи a')).toHaveText('33,1 мм');
   await expectDownloadedPyramid(page, 8, 1);
 
   expect(errors).toEqual([]);
@@ -153,7 +132,8 @@ test('tetrahedron: a fixed preset with six equal edges and no adjustable paramet
   await expect(baseSelect(page)).toHaveCount(0);
   await expect(heightRatio(page)).toHaveCount(0);
   await expect(page.getByRole('slider')).toHaveCount(0);
-  await expect(page.getByText('Усі шість ребер рівні')).toBeVisible();
+  await expect(page.getByText('Усі ребра рівні, грані — рівносторонні трикутники. Параметрів немає.')).toBeVisible();
+  await expect(page.locator('details')).toHaveCount(0);
 
   // The base edge is the longest dimension: a = 80 mm, h = a·√(2/3) ≈ 65,3 mm and the base is √3/2·a ≈ 69,3 mm deep.
   const a = 80;
@@ -163,12 +143,6 @@ test('tetrahedron: a fixed preset with six equal edges and no adjustable paramet
     surfaceArea: Math.sqrt(3) * a ** 2,
   };
   await expectPreviewOf(page, summary(TETRAHEDRON, expected.size));
-  await expect(page.getByRole('term')).toHaveText(['Ребро a', 'Висота h', 'Площа основи', 'Площа поверхні', 'Об’єм']);
-  await expect(measurementValue(page, 'Ребро a')).toHaveText('80 мм');
-  await expect(measurementValue(page, 'Висота h')).toHaveText('65,3 мм');
-  await expect(measurementValue(page, 'Площа основи')).toHaveText('2 771,3 мм²');
-  await expect(measurementValue(page, 'Площа поверхні')).toHaveText('11 085,1 мм²');
-  await expect(measurementValue(page, 'Об’єм')).toHaveText('60 339,8 мм³');
   await expectDownloaded(page, 'tetrahedron.3mf', expected);
 
   // The triangular pyramid at the nearest quarter, h = 0,75a, is a different, flatter solid.
@@ -176,7 +150,6 @@ test('tetrahedron: a fixed preset with six equal edges and no adjustable paramet
   await chooseBase(page, 3);
   await heightRatio(page).fill('0,75');
   await expectPreviewOf(page, pyramidSummary(3, 0.75));
-  await expect(measurementValue(page, 'Висота піраміди h')).toHaveText('60 мм');
 
   expect(errors).toEqual([]);
 });
@@ -262,16 +235,15 @@ for (const [layout, width] of [
   ['desktop', 1440],
   ['narrow phone', 320],
 ] as const) {
-  test(`pyramid: measurements keep their positions across bases, heights and the tetrahedron (${layout}, ${width} px)`, async ({
+  test(`pyramid: the preview keeps its place across bases, heights and the tetrahedron (${layout}, ${width} px)`, async ({
     page,
   }) => {
-    // Tall enough to keep the 3D viewer, which loads only when visible, on screen below the stacked controls.
-    await page.setViewportSize({ width, height: 3800 });
+    // Tall enough on a phone to keep the 3D viewer, which loads models only while visible, on screen above the controls.
+    await page.setViewportSize({ width, height: width < 600 ? 2400 : 900 });
     await page.goto('/');
     await shapeSelect(page).selectOption({ label: PYRAMID });
-    const values = page.getByRole('definition');
 
-    let reference: Box[] | undefined;
+    let reference: Awaited<ReturnType<typeof previewPlace>> | undefined;
     for (const [sides, ratio] of [
       [4, 1],
       [3, 1.1],
@@ -283,15 +255,16 @@ for (const [layout, width] of [
       await chooseBase(page, sides);
       await heightRatio(page).fill(String(ratio).replace('.', ','));
       await expectPreviewOf(page, pyramidSummary(sides, ratio));
-      const current = await boxesOf(values);
+      const current = await previewPlace(page);
       reference ??= current;
       expect(current).toEqual(reference);
-      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      expect(await hasNoHorizontalOverflow(page)).toBe(true);
     }
 
-    // The tetrahedron, a fixed solid with fewer rows, fits as well.
+    // The tetrahedron, a fixed solid with a single line instead of groups, leaves the preview where it was.
     await shapeSelect(page).selectOption({ label: TETRAHEDRON });
     await expectPreviewOf(page, `${TETRAHEDRON} · 80 × 69,3 × 65,3 мм`);
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    expect(await previewPlace(page)).toEqual(reference);
+    expect(await hasNoHorizontalOverflow(page)).toBe(true);
   });
 }

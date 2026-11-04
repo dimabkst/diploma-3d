@@ -1,21 +1,61 @@
 <script lang="ts">
 import { GLB_MEDIA_TYPE } from '@diploma-3d/engine';
-import { onMount } from 'svelte';
+import { onMount, untrack } from 'svelte';
 
 let {
   glb,
+  viewKey,
   alt,
   onload,
   onerror,
 }: {
   glb: Uint8Array<ArrayBuffer>;
+  /** The shape of `glb`: a model of another shape is shown from the default direction, an edited one keeps the view. */
+  viewKey: string;
   alt: string;
   onload: (glb: Uint8Array<ArrayBuffer>) => void;
   onerror: (glb: Uint8Array<ArrayBuffer>) => void;
 } = $props();
 
+/** The parts of model-viewer's camera API used here. */
+type CameraElement = HTMLElement & {
+  cameraOrbit: string;
+  cameraTarget: string;
+  fieldOfView: string;
+  readonly updateComplete: Promise<boolean>;
+  getCameraOrbit(): { theta: number; phi: number };
+  jumpCameraToGoal(): void;
+  requestUpdate(name?: string): void;
+};
+
+const DEFAULT_ORBIT = '35deg 62deg auto';
+
 let elementDefined = $state(false);
-let viewer = $state<HTMLElement>();
+let viewer = $state<CameraElement>();
+let framedKey: string | undefined;
+
+/**
+ * Frames the whole model from `orbit`: radius, target and field of view return to "auto", which model-viewer derives
+ * from the model's bounds and the element's current size. Unchanged attribute values would not be applied again, so the
+ * properties are marked for update explicitly. Waiting for a pending update first lets the one that follows a model
+ * load, which keeps the previous direction, finish before this one replaces it.
+ */
+async function frame(element: CameraElement, orbit: string) {
+  await element.updateComplete;
+  element.cameraOrbit = orbit;
+  element.cameraTarget = 'auto auto auto';
+  element.fieldOfView = 'auto';
+  for (const property of ['cameraOrbit', 'cameraTarget', 'fieldOfView']) element.requestUpdate(property);
+  await element.updateComplete;
+  element.jumpCameraToGoal();
+}
+
+/** "Вписати модель": the complete model, seen from the current direction. */
+export function fit(): void {
+  if (viewer === undefined) return;
+  const { theta, phi } = viewer.getCameraOrbit();
+  void frame(viewer, `${theta}rad ${phi}rad auto`);
+}
 
 onMount(() => {
   let active = true;
@@ -55,9 +95,15 @@ $effect(() => {
   if (viewer === undefined) return;
   const element = viewer;
   const current = glb;
+  const key = untrack(() => viewKey);
   const url = URL.createObjectURL(new Blob([current], { type: GLB_MEDIA_TYPE }));
   const handleLoad = (event: Event) => {
-    if ((event as CustomEvent<{ url?: string }>).detail?.url === url) onload(current);
+    if ((event as CustomEvent<{ url?: string }>).detail?.url !== url) return;
+    // model-viewer itself keeps the viewing direction and refits the zoom whenever the model is replaced. The first
+    // model already starts from the default orbit attribute.
+    if (framedKey !== undefined && framedKey !== key) void frame(element, DEFAULT_ORBIT);
+    framedKey = key;
+    onload(current);
   };
   const handleError = () => onerror(current);
   element.addEventListener('load', handleLoad);
@@ -78,7 +124,7 @@ $effect(() => {
     class="viewer"
     {alt}
     camera-controls
-    camera-orbit="35deg 62deg auto"
+    camera-orbit={DEFAULT_ORBIT}
     environment-image="legacy"
     tone-mapping="neutral"
     interaction-prompt="none"

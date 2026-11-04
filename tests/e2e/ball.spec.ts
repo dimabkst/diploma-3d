@@ -1,34 +1,20 @@
 import { expect, test } from '@playwright/test';
-import {
-  collectErrors,
-  downloadButton,
-  downloadThreeMf,
-  expectPreviewOf,
-  expectSizesClose,
-  measurementValue,
-  shapeSelect,
-} from './helpers.ts';
+import { collectErrors, downloadButton, downloadThreeMf, expectPreviewOf, expectSizesClose, shapeSelect } from './helpers.ts';
 
 const BALL = 'Куля';
 const BALL_SUMMARY = `${BALL} · 80 × 80 × 80 мм`;
 
-test('ball: a fixed 80 mm ball with ideal measurements and no parameter controls', async ({ page }) => {
+test('ball: a fixed 80 mm ball with no parameter controls', async ({ page }) => {
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: BALL });
 
-  await expect(page.getByText('усі точки поверхні рівновіддалені від центра')).toBeVisible();
+  await expect(page.getByText('Суцільна куля. Параметрів немає.')).toBeVisible();
   await expect(page.getByRole('slider')).toHaveCount(0);
   await expect(page.getByLabel('Висота h', { exact: true })).toHaveCount(0);
-  await expect(page.getByLabel('Основа', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('Тип основи', { exact: true })).toHaveCount(0);
+  await expect(page.locator('details')).toHaveCount(0);
   await expectPreviewOf(page, BALL_SUMMARY);
-
-  // r = 40 mm: 4πr² ≈ 20 106,2 mm² and 4πr³/3 ≈ 268 082,6 mm³.
-  await expect(page.getByRole('term')).toHaveText(['Радіус r', 'Діаметр d', 'Площа поверхні', 'Об’єм']);
-  await expect(measurementValue(page, 'Радіус r')).toHaveText('40 мм');
-  await expect(measurementValue(page, 'Діаметр d')).toHaveText('80 мм');
-  await expect(measurementValue(page, 'Площа поверхні')).toHaveText('20 106,2 мм²');
-  await expect(measurementValue(page, 'Об’єм')).toHaveText('268 082,6 мм³');
 
   const { fileName, measurements } = await downloadThreeMf(page);
   expect(fileName).toBe('ball.3mf');
@@ -63,15 +49,15 @@ test('ball: switching to and from parameterised shapes shows their own controls 
   expect(disabledRightAfterSwitch).toBe(true);
   await expectPreviewOf(page, BALL_SUMMARY);
   await expect(page.getByRole('slider')).toHaveCount(0);
-  await expect(page.getByRole('term')).toHaveText(['Радіус r', 'Діаметр d', 'Площа поверхні', 'Об’єм']);
+  await expect(page.locator('details')).toHaveCount(0);
   expect((await downloadThreeMf(page)).fileName).toBe('ball.3mf');
 
   // Rapid switches end on a prism, whose own controls and file return.
   for (const label of ['Куб', BALL, 'Циліндр', BALL]) await shapeSelect(page).selectOption({ label });
   await shapeSelect(page).selectOption({ label: 'Призма' });
-  await expect(page.getByLabel('Основа', { exact: true })).toBeVisible();
-  // The height and the two offsets of the upper base.
-  await expect(page.getByRole('slider')).toHaveCount(3);
+  await expect(page.getByLabel('Тип основи', { exact: true })).toBeVisible();
+  // The height; the offsets of the upper base wait in the collapsed "Нахил" group.
+  await expect(page.getByRole('slider')).toHaveCount(1);
   await expectPreviewOf(page, 'Призма · 40 × 34,6 × 80 мм');
   await expect(downloadButton(page)).toBeEnabled();
   expect((await downloadThreeMf(page)).fileName).toBe('prism-3-sided.3mf');
@@ -81,7 +67,7 @@ test('ball: switching to and from parameterised shapes shows their own controls 
   await expectPreviewOf(page, BALL_SUMMARY);
   await shapeSelect(page).selectOption({ label: 'Конус' });
   await expect(page.getByLabel('Висота h', { exact: true })).toHaveValue('1');
-  await expect(page.getByRole('term')).toHaveCount(7);
+  await expect(page.getByRole('slider')).toHaveCount(1);
   await expectPreviewOf(page, 'Конус · 80 × 80 × 40 мм');
   expect((await downloadThreeMf(page)).fileName).toBe('cone.3mf');
 
@@ -98,8 +84,5 @@ for (const [layout, width] of [
     await shapeSelect(page).selectOption({ label: BALL });
     await expectPreviewOf(page, BALL_SUMMARY);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-    for (const value of await page.getByRole('definition').all()) {
-      expect(await value.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-    }
   });
 }

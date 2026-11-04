@@ -1,22 +1,27 @@
 <script lang="ts">
 import { type ModelState, visibleArtifacts } from '../model/modelState.ts';
+import type { ParameterKey } from '../model/parameters.ts';
 import { formatSize } from '../shapes.ts';
 import Button from './Button.svelte';
 import ModelViewer from './ModelViewer.svelte';
-import SectionHeading from './SectionHeading.svelte';
 import StatusBadge from './StatusBadge.svelte';
 
 let {
   shapeName,
   model,
+  invalidFields,
+  onfocusfield,
   onretry,
-  ondownload,
 }: {
   shapeName: string;
   model: ModelState;
+  /** The fields that keep the model from updating, in panel order. */
+  invalidFields: readonly { readonly key: ParameterKey; readonly label: string }[];
+  onfocusfield: (key: ParameterKey) => void;
   onretry: () => void;
-  ondownload: () => void;
 } = $props();
+
+let modelViewer = $state<ModelViewer>();
 
 // Keyed by the GLB bytes so that events of a replaced preview cannot mark the current one as loaded or failed.
 let loadedGlb = $state.raw<Uint8Array<ArrayBuffer>>();
@@ -33,14 +38,13 @@ $effect.pre(() => {
 
 // Whether some earlier model is already on screen, so an update needs only a small indicator instead of an overlay.
 const showsPreview = $derived(glb !== undefined && loadedGlb !== undefined && failedGlb !== glb);
-const size = $derived(model.status === 'ready' ? model.artifacts.model.solids[0]?.measurements.size : undefined);
+// The exported width, depth and height: of the current model, or of the previous one, marked, while it is replaced. The
+// mesh bounds do not depend on the camera.
+const shownArtifacts = $derived(model.status === 'ready' || model.status === 'generating' ? visibleArtifacts(model) : undefined);
+const size = $derived(shownArtifacts?.model.solids[0]?.measurements.size);
 </script>
 
-<section class="preview-panel" aria-labelledby="preview-heading">
-  <div class="preview-header">
-    <SectionHeading id="preview-heading" step="03" title="3D-перегляд" />
-    <div class="unit-badge"><StatusBadge label="мм" /></div>
-  </div>
+<section class="preview-panel" aria-label="3D-перегляд">
   <div
     class="viewport"
     data-preview-status={previewStatus}
@@ -50,7 +54,9 @@ const size = $derived(model.status === 'ready' ? model.artifacts.model.solids[0]
     {#if glb !== undefined}
       <div class={['viewer-layer', { outdated: model.status === 'invalid' }]}>
         <ModelViewer
+          bind:this={modelViewer}
           {glb}
+          viewKey={visibleArtifacts(model)?.model.kind ?? ''}
           alt={`Інтерактивна 3D-модель: ${shapeName.toLowerCase()}`}
           onload={(loaded) => (loadedGlb = loaded)}
           onerror={(failed) => (failedGlb = failed)}
@@ -72,13 +78,22 @@ const size = $derived(model.status === 'ready' ? model.artifacts.model.solids[0]
     {:else if model.status === 'invalid'}
       <div class="viewport-status error" role="alert">
         <strong>Модель не оновлено</strong>
-        <span>Виправте параметри фігури, щоб створити нову модель.</span>
+        {#if invalidFields.length > 0}
+          <span>Виправте значення:</span>
+          <div class="status-actions">
+            {#each invalidFields as field (field.key)}
+              <Button variant="secondary" onclick={() => onfocusfield(field.key)}>{field.label}</Button>
+            {/each}
+          </div>
+        {:else}
+          <span>Виправте параметри фігури, щоб створити нову модель.</span>
+        {/if}
       </div>
     {:else if model.status === 'error'}
       <div class="viewport-status error" role="alert">
         <strong>Не вдалося створити модель</strong>
         <span>{model.message}</span>
-        <div class="status-action"><Button variant="secondary" onclick={onretry}>Спробувати ще раз</Button></div>
+        <div class="status-actions"><Button variant="secondary" onclick={onretry}>Спробувати ще раз</Button></div>
       </div>
     {:else if previewStatus === 'failed'}
       <div class="viewport-status error" role="alert">
@@ -88,44 +103,34 @@ const size = $derived(model.status === 'ready' ? model.artifacts.model.solids[0]
     {/if}
   </div>
   <div class="preview-footer">
-    <div class="preview-meta">
-      <span>Фігура: {shapeName} · {formatSize(size)}</span>
-      <span>Перетягніть, щоб обертати; прокрутіть або зведіть пальці, щоб масштабувати.</span>
-    </div>
-    <Button disabled={model.status !== 'ready'} loading={model.status === 'generating'} onclick={ondownload}>
-      Завантажити 3MF
+    <p class={['dimensions', { outdated: model.status !== 'ready' }]}>Габарити: {formatSize(size)}</p>
+    <p class="viewer-tip">Перетягніть — обертання, колесо або два пальці — масштаб</p>
+    <Button variant="secondary" disabled={previewStatus !== 'loaded'} onclick={() => modelViewer?.fit()}>
+      Вписати модель
     </Button>
   </div>
 </section>
 
 <style>
+  /* Fills the height the page gives it; without one, the viewport takes --preview-viewport-height. */
   .preview-panel {
     display: grid;
+    grid-template-rows: minmax(0, 1fr) auto;
     min-width: 0;
-    padding: var(--space-6);
+    min-height: 0;
+    padding: var(--space-4);
     background: var(--color-surface);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-card);
-    grid-template-rows: auto 1fr auto;
-  }
-
-  .preview-header,
-  .preview-footer {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-4);
-  }
-
-  .unit-badge {
-    margin-bottom: var(--space-6);
   }
 
   .viewport {
     position: relative;
     display: grid;
-    min-height: 480px;
+    height: var(--preview-viewport-height, auto);
+    min-height: 0;
     place-items: center;
+    overflow: hidden;
     background: var(--color-bg);
     border: 1px solid var(--color-border-strong);
     border-radius: var(--radius-input);
@@ -208,40 +213,58 @@ const size = $derived(model.status === 'ready' ? model.artifacts.model.solids[0]
     font-size: var(--text-small);
   }
 
-  .status-action {
+  .status-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: var(--space-2);
     margin-top: var(--space-3);
   }
 
   .preview-footer {
-    padding-top: var(--space-4);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-4);
+    padding-top: var(--space-3);
+    container-type: inline-size;
   }
 
-  .preview-meta {
-    display: grid;
-    gap: var(--space-1);
+  .preview-footer p {
+    margin: 0;
+    white-space: nowrap;
+  }
+
+  .dimensions {
+    color: var(--color-text);
+    font-family: var(--font-heading);
+    font-size: var(--text-small);
+    font-variant-ligatures: none;
+    font-variant-numeric: tabular-nums;
+    transition: color 200ms ease;
+  }
+
+  .dimensions.outdated {
+    color: var(--color-text-dim);
+  }
+
+  .viewer-tip {
+    flex: 1;
     min-width: 0;
+    overflow: hidden;
     color: var(--color-text-dim);
     font-size: var(--text-tiny);
+    text-overflow: ellipsis;
   }
 
-  .preview-meta span:first-child {
-    color: var(--color-text-muted);
-    font-family: var(--font-heading);
-    font-variant-ligatures: none;
-  }
-
-  @media (max-width: 600px) {
-    .preview-panel {
-      padding: var(--space-4);
+  /* The tip is optional; where it would not fit on the line it gives way to the dimensions and the action. */
+  @container (max-width: 640px) {
+    .viewer-tip {
+      display: none;
     }
 
-    .viewport {
-      min-height: 390px;
-    }
-
-    .preview-footer {
-      align-items: stretch;
-      flex-direction: column;
+    .dimensions {
+      flex: 1;
     }
   }
 </style>

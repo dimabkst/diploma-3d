@@ -6,6 +6,7 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    allowedHosts: ['.ngrok-free.app'],
   },
   preview: {
     port: 4173,
