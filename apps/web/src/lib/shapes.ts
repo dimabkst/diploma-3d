@@ -16,8 +16,24 @@ import {
   ROUND_OFFSET_LIMITS,
   type ShapeKind,
 } from '@diploma-3d/schema';
-import type { StepRange } from './decimal.ts';
-import type { ChoiceKey, ParameterChoices, ParameterKey } from './model/parameters.ts';
+import { formatDecimal, type StepRange } from './decimal.ts';
+import {
+  type ChoiceKey,
+  canSwitchTiltMode,
+  type ParameterChoices,
+  type ParameterKey,
+  type ParameterValues,
+} from './model/parameters.ts';
+import {
+  DIRECTION_LIMITS,
+  inclinationRange,
+  initialTiltModes,
+  RIGHT_INCLINATION_DEG,
+  type TiltMode,
+  type TiltModes,
+  type TiltSolid,
+  tiltKeys,
+} from './model/tilt.ts';
 
 export type ShapeOption = {
   readonly value: ShapeKind;
@@ -52,15 +68,26 @@ export type ChoiceField = {
 };
 
 /**
- * A displacement, such as of a prism's upper base or a pyramid's apex: one or two numeric fields with a reset to zero.
- * Whether it is centred follows from the values; nothing else stores it.
+ * A displacement, such as of a prism's upper base or a pyramid's apex, entered as offsets or as angles, with a reset to
+ * zero. Whether it is centred follows from the offsets, which the angle mode also reports; nothing else stores it.
  */
-export type OffsetGroup = {
-  readonly type: 'offset';
+export type TiltGroup = {
+  readonly type: 'tilt';
   readonly key: string;
+  readonly solid: TiltSolid;
+  readonly mode: TiltMode;
+  /** "Зміщення" and "Кути", or "Кут" where only the inclination is entered. */
+  readonly modeLabels: Readonly<Record<TiltMode, string>>;
+  /** Whether the current input converts to the other mode; it does not while a value it needs is invalid. */
+  readonly canSwitch: boolean;
+  /** The fields of the current mode. */
   readonly fields: readonly [NumericField, ...NumericField[]];
+  /** The offsets in either mode, for the centred or moved state. */
+  readonly offsetKeys: readonly ParameterKey[];
+  /** The texts that remove the displacement in the current mode: zero offsets, or an inclination of 90°. */
+  readonly centredTexts: readonly (readonly [ParameterKey, string])[];
   readonly resetLabel: string;
-  /** The state for all values zero and otherwise, such as "пряма" and "похила". */
+  /** The state for all offsets zero and otherwise, such as "пряма" and "похила". */
   readonly status: { readonly centred: string; readonly moved: string };
 };
 
@@ -74,7 +101,7 @@ export type TrapezoidGroup = {
   readonly fields: readonly [side: NumericField, height: NumericField, shift: NumericField];
 };
 
-export type ParameterField = NumericField | ChoiceField | OffsetGroup | TrapezoidGroup;
+export type ParameterField = NumericField | ChoiceField | TiltGroup | TrapezoidGroup;
 
 /** A collapsible group of the sidebar, such as "Основа" or "Нахил". */
 export type ParameterSection = {
@@ -170,6 +197,38 @@ const roundShiftHelp = (moving: string): Help => ({
   text: `${moving} зсувається вздовж осі X на задану частку r. Висота h лишається перпендикуляром до основи.`,
 });
 
+const directionText =
+  'Напрям зміщення відлічується від осі X проти годинникової стрілки, якщо дивитися згори: 0° — уздовж X ' +
+  '(сторони a), 90° — уздовж Y. Від повороту камери він не залежить.';
+
+const edgeAngleHelp: Help = {
+  label: 'Як задано кути?',
+  text:
+    'Кут до площини основи — кут між бічним ребром, напрямленим від нижньої основи до верхньої, і площиною основи; ' +
+    `90° дає пряме тіло. ${directionText} Висота h не змінюється.`,
+};
+
+const apexAngleHelp: Help = {
+  label: 'Як задано кути?',
+  text:
+    'Кут до площини основи — кут між цією площиною і відрізком від центра мас основи до вершини; 90° ставить вершину ' +
+    `над центром. ${directionText} Висота h не змінюється.`,
+};
+
+const roundAngleHelp = (line: string, right: string, moving: string): Help => ({
+  label: 'Як задано кут?',
+  text: `Кут до площини основи — кут між цією площиною і ${line}; 90° дає ${right}. ${moving} зсувається вздовж осі X. Висота h не змінюється.`,
+});
+
+const roundAngleHelps: Readonly<Record<'cylinder' | 'cone', Help>> = {
+  cylinder: roundAngleHelp(
+    'відрізком від центра нижньої основи до центра верхньої (йому паралельні твірні)',
+    'прямий циліндр',
+    'Верхня основа',
+  ),
+  cone: roundAngleHelp('відрізком від центра основи до вершини', 'прямий конус', 'Вершина'),
+};
+
 const triangleHelp: Help = {
   label: 'Як задано трикутник?',
   text: 'Сторонами a і b та кутом α між ними; третя сторона обчислюється автоматично.',
@@ -207,6 +266,10 @@ const offsetRange: StepRange = { ...OFFSET_LIMITS, increment: 0.25 };
 const apexRange: StepRange = { ...APEX_LIMITS, increment: 0.25 };
 const shiftRange: StepRange = { ...BASE_SHIFT_LIMITS, increment: 0.25 };
 const roundOffsetRange: StepRange = { ...ROUND_OFFSET_LIMITS, increment: 0.25 };
+// The inclination moves in multiples of 5° above its lower limit, which depends on the height and direction; the
+// direction moves in multiples of 15°, through the axes and the diagonals.
+const INCLINATION_INCREMENT = 5;
+const directionRange: StepRange = { ...DIRECTION_LIMITS, increment: 15 };
 
 const ratioField = (key: ParameterKey, label: string, reference = 'a'): NumericField => ({
   type: 'number',
@@ -228,11 +291,68 @@ const section = (
   options: { initiallyOpen?: boolean; help?: Help | undefined } = {},
 ): ParameterSection => ({ key, title, fields, initiallyOpen: options.initiallyOpen ?? true, help: options.help });
 
-/** A displacement of an upper base or apex: optional, so its group starts collapsed. */
-const offsetSection = (key: string, title: string, group: Omit<OffsetGroup, 'type' | 'key'>, help: Help): ParameterSection =>
-  section(key, title, [{ type: 'offset', key: `${key}-offset`, ...group }], { initiallyOpen: false, help });
+/** What the sidebar shows besides the choices: the tilt input modes, and the valid values that bound the inclination. */
+export type PanelContext = {
+  readonly tiltModes?: TiltModes | undefined;
+  readonly values?: ParameterValues | undefined;
+};
 
-const offsetFields = ([x, y]: readonly [ParameterKey, ParameterKey], range: StepRange): OffsetGroup['fields'] => [
+type TiltConfig = {
+  readonly title: string;
+  readonly offsetFields: TiltGroup['fields'];
+  readonly offsetHelp: Help;
+  readonly angleHelp: Help;
+  readonly resetLabel: string;
+  readonly status: TiltGroup['status'];
+};
+
+/**
+ * A displacement of an upper base or apex: optional, so its group starts collapsed. In the angle mode the inclination's
+ * slider spans exactly the angles allowed at the current height and direction.
+ */
+function tiltSection(
+  solid: TiltSolid,
+  key: string,
+  config: TiltConfig,
+  { tiltModes = initialTiltModes(), values = {} }: PanelContext,
+): ParameterSection {
+  const keys = tiltKeys[solid];
+  const mode = tiltModes[solid];
+  const direction = keys.direction === undefined ? DIRECTION_LIMITS.min : values[keys.direction];
+  const inclination: NumericField = {
+    type: 'number',
+    key: keys.inclination,
+    label: 'Кут до площини основи',
+    suffix: '°',
+    range: { ...inclinationRange(keys.bounds, values[keys.height], direction), increment: INCLINATION_INCREMENT },
+  };
+  const angleFields: TiltGroup['fields'] =
+    keys.direction === undefined
+      ? [inclination]
+      : [inclination, { type: 'number', key: keys.direction, label: 'Напрям зміщення', suffix: '°', range: directionRange }];
+  const group: TiltGroup = {
+    type: 'tilt',
+    key: `${key}-offset`,
+    solid,
+    mode,
+    modeLabels: { offset: 'Зміщення', angle: keys.direction === undefined ? 'Кут' : 'Кути' },
+    canSwitch: canSwitchTiltMode(solid, values),
+    fields: mode === 'offset' ? config.offsetFields : angleFields,
+    offsetKeys: keys.offsets,
+    centredTexts:
+      mode === 'offset'
+        ? keys.offsets.map((offset) => [offset, '0'] as const)
+        : [[keys.inclination, formatDecimal(RIGHT_INCLINATION_DEG)]],
+    resetLabel: config.resetLabel,
+    status: config.status,
+  };
+  return section(key, config.title, [group], {
+    initiallyOpen: false,
+    help: mode === 'offset' ? config.offsetHelp : config.angleHelp,
+  });
+}
+
+const offsetFields = ([x, y]: readonly [ParameterKey, ParameterKey], range: StepRange): TiltGroup['fields'] => [
   { type: 'number', key: x, label: 'Зміщення X', suffix: '× a', range },
   { type: 'number', key: y, label: 'Зміщення Y', suffix: '× a', range },
 ];
@@ -329,7 +449,7 @@ const pyramidBaseKeys: BaseFieldKeys = {
 const sideAMeaning = 'a — сторона основи.';
 
 /** The sidebar of the selected shape; for a prism or pyramid, only the selected base type's fields. */
-export function shapePanel(kind: ShapeKind, choices: ParameterChoices): ShapePanel {
+export function shapePanel(kind: ShapeKind, choices: ParameterChoices, context: PanelContext = {}): ShapePanel {
   switch (kind) {
     case 'cube':
     case 'tetrahedron':
@@ -363,15 +483,18 @@ export function shapePanel(kind: ShapeKind, choices: ParameterChoices): ShapePan
             },
           ),
           section('parallelepiped-height', 'Висота', [ratioField('parallelepipedHeightRatio', 'Висота h')]),
-          offsetSection(
+          tiltSection(
+            'parallelepiped',
             'parallelepiped-tilt',
-            'Нахил',
             {
-              fields: offsetFields(['parallelepipedOffsetXRatio', 'parallelepipedOffsetYRatio'], offsetRange),
+              title: 'Нахил',
+              offsetFields: offsetFields(['parallelepipedOffsetXRatio', 'parallelepipedOffsetYRatio'], offsetRange),
+              offsetHelp: shiftHelp,
+              angleHelp: edgeAngleHelp,
               resetLabel: 'Прибрати нахил',
               status: { centred: 'прямий', moved: 'похилий' },
             },
-            shiftHelp,
+            context,
           ),
         ],
       };
@@ -385,15 +508,18 @@ export function shapePanel(kind: ShapeKind, choices: ParameterChoices): ShapePan
           section('prism-height', 'Висота', [
             ratioField('prismHeightRatio', choices.prismBaseType === 'trapezoid' ? 'Висота призми h' : 'Висота h'),
           ]),
-          offsetSection(
+          tiltSection(
+            'prism',
             'prism-tilt',
-            'Нахил',
             {
-              fields: offsetFields(['prismOffsetXRatio', 'prismOffsetYRatio'], offsetRange),
+              title: 'Нахил',
+              offsetFields: offsetFields(['prismOffsetXRatio', 'prismOffsetYRatio'], offsetRange),
+              offsetHelp: shiftHelp,
+              angleHelp: edgeAngleHelp,
               resetLabel: 'Прибрати нахил',
               status: { centred: 'пряма', moved: 'похила' },
             },
-            shiftHelp,
+            context,
           ),
         ],
       };
@@ -404,15 +530,18 @@ export function shapePanel(kind: ShapeKind, choices: ParameterChoices): ShapePan
         sections: [
           baseSection('pyramid', pyramidBaseKeys, choices.pyramidBaseType),
           section('pyramid-height', 'Висота', [ratioField('pyramidHeightRatio', 'Висота піраміди h')]),
-          offsetSection(
+          tiltSection(
+            'pyramid',
             'pyramid-apex',
-            'Вершина',
             {
-              fields: offsetFields(['pyramidApexXRatio', 'pyramidApexYRatio'], apexRange),
+              title: 'Вершина',
+              offsetFields: offsetFields(['pyramidApexXRatio', 'pyramidApexYRatio'], apexRange),
+              offsetHelp: apexHelp,
+              angleHelp: apexAngleHelp,
               resetLabel: 'Над центром основи',
               status: { centred: 'над центром', moved: 'зміщена' },
             },
-            apexHelp,
+            context,
           ),
         ],
       };
@@ -428,15 +557,18 @@ export function shapePanel(kind: ShapeKind, choices: ParameterChoices): ShapePan
         help: referenceHelp('r', 'r — радіус основи.'),
         sections: [
           section(`${kind}-height`, 'Висота', [ratioField(heightKey, 'Висота h', 'r')]),
-          offsetSection(
+          tiltSection(
+            kind,
             `${kind}-tilt`,
-            'Нахил',
             {
-              fields: [{ type: 'number', key: offsetKey, label: offsetLabel, suffix: '× r', range: roundOffsetRange }],
+              title: 'Нахил',
+              offsetFields: [{ type: 'number', key: offsetKey, label: offsetLabel, suffix: '× r', range: roundOffsetRange }],
+              offsetHelp: roundShiftHelp(kind === 'cylinder' ? 'Центр верхньої основи' : 'Вершина'),
+              angleHelp: roundAngleHelps[kind],
               resetLabel: 'Прибрати нахил',
               status: { centred: 'прямий', moved: 'похилий' },
             },
-            roundShiftHelp(kind === 'cylinder' ? 'Центр верхньої основи' : 'Вершина'),
+            context,
           ),
         ],
       };

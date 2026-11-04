@@ -3,6 +3,7 @@ import { shapePanel } from '../shapes.ts';
 import {
   alignedTrapezoidShift,
   canResetShapeParameters,
+  canSwitchTiltMode,
   initialParameterChoices,
   initialParameterTexts,
   type ParameterState,
@@ -10,13 +11,16 @@ import {
   resetShapeParameters,
   resolveModelRequest,
   shapeParameterKeys,
+  switchTiltMode,
   validateAngle,
   validateApex,
+  validateDirection,
   validateOffset,
   validatePrintSize,
   validateRatio,
   validateRoundOffset,
 } from './parameters.ts';
+import { initialTiltModes, type TiltMode, type TiltSolid } from './tilt.ts';
 
 const texts = (overrides: Partial<ParameterTexts>): ParameterTexts => ({ ...initialParameterTexts(), ...overrides });
 const triangle = initialParameterChoices();
@@ -107,9 +111,13 @@ describe('resolveModelRequest', () => {
       parallelepipedBaseAngleDeg: '60',
       parallelepipedOffsetXRatio: '0',
       parallelepipedOffsetYRatio: '0',
+      parallelepipedInclinationDeg: '90',
+      parallelepipedDirectionDeg: '0',
       prismHeightRatio: '2',
       prismOffsetXRatio: '0',
       prismOffsetYRatio: '0',
+      prismInclinationDeg: '90',
+      prismDirectionDeg: '0',
       prismTriangleSideRatio: '1',
       prismTriangleAngleDeg: '60',
       prismTrapezoidSideRatio: '0,5',
@@ -118,6 +126,8 @@ describe('resolveModelRequest', () => {
       pyramidHeightRatio: '1',
       pyramidApexXRatio: '0',
       pyramidApexYRatio: '0',
+      pyramidInclinationDeg: '90',
+      pyramidDirectionDeg: '0',
       pyramidTriangleSideRatio: '1',
       pyramidTriangleAngleDeg: '60',
       pyramidParallelogramSideRatio: '1',
@@ -127,8 +137,10 @@ describe('resolveModelRequest', () => {
       pyramidTrapezoidShiftRatio: '0',
       cylinderHeightRatio: '2',
       cylinderOffsetRatio: '0',
+      cylinderInclinationDeg: '90',
       coneHeightRatio: '2',
       coneOffsetRatio: '0',
+      coneInclinationDeg: '90',
     });
     expect(initialParameterChoices()).toEqual({
       prismBaseType: 'regular',
@@ -778,5 +790,224 @@ describe('resetShapeParameters', () => {
     expect([...owned, 'printSizeMm'].sort()).toEqual(Object.keys(initialParameterTexts()).sort());
     const choices = Object.values(shapeParameterKeys).flatMap(({ choices: keys }) => keys);
     expect(choices.sort()).toEqual(Object.keys(initialParameterChoices()).sort());
+  });
+});
+
+describe('tilt entered as angles', () => {
+  const modes = (solid: TiltSolid, mode: TiltMode = 'angle') => ({ ...initialTiltModes(), [solid]: mode });
+  const inAngles = (solid: TiltSolid, overrides: Partial<ParameterTexts>, choices = triangle) => ({
+    texts: texts(overrides),
+    choices,
+    exact: {},
+    tiltModes: modes(solid),
+  });
+  const resolve = (kind: TiltSolid, state: ParameterState) =>
+    resolveModelRequest(kind, state.texts, state.choices, { exact: state.exact, tiltModes: state.tiltModes });
+
+  it('accepts directions from 0° to 360° and rejects others', () => {
+    expect(validateDirection('360')).toEqual({ value: 360 });
+    expect(validateDirection('12,5')).toEqual({ value: 12.5 });
+    expect(validateDirection('-1')).toEqual({ error: 'Допустимі значення — від 0° до 360°.' });
+    expect(validateDirection('')).toEqual({ error: 'Введіть значення.' });
+  });
+
+  it('turns H = 1, β = 45°, φ = 90° into (0, 1) and keeps the angles when the height becomes 2', () => {
+    const state = inAngles('prism', { prismHeightRatio: '1', prismInclinationDeg: '45', prismDirectionDeg: '90' });
+    expect(resolve('prism', state).spec?.shape).toMatchObject({ heightRatio: 1, offsetXRatio: 0, offsetYRatio: 1 });
+    const taller = { ...state, texts: { ...state.texts, prismHeightRatio: '2' } };
+    const request = resolve('prism', taller);
+    expect(request.spec?.shape).toMatchObject({ heightRatio: 2, offsetXRatio: 0, offsetYRatio: 2 });
+    // The computed offsets are reported too, for the group status and a switch back.
+    expect(request.values).toMatchObject({ prismInclinationDeg: 45, prismDirectionDeg: 90, prismOffsetYRatio: 2 });
+  });
+
+  it('keeps the offsets, not the angles, when the height changes in the offset mode', () => {
+    const offsets = { prismOffsetXRatio: '0', prismOffsetYRatio: '1' };
+    for (const prismHeightRatio of ['1', '2', '0,5']) {
+      expect(resolveModelRequest('prism', texts({ ...offsets, prismHeightRatio }), triangle).spec?.shape).toMatchObject({
+        offsetXRatio: 0,
+        offsetYRatio: 1,
+      });
+    }
+  });
+
+  it.each([
+    ['prism', { prismHeightRatio: '1,3', prismOffsetXRatio: '-0,4', prismOffsetYRatio: '1,1' }],
+    ['parallelepiped', { parallelepipedHeightRatio: '0,8', parallelepipedOffsetXRatio: '0,5', parallelepipedOffsetYRatio: '-2' }],
+    ['pyramid', { pyramidHeightRatio: '1,7', pyramidApexXRatio: '-3,2', pyramidApexYRatio: '-0,15' }],
+    ['cylinder', { cylinderHeightRatio: '1,5', cylinderOffsetRatio: '2,2' }],
+    ['cone', { coneHeightRatio: '0,6', coneOffsetRatio: '3,75' }],
+  ] as const)('builds the same %s from offsets and from the equivalent angles', (solid, offsets) => {
+    const offsetState: ParameterState = {
+      texts: texts(offsets),
+      choices: triangle,
+      exact: {},
+      tiltModes: modes(solid, 'offset'),
+    };
+    const before = resolve(solid, offsetState);
+    const switched = switchTiltMode(solid, offsetState, before.values);
+    expect(switched?.tiltModes?.[solid]).toBe('angle');
+    if (switched === undefined) return;
+    // The same specification, hence the same preview, file and dimensions: the model is not even rebuilt.
+    expect(resolve(solid, switched).key).toBe(before.key);
+    expect(resolve(solid, switched).spec).toEqual(before.spec);
+  });
+
+  it('builds a pyramid and a cylinder from typed angles as from the offsets they describe', () => {
+    // β = atan2(1, 2) along 180° from the centroid: the apex at (−2, 0).
+    const typed = inAngles('pyramid', {
+      pyramidHeightRatio: '1',
+      pyramidInclinationDeg: String((Math.atan2(1, 2) * 180) / Math.PI),
+      pyramidDirectionDeg: '180',
+    });
+    expect(resolve('pyramid', typed).spec?.shape).toMatchObject({ apexXRatio: -2, apexYRatio: 0 });
+    // h/r = 2 at 45°: d/r = 2, along +X.
+    const cylinder = inAngles('cylinder', { cylinderHeightRatio: '2', cylinderInclinationDeg: '45' });
+    expect(resolve('cylinder', cylinder).spec).toEqual(
+      resolveModelRequest('cylinder', texts({ cylinderHeightRatio: '2', cylinderOffsetRatio: '2' }), triangle).spec,
+    );
+  });
+
+  it('switches back and forth from non-round offsets without any drift of the model or the texts', () => {
+    let state: ParameterState = {
+      texts: texts({ prismHeightRatio: '1,37', prismOffsetXRatio: '-0,3137', prismOffsetYRatio: '1,2345' }),
+      choices: triangle,
+      exact: {},
+      tiltModes: initialTiltModes(),
+    };
+    const key = resolve('prism', state).key;
+    for (let round = 0; round < 5; round += 1) {
+      const next = switchTiltMode('prism', state, resolve('prism', state).values);
+      if (next === undefined) throw new Error('The valid prism must switch modes.');
+      state = next;
+      expect(resolve('prism', state).key).toBe(key);
+    }
+    // An odd number of switches ends in the angle mode, where the rounded angle texts did not replace the exact ones.
+    expect(state.tiltModes?.prism).toBe('angle');
+    expect(state.texts.prismInclinationDeg).toMatch(/^\d+,\d{1,4}$/);
+    const back = switchTiltMode('prism', state, resolve('prism', state).values);
+    expect(back?.texts).toMatchObject({ prismOffsetXRatio: '-0,3137', prismOffsetYRatio: '1,2345' });
+    expect(back && resolve('prism', back).spec?.shape).toMatchObject({ offsetXRatio: -0.3137, offsetYRatio: 1.2345 });
+  });
+
+  it('keeps the exact computed offsets behind rounded texts until the field is edited', () => {
+    // 30° from +X at β = 45°: X = cos 30° = 0,866025…, shown as 0,866.
+    const angles = inAngles('prism', { prismHeightRatio: '1', prismInclinationDeg: '45', prismDirectionDeg: '30' });
+    const offsets = switchTiltMode('prism', angles, resolve('prism', angles).values);
+    if (offsets === undefined) throw new Error('The valid prism must switch modes.');
+    expect(offsets.texts.prismOffsetXRatio).toBe('0,866');
+    expect(resolve('prism', offsets).spec?.shape).toMatchObject({ offsetXRatio: 0.866025403784, offsetYRatio: 0.5 });
+    // A new height keeps the exact offset ratios in the offset mode.
+    const taller = { ...offsets, texts: { ...offsets.texts, prismHeightRatio: '2' } };
+    expect(resolve('prism', taller).spec?.shape).toMatchObject({ offsetXRatio: 0.866025403784 });
+    // Typing replaces the exact value with the typed one.
+    const typed = { ...offsets, texts: { ...offsets.texts, prismOffsetXRatio: '0,8661' } };
+    expect(resolve('prism', typed).spec?.shape).toMatchObject({ offsetXRatio: 0.8661 });
+  });
+
+  it('shows 90° without a displacement, retains the last direction and ignores direction edits at 90°', () => {
+    const offsetState: ParameterState = {
+      texts: texts({ prismDirectionDeg: '135' }),
+      choices: triangle,
+      exact: {},
+      tiltModes: initialTiltModes(),
+    };
+    const angles = switchTiltMode('prism', offsetState, resolve('prism', offsetState).values);
+    expect(angles?.texts).toMatchObject({ prismInclinationDeg: '90', prismDirectionDeg: '135' });
+    if (angles === undefined) return;
+    const key = resolve('prism', angles).key;
+    for (const prismDirectionDeg of ['0', '45', '359,9', '360']) {
+      expect(resolve('prism', { ...angles, texts: { ...angles.texts, prismDirectionDeg } }).key).toBe(key);
+    }
+    // The retained direction applies to the next inclination.
+    const tilted = { ...angles, texts: { ...angles.texts, prismHeightRatio: '1', prismInclinationDeg: '45' } };
+    const shape = resolve('prism', tilted).spec?.shape;
+    expect(shape).toMatchObject({
+      offsetXRatio: expect.closeTo(-Math.SQRT1_2, 12),
+      offsetYRatio: expect.closeTo(Math.SQRT1_2, 12),
+    });
+    // An invalid hidden direction starts at 0° instead.
+    const broken = { ...offsetState, texts: { ...offsetState.texts, prismDirectionDeg: 'abc' } };
+    expect(switchTiltMode('prism', broken, resolve('prism', broken).values)?.texts.prismDirectionDeg).toBe('0');
+  });
+
+  it('treats 360° as 0°', () => {
+    const along = (prismDirectionDeg: string) =>
+      resolve('prism', inAngles('prism', { prismInclinationDeg: '60', prismDirectionDeg })).spec;
+    expect(along('360')).toEqual(along('0'));
+  });
+
+  it('reports an inclination outside the range of the height and direction at the field, without clamping', () => {
+    // H = 1 along +Y: |Y| ≤ 2 needs β ≥ atan(1/2) = 26,57°.
+    const flat = inAngles('prism', { prismHeightRatio: '1', prismInclinationDeg: '20', prismDirectionDeg: '90' });
+    const request = resolve('prism', flat);
+    expect(request.spec).toBeUndefined();
+    expect(request.errors).toEqual({
+      prismInclinationDeg: 'Допустимі значення за цієї висоти й напряму — від 26,57° до 90°.',
+    });
+    // The same angle along the diagonal reaches the corner region and is valid.
+    const diagonal = resolve('prism', { ...flat, texts: { ...flat.texts, prismDirectionDeg: '45' } });
+    expect(diagonal.errors).toEqual({});
+    // At H = 3 along +Y, β = 60° gives D = √3 ≤ 2.
+    const steeper = { ...flat, texts: { ...flat.texts, prismHeightRatio: '3', prismInclinationDeg: '60' } };
+    expect(resolve('prism', steeper).spec?.shape).toMatchObject({ offsetXRatio: 0 });
+    for (const [text, error] of [
+      ['0', 'Допустимі значення за цієї висоти й напряму — від 26,57° до 90°.'],
+      ['91', 'Допустимі значення за цієї висоти й напряму — від 26,57° до 90°.'],
+      ['', 'Введіть значення.'],
+      ['-', 'Введіть число, наприклад 45.'],
+    ] as const) {
+      expect(resolve('prism', { ...flat, texts: { ...flat.texts, prismInclinationDeg: text } }).errors).toEqual({
+        prismInclinationDeg: error,
+      });
+    }
+    const cone = resolve('cone', inAngles('cone', { coneHeightRatio: '1', coneInclinationDeg: '10' }));
+    expect(cone.errors).toEqual({ coneInclinationDeg: 'Допустимі значення за цієї висоти — від 14,04° до 90°.' });
+  });
+
+  it('switches modes only from valid input', () => {
+    const invalidHeight = inAngles('prism', { prismHeightRatio: '', prismInclinationDeg: '60' });
+    expect(canSwitchTiltMode('prism', resolve('prism', invalidHeight).values)).toBe(false);
+    expect(switchTiltMode('prism', invalidHeight, resolve('prism', invalidHeight).values)).toBeUndefined();
+    const invalidOffset = { ...invalidHeight, texts: texts({ prismOffsetXRatio: '5' }), tiltModes: initialTiltModes() };
+    expect(canSwitchTiltMode('prism', resolve('prism', invalidOffset).values)).toBe(false);
+    // Without a displacement the height is not needed: β is 90° whatever it is.
+    const right = { ...invalidOffset, texts: texts({ prismHeightRatio: '' }) };
+    expect(canSwitchTiltMode('prism', resolve('prism', right).values)).toBe(true);
+  });
+
+  it('resets the geometry, not the mode, and is not offered for switching modes alone', () => {
+    const initial: ParameterState = {
+      texts: initialParameterTexts(),
+      choices: triangle,
+      exact: {},
+      tiltModes: initialTiltModes(),
+    };
+    for (const solid of ['prism', 'parallelepiped', 'pyramid', 'cylinder', 'cone'] as const) {
+      const switched = switchTiltMode(solid, initial, resolve(solid, initial).values);
+      expect(switched?.tiltModes?.[solid]).toBe('angle');
+      if (switched === undefined) continue;
+      expect(canResetShapeParameters(solid, switched)).toBe(false);
+      const back = switchTiltMode(solid, switched, resolve(solid, switched).values);
+      expect(back && canResetShapeParameters(solid, back)).toBe(false);
+    }
+    const tilted = inAngles('prism', { prismHeightRatio: '1', prismInclinationDeg: '45', prismDirectionDeg: '90' });
+    expect(canResetShapeParameters('prism', tilted)).toBe(true);
+    const reset = resetShapeParameters('prism', tilted);
+    expect(reset.tiltModes?.prism).toBe('angle');
+    expect(reset.texts.prismInclinationDeg).toBe('90');
+    expect(resolve('prism', reset).spec).toEqual(resolveModelRequest('prism', initialParameterTexts(), triangle).spec);
+    expect(canResetShapeParameters('prism', reset)).toBe(false);
+    // An invalid draft of an angle is offered for reset as any other.
+    expect(canResetShapeParameters('prism', inAngles('prism', { prismDirectionDeg: '-' }))).toBe(true);
+    // A valid direction at 90° shapes nothing.
+    expect(canResetShapeParameters('prism', inAngles('prism', { prismDirectionDeg: '45' }))).toBe(false);
+  });
+
+  it('removes exact values together with the texts they belong to', () => {
+    const angles = inAngles('prism', { prismHeightRatio: '1', prismInclinationDeg: '45', prismDirectionDeg: '30' });
+    const offsets = switchTiltMode('prism', angles, resolve('prism', angles).values);
+    expect(offsets?.exact?.prismOffsetXRatio).toBeCloseTo(0.866, 3);
+    expect(offsets && resetShapeParameters('prism', offsets).exact).toEqual({});
   });
 });

@@ -14,10 +14,14 @@ import {
   canResetShapeParameters,
   initialParameterChoices,
   initialParameterTexts,
+  type ParameterExact,
+  type ParameterState,
   resetShapeParameters,
   resolveModelRequest,
+  switchTiltMode,
 } from './lib/model/parameters.ts';
 import { loadPrintSizeText, savePrintSize } from './lib/model/printSize.ts';
+import { initialTiltModes, type TiltMode, type TiltSolid } from './lib/model/tilt.ts';
 import { isAvailableShape, printSizeField, sectionNumberFields, shapeLabel, shapeOptions, shapePanel } from './lib/shapes.ts';
 
 // Parameter edits are coalesced briefly so that typing "1,75" does not rebuild the model for every keystroke.
@@ -27,6 +31,9 @@ let selectedShape = $state<string>('cube');
 // The print size is the only setting remembered between visits.
 let parameterTexts = $state({ ...initialParameterTexts(), ...withStoredPrintSize() });
 let parameterChoices = $state(initialParameterChoices());
+// Replaced as a whole, never mutated: the exact values behind converted texts and each solid's tilt input mode.
+let parameterExact = $state.raw<ParameterExact>({});
+let tiltModes = $state.raw(initialTiltModes());
 let attempt = $state(0);
 // Raw state: the artifacts hold large typed arrays that must not be wrapped in deep reactive proxies.
 let model = $state.raw<ModelState>({ status: 'generating', stale: undefined });
@@ -34,22 +41,30 @@ let controls = $state<ControlsPanel>();
 
 const selectedKind = $derived(isAvailableShape(selectedShape) ? selectedShape : undefined);
 const selectedShapeName = $derived(shapeLabel(selectedShape));
+const parameterState = $derived<ParameterState>({
+  texts: parameterTexts,
+  choices: parameterChoices,
+  exact: parameterExact,
+  tiltModes,
+});
 const request = $derived(
-  selectedKind === undefined ? undefined : resolveModelRequest(selectedKind, parameterTexts, parameterChoices),
+  selectedKind === undefined
+    ? undefined
+    : resolveModelRequest(selectedKind, parameterTexts, parameterChoices, { exact: parameterExact, tiltModes }),
 );
 // Texts that denote the same specification ("1,5" and "1.50") share a key and do not trigger a rebuild.
 const requestKey = $derived(request?.key);
 const panel = $derived(
-  selectedKind === undefined ? { type: 'fixed' as const, note: '' } : shapePanel(selectedKind, parameterChoices),
+  selectedKind === undefined
+    ? { type: 'fixed' as const, note: '' }
+    : shapePanel(selectedKind, parameterChoices, { tiltModes, values: request?.values }),
 );
 const invalidFields = $derived(
   [printSizeField, ...(panel.type === 'fixed' ? [] : panel.sections.flatMap(sectionNumberFields))]
     .filter((field) => request?.errors[field.key] !== undefined)
     .map(({ key, label }) => ({ key, label })),
 );
-const canReset = $derived(
-  selectedKind !== undefined && canResetShapeParameters(selectedKind, { texts: parameterTexts, choices: parameterChoices }),
-);
+const canReset = $derived(selectedKind !== undefined && canResetShapeParameters(selectedKind, parameterState));
 
 function withStoredPrintSize() {
   const stored = loadPrintSizeText();
@@ -68,9 +83,21 @@ $effect(() => {
  */
 function resetParameters() {
   if (selectedKind === undefined) return;
-  const reset = resetShapeParameters(selectedKind, { texts: parameterTexts, choices: parameterChoices });
-  parameterTexts = reset.texts;
-  parameterChoices = reset.choices;
+  applyState(resetShapeParameters(selectedKind, parameterState));
+}
+
+/** Shows the displacement in the other mode; the converted values describe the same solid, so it is not rebuilt. */
+function changeTiltMode(solid: TiltSolid, mode: TiltMode) {
+  if (tiltModes[solid] === mode || request === undefined) return;
+  const next = switchTiltMode(solid, parameterState, request.values);
+  if (next !== undefined) applyState(next);
+}
+
+function applyState(state: ParameterState) {
+  parameterTexts = state.texts;
+  parameterChoices = state.choices;
+  parameterExact = state.exact ?? {};
+  tiltModes = state.tiltModes ?? tiltModes;
 }
 
 let latestRequest = 0;
@@ -161,6 +188,7 @@ function downloadPrintFile() {
         errors={request?.errors ?? {}}
         {canReset}
         onreset={resetParameters}
+        ontiltmode={changeTiltMode}
       />
     </div>
     <div class="preview-area">

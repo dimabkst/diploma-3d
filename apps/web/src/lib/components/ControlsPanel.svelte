@@ -10,12 +10,13 @@ import {
   type ParameterValues,
   type TrapezoidAlignment,
 } from '../model/parameters.ts';
+import type { TiltMode, TiltSolid } from '../model/tilt.ts';
 import {
   type NumericField,
-  type OffsetGroup,
   type ParameterSection as Section,
   type ShapePanel,
   sectionNumberFields,
+  type TiltGroup,
   type TrapezoidGroup,
   trapezoidKindName,
 } from '../shapes.ts';
@@ -24,6 +25,7 @@ import Field from './Field.svelte';
 import HelpToggle from './HelpToggle.svelte';
 import NumberField from './NumberField.svelte';
 import ParameterSection from './ParameterSection.svelte';
+import SegmentedControl from './SegmentedControl.svelte';
 import Select from './Select.svelte';
 
 let {
@@ -34,6 +36,7 @@ let {
   errors,
   canReset,
   onreset,
+  ontiltmode,
 }: {
   panel: ShapePanel;
   texts: ParameterTexts;
@@ -43,11 +46,12 @@ let {
   /** Whether "Скинути параметри фігури" would change anything, an invalid draft of the shape's fields included. */
   canReset: boolean;
   onreset: () => void;
+  /** Asks to enter the solid's displacement in the given mode; the page converts the values without changing the solid. */
+  ontiltmode: (solid: TiltSolid, mode: TiltMode) => void;
 } = $props();
 
 // Per group, across shapes: a group keeps its open state and its fields keep their values while collapsed.
 let openSections = $state<Record<string, boolean>>({});
-const isOpen = (section: Section) => openSections[section.key] ?? section.initiallyOpen;
 
 const hasError = (section: Section) => sectionNumberFields(section).some((field) => errors[field.key] !== undefined);
 
@@ -60,18 +64,21 @@ export async function focusField(key: ParameterKey): Promise<void> {
   document.getElementById(key)?.focus();
 }
 
-/** Centred when every value is zero, moved otherwise; undefined while any is not valid. */
-function offsetState(group: OffsetGroup): 'centred' | 'moved' | undefined {
-  const positions = group.fields.map((field) => values[field.key]);
+/** Centred when every offset is zero, moved otherwise; undefined while any is not valid, in either input mode. */
+function offsetState(group: TiltGroup): 'centred' | 'moved' | undefined {
+  const positions = group.offsetKeys.map((key) => values[key]);
   if (positions.some((value) => value === undefined)) return undefined;
   return positions.every((value) => value === 0) ? 'centred' : 'moved';
 }
 
-const offsetOf = (section: Section) => section.fields.find((field): field is OffsetGroup => field.type === 'offset');
+const tiltOf = (section: Section) => section.fields.find((field): field is TiltGroup => field.type === 'tilt');
 
-function resetOffset(group: OffsetGroup) {
-  for (const field of group.fields) texts[field.key] = '0';
+function removeTilt(group: TiltGroup) {
+  for (const [key, text] of group.centredTexts) texts[key] = text;
 }
+
+const tiltModes = (group: TiltGroup) =>
+  (['offset', 'angle'] as const).map((mode) => ({ value: mode, label: group.modeLabels[mode] }));
 
 function alignSideB(group: TrapezoidGroup, alignment: TrapezoidAlignment) {
   const [side, , shift] = group.fields;
@@ -118,12 +125,17 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
     <HelpToggle id="reference-help" help={panel.help} />
     <div class="sections">
       {#each panel.sections as section (section.key)}
-        {@const offset = offsetOf(section)}
-        {@const state = offset === undefined ? undefined : offsetState(offset)}
+        {@const tilt = tiltOf(section)}
+        {@const state = tilt === undefined ? undefined : offsetState(tilt)}
+        <!-- The panel is rebuilt with every value, as the inclination's range follows the height. Reading only these
+             unchanged primitives keeps the binding from re-applying a stale state before the element's toggle event
+             has recorded a click on the summary. -->
+        {@const sectionKey = section.key}
+        {@const initiallyOpen = section.initiallyOpen}
         <ParameterSection
           title={section.title}
-          bind:open={() => isOpen(section), (open) => (openSections[section.key] = open)}
-          status={offset === undefined || state === undefined ? undefined : offset.status[state]}
+          bind:open={() => openSections[sectionKey] ?? initiallyOpen, (open) => (openSections[sectionKey] = open)}
+          status={tilt === undefined || state === undefined ? undefined : tilt.status[state]}
           highlighted={state === 'moved'}
           invalid={hasError(section)}
         >
@@ -132,13 +144,27 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
               <Field label={field.label} forId={field.key}>
                 <Select id={field.key} bind:value={choices[field.key]} options={field.options} />
               </Field>
-            {:else if field.type === 'offset'}
-              {#each field.fields as offsetField (offsetField.key)}
-                {@render numberField(offsetField)}
+            {:else if field.type === 'tilt'}
+              <SegmentedControl
+                legend="Спосіб задання"
+                name={`${field.key}-mode`}
+                value={field.mode}
+                options={tiltModes(field)}
+                disabled={!field.canSwitch}
+                describedBy={field.canSwitch ? undefined : `${field.key}-mode-note`}
+                onchange={(mode) => ontiltmode(field.solid, mode)}
+              />
+              {#if !field.canSwitch}
+                <p class="group-status" id={`${field.key}-mode-note`}>
+                  Перемкнути спосіб можна, коли висоту й поля нижче задано правильно.
+                </p>
+              {/if}
+              {#each field.fields as tiltField (tiltField.key)}
+                {@render numberField(tiltField)}
               {/each}
               <div class="group-actions">
                 <!-- Also enabled while a value is invalid: resetting is a way to correct it. -->
-                <Button variant="secondary" disabled={state === 'centred'} onclick={() => resetOffset(field)}>
+                <Button variant="secondary" disabled={state === 'centred'} onclick={() => removeTilt(field)}>
                   {field.resetLabel}
                 </Button>
               </div>
