@@ -24,7 +24,8 @@ export const previewViewport = (page: Page) => page.locator('[data-preview-statu
 export const downloadButton = (page: Page) => page.getByRole('button', { name: 'Завантажити 3MF' });
 export const modelViewer = (page: Page) => page.locator('model-viewer');
 
-export const dimensionsLine = (page: Page) => page.getByText(/^Габарити: /);
+/** The exported size, or that of the assembled model when it is cut into parts. */
+export const dimensionsLine = (page: Page) => page.getByText(/^Габарити( в зборі)?: /);
 
 /**
  * Waits until the model described by `summary`, the selected shape and its exported size (e.g. "Куб · 80 × 80 × 80 мм"),

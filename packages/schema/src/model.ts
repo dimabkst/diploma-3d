@@ -8,6 +8,7 @@ import { pyramidShapeSchema } from './pyramid.ts';
 import { dodecahedronShapeSchema, icosahedronShapeSchema, octahedronShapeSchema } from './regular-polyhedron.ts';
 import { coneShapeSchema, cylinderShapeSchema } from './round.ts';
 import { DEFAULT_LONGEST_DIMENSION_MM, physicalScaleSchema } from './scale.ts';
+import { type SectionType, sectionSchema } from './section.ts';
 import { tetrahedronShapeSchema } from './tetrahedron.ts';
 import { isWithinMinimumInclination, MIN_INCLINATION_DEG, tiltOf } from './tilt.ts';
 
@@ -40,10 +41,32 @@ export const shapeSchema = z
 export type Shape = z.infer<typeof shapeSchema>;
 export type ShapeKind = Shape['kind'];
 
-export const modelSpecSchema = z.strictObject({
-  shape: shapeSchema,
-  scale: physicalScaleSchema,
-});
+/** The section types each shape offers; a shape that is not listed offers none yet. */
+export const SECTIONS_BY_SHAPE: Readonly<Partial<Record<ShapeKind, readonly SectionType[]>>> = {
+  cylinder: ['parallel-to-bases'],
+};
+
+export const supportsSection = (kind: ShapeKind, type: SectionType): boolean => SECTIONS_BY_SHAPE[kind]?.includes(type) ?? false;
+
+/**
+ * The shape, its physical scale and, optionally, a plane section that splits it into two parts. The scale describes the
+ * whole, assembled solid, so both parts share it.
+ */
+export const modelSpecSchema = z
+  .strictObject({
+    shape: shapeSchema,
+    scale: physicalScaleSchema,
+    section: sectionSchema.optional(),
+  })
+  .superRefine((spec, context) => {
+    if (spec.section !== undefined && !supportsSection(spec.shape.kind, spec.section.type)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['section'],
+        message: `A ${spec.shape.kind} does not offer the section ${spec.section.type}.`,
+      });
+    }
+  });
 
 /** A validated specification, with every default filled in. */
 export type ModelSpec = z.infer<typeof modelSpecSchema>;

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { formatSteppedDecimal } from '../decimal.ts';
 import { sectionNumberFields, shapePanel } from '../shapes.ts';
 import {
+  activeSection,
   alignedTrapezoidShift,
   canResetShapeParameters,
   canSwitchTiltMode,
@@ -9,6 +10,7 @@ import {
   initialParameterTexts,
   type ParameterState,
   type ParameterTexts,
+  partsSeparated,
   resetShapeParameters,
   resolveModelRequest,
   shapeParameterKeys,
@@ -21,6 +23,7 @@ import {
   validateRatio,
   validateRoundHeight,
   validateRoundOffset,
+  validateSectionPosition,
 } from './parameters.ts';
 import { initialTiltModes, type TiltMode, type TiltSolid } from './tilt.ts';
 
@@ -164,12 +167,15 @@ describe('resolveModelRequest', () => {
       coneHeightRatio: '2',
       coneOffsetRatio: '0',
       coneInclinationDeg: '90',
+      cylinderSectionPercent: '50',
     });
     expect(initialParameterChoices()).toEqual({
       prismBaseType: 'regular',
       prismBaseSides: 3,
       pyramidBaseType: 'regular',
       pyramidBaseSides: 4,
+      cylinderSection: 'none',
+      cylinderPartsSeparated: true,
     });
     expect(resolveModelRequest('cuboid', initialParameterTexts(), triangle).spec).toEqual({
       shape: { kind: 'cuboid', widthRatio: 1.5, heightRatio: 2 },
@@ -1113,6 +1119,7 @@ describe('tilt entered as angles', () => {
 describe('one range per control', () => {
   const variants = [
     ...(['cuboid', 'parallelepiped', 'cylinder', 'cone'] as const).map((kind) => ({ kind, choices: triangle })),
+    { kind: 'cylinder' as const, choices: { ...triangle, cylinderSection: 'parallel-to-bases' as const } },
     ...(['regular', 'triangle', 'trapezoid'] as const).map((prismBaseType) => ({
       kind: 'prism' as const,
       choices: { ...triangle, prismBaseType },
@@ -1155,5 +1162,139 @@ describe('one range per control', () => {
     const ranges = Object.fromEntries(panel.sections.flatMap(sectionNumberFields).map((field) => [field.key, field.range]));
     expect(ranges.prismHeightRatio).toMatchObject({ min: 0.25, max: 4 });
     expect(ranges.prismOffsetXRatio).toMatchObject({ min: -4, max: 4 });
+  });
+});
+
+describe('a cylinder section parallel to the bases', () => {
+  const parallel = { ...triangle, cylinderSection: 'parallel-to-bases' } as const;
+  const section = (positionPercent: number) => ({ type: 'parallel-to-bases', positionPercent });
+  const panelOf = (choices: typeof triangle) => {
+    const panel = shapePanel('cylinder', choices, { values: resolveModelRequest('cylinder', texts({}), choices).values });
+    const group = panel.type === 'parameters' ? panel.sections.find((part) => part.title === 'Переріз') : undefined;
+    if (group === undefined) throw new Error('No section group');
+    return group;
+  };
+
+  it('starts without a section: the whole cylinder, and a collapsed group that offers only the choice', () => {
+    expect(triangle.cylinderSection).toBe('none');
+    const request = resolveModelRequest('cylinder', texts({}), triangle);
+    expect(request.spec).not.toHaveProperty('section');
+    expect(activeSection('cylinder', triangle)).toBeUndefined();
+    expect(partsSeparated('cylinder', triangle)).toBe(false);
+    const group = panelOf(triangle);
+    expect(group).toMatchObject({ initiallyOpen: false, status: { text: 'немає', highlighted: false } });
+    expect(group.fields.map((field) => field.type)).toEqual(['choice']);
+  });
+
+  it('cuts at 50 % of h once chosen, with the position from 10 % to 90 % in steps of 5 and the parts apart', () => {
+    const request = resolveModelRequest('cylinder', texts({}), parallel);
+    expect(request.errors).toEqual({});
+    expect(request.spec?.section).toEqual(section(50));
+    expect(request.spec?.shape).toEqual(resolveModelRequest('cylinder', texts({}), triangle).spec?.shape);
+    const group = panelOf(parallel);
+    expect(group.status).toEqual({ text: 'паралельно основам', highlighted: true });
+    expect(group.fields.map((field) => [field.type, field.key])).toEqual([
+      ['choice', 'cylinderSection'],
+      ['number', 'cylinderSectionPercent'],
+      ['toggle', 'cylinderPartsSeparated'],
+    ]);
+    expect(sectionNumberFields(group)[0]?.range).toEqual({ min: 10, max: 90, increment: 5 });
+    expect(partsSeparated('cylinder', parallel)).toBe(true);
+  });
+
+  it.each([
+    ['10', 10],
+    ['12,5', 12.5],
+    ['62.25', 62.25],
+    ['90', 90],
+  ])('keeps the typed position %s %% as it is', (text, value) => {
+    expect(validateSectionPosition(text)).toEqual({ value });
+    expect(resolveModelRequest('cylinder', texts({ cylinderSectionPercent: text }), parallel).spec?.section).toEqual(
+      section(value),
+    );
+  });
+
+  it.each(['9,99', '90,01', '0', '100', '-50'])('refuses the position %s %% without clamping and builds nothing', (text) => {
+    const request = resolveModelRequest('cylinder', texts({ cylinderSectionPercent: text }), parallel);
+    expect(request.errors).toEqual({ cylinderSectionPercent: 'Допустимі значення — від 10 % до 90 %.' });
+    expect(request.spec).toBeUndefined();
+    // The other fields stay valid.
+    expect(request.values.cylinderHeightRatio).toBe(2);
+  });
+
+  it.each([
+    ['', 'Введіть значення.'],
+    ['п’ять', 'Введіть число, наприклад 50.'],
+  ])('asks for a number for %j', (text, message) => {
+    expect(resolveModelRequest('cylinder', texts({ cylinderSectionPercent: text }), parallel).errors).toEqual({
+      cylinderSectionPercent: message,
+    });
+  });
+
+  it('ignores a draft of the hidden position while no section is chosen', () => {
+    const request = resolveModelRequest('cylinder', texts({ cylinderSectionPercent: '5' }), triangle);
+    expect(request.errors).toEqual({});
+    expect(request.spec).not.toHaveProperty('section');
+  });
+
+  it('rebuilds for a new position, height, tilt or size, but not for the separation of the preview', () => {
+    const key = (overrides: Partial<ParameterTexts>, choices: typeof triangle = parallel) =>
+      resolveModelRequest('cylinder', texts(overrides), choices).key;
+    const base = key({});
+    expect(key({}, { ...parallel, cylinderPartsSeparated: false })).toBe(base);
+    for (const change of [
+      { cylinderSectionPercent: '55' },
+      { cylinderHeightRatio: '3' },
+      { cylinderOffsetRatio: '1' },
+      { printSizeMm: '120' },
+    ]) {
+      expect(key(change)).not.toBe(base);
+    }
+    expect(key({}, triangle)).not.toBe(base);
+    // An oblique cylinder keeps the section, and the size scales the whole model, section included.
+    const oblique = resolveModelRequest('cylinder', texts({ cylinderOffsetRatio: '1,5', printSizeMm: '120' }), parallel);
+    expect(oblique.spec).toEqual({
+      shape: { kind: 'cylinder', heightRatio: 2, offsetRatio: 1.5 },
+      scale: { longestDimensionMm: 120 },
+      section: section(50),
+    });
+  });
+
+  it('belongs to the cylinder only', () => {
+    for (const kind of ['cone', 'prism', 'cube'] as const) {
+      expect(resolveModelRequest(kind, texts({}), parallel).spec).not.toHaveProperty('section');
+      expect(activeSection(kind, parallel)).toBeUndefined();
+      expect(partsSeparated(kind, parallel)).toBe(false);
+    }
+    const cone = shapePanel('cone', parallel);
+    expect(cone.type === 'parameters' && cone.sections.map((part) => part.title)).toEqual(['Висота', 'Нахил']);
+  });
+
+  it('resets to no section at 50 % with the parts apart, keeping the print size and the other shapes', () => {
+    const edited: ParameterState = {
+      texts: texts({ cylinderSectionPercent: '15', cylinderHeightRatio: '3', printSizeMm: '120', coneHeightRatio: '4' }),
+      choices: { ...parallel, cylinderPartsSeparated: false, prismBaseSides: 6 },
+    };
+    expect(canResetShapeParameters('cylinder', edited)).toBe(true);
+    const reset = resetShapeParameters('cylinder', edited);
+    expect(reset.texts).toEqual(texts({ printSizeMm: '120', coneHeightRatio: '4' }));
+    expect(reset.choices).toEqual({ ...triangle, prismBaseSides: 6 });
+    expect(reset.choices).toMatchObject({ cylinderSection: 'none', cylinderPartsSeparated: true });
+    expect(canResetShapeParameters('cylinder', reset)).toBe(false);
+  });
+
+  it('offers the reset for the chosen section and its separation, not for hidden values of an unchosen one', () => {
+    const initial = { texts: initialParameterTexts(), choices: initialParameterChoices() };
+    expect(canResetShapeParameters('cylinder', { ...initial, choices: parallel })).toBe(true);
+    const hidden = {
+      texts: texts({ cylinderSectionPercent: '20' }),
+      choices: { ...triangle, cylinderPartsSeparated: false },
+    };
+    expect(canResetShapeParameters('cylinder', hidden)).toBe(false);
+    expect(
+      canResetShapeParameters('cylinder', { ...hidden, choices: { ...hidden.choices, cylinderSection: 'parallel-to-bases' } }),
+    ).toBe(true);
+    // The section is the cylinder's own: it does not make another shape resettable.
+    expect(canResetShapeParameters('cone', { ...initial, choices: parallel })).toBe(false);
   });
 });

@@ -15,9 +15,11 @@ export {
   type ModelSpec,
   type ModelSpecInput,
   modelSpecSchema,
+  SECTIONS_BY_SHAPE,
   type Shape,
   type ShapeKind,
   shapeSchema,
+  supportsSection,
 } from './model.ts';
 export { offsetRatioSchema, TILT_OFFSET_LIMITS } from './offset.ts';
 export { type ParallelepipedShape, parallelepipedShapeSchema } from './parallelepiped.ts';
@@ -72,6 +74,16 @@ export {
   type PhysicalScale,
   physicalScaleSchema,
 } from './scale.ts';
+export {
+  DEFAULT_SECTION_POSITION_PERCENT,
+  parallelSectionSchema,
+  SECTION_POSITION_LIMITS,
+  SECTION_TYPES,
+  type Section,
+  type SectionType,
+  sectionPositionSchema,
+  sectionSchema,
+} from './section.ts';
 export { TETRAHEDRON_HEIGHT_RATIO, type TetrahedronShape, tetrahedronShapeSchema } from './tetrahedron.ts';
 export {
   INCLINATION_LIMITS,

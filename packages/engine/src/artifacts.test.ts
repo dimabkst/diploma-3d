@@ -1,10 +1,12 @@
 import { defaultModelSpecs, type ModelSpecInput } from '@diploma-3d/schema';
 import { type Accessor, WebIO } from '@gltf-transform/core';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { buildModelArtifacts } from './artifacts.ts';
+import { buildModelArtifacts, SECTION_PREVIEW_GAP_RELATIVE } from './artifacts.ts';
 import { InvalidModelSpecError } from './errors.ts';
 import { toGltfPosition } from './export/glb.ts';
+import { arrangeInRow } from './export/layout.ts';
 import { readThreeMf } from './export/three-mf.test-helper.ts';
+import { createThreeMf } from './export/three-mf.ts';
 import { type GeometryKernel, loadGeometryKernel } from './kernel.ts';
 import { cross, dot, findMeshDefects, measureMesh, triangleAt, triangleCount, type Vec3, vertexAt } from './mesh.ts';
 
@@ -730,5 +732,102 @@ describe('buildModelArtifacts', () => {
     ['ball', { shape: { kind: 'ball', radius: 40 }, scale: { longestDimensionMm: 80 } }],
   ] as const)('produces no %s artifacts for invalid input', async (_, invalid) => {
     await expect(buildModelArtifacts(kernel, invalid as unknown as ModelSpecInput)).rejects.toBeInstanceOf(InvalidModelSpecError);
+  });
+});
+
+describe('for a cylinder cut parallel to its bases', () => {
+  // h/r = 1, d/r = 1,5: the box is 3,5r × 2r × r, so r = h = 80/3,5 mm. At 25 % of h the parts are h/4 and 3h/4 high.
+  const r = 80 / 3.5;
+  const spec: ModelSpecInput = {
+    shape: { kind: 'cylinder', heightRatio: 1, offsetRatio: 1.5 },
+    scale: { longestDimensionMm: 80 },
+    section: { type: 'parallel-to-bases', positionPercent: 25 },
+  };
+
+  it('exports both parts as separate closed objects in millimetres, side by side on the build plate', async () => {
+    const { model, printFile } = await buildModelArtifacts(kernel, spec);
+    const parsed = readThreeMf(printFile.bytes).model;
+    expect(printFile.fileName).toBe('cylinder-parallel-section.3mf');
+    expect(parsed.unit).toBe('millimeter');
+    expect(parsed.title).toBe('cylinder-parallel-section');
+    expect(parsed.objects.map(({ id, name, type }) => ({ id, name, type }))).toEqual([
+      { id: '1', name: 'cylinder-lower-part', type: 'model' },
+      { id: '2', name: 'cylinder-upper-part', type: 'model' },
+    ]);
+    expect(parsed.buildItems).toEqual([{ objectId: '1' }, { objectId: '2' }]);
+
+    const [lower, upper] = parsed.objects.map(({ mesh }) => {
+      expect(findMeshDefects(mesh)).toEqual([]);
+      return measureMesh(mesh);
+    });
+    if (lower === undefined || upper === undefined) throw new Error('Expected two objects');
+    // Translated only: each keeps its size and volume and rests on z = 0.
+    [lower, upper].forEach((printed, index) => {
+      const solid = model.solids[index]?.measurements;
+      printed.size.forEach((value, axis) => {
+        expect(value).toBeCloseTo(solid?.size[axis] ?? Number.NaN, 4);
+      });
+      expect(printed.volume / (solid?.volume ?? Number.NaN)).toBeCloseTo(1, 6);
+      expect(printed.bounds.min[2]).toBe(0);
+    });
+    // The lower part spans its base circle and the cut circle moved by 0,25d = 0,375r; the upper part the cut circle
+    // and the upper base moved by d = 1,5r. Heights h/4 and 3h/4.
+    expect(lower.size[0]).toBeCloseTo(2.375 * r, 4);
+    expect(upper.size[0]).toBeCloseTo(3.125 * r, 4);
+    expect(lower.size[2]).toBeCloseTo(r / 4, 4);
+    expect(upper.size[2]).toBeCloseTo((3 * r) / 4, 4);
+    // 5 mm apart along X, without overlapping in XY.
+    expect(upper.bounds.min[0] - lower.bounds.max[0]).toBeCloseTo(5, 4);
+    expect(lower.bounds.min[1]).toBeCloseTo(upper.bounds.min[1], 4);
+  });
+
+  it('previews the parts assembled, with the cut faces in their own material, and moves the upper one apart only in a second preview', async () => {
+    const { model, previewGlb, separatedPreviewGlb, printFile } = await buildModelArtifacts(kernel, spec);
+    if (separatedPreviewGlb === undefined) throw new Error('No separated preview');
+    const read = async (glb: Uint8Array) => (await new WebIO().readBinary(glb)).getRoot();
+    const [assembled, separated] = [await read(previewGlb), await read(separatedPreviewGlb)];
+    expect(assembled.listNodes().map((node) => [node.getName(), node.getTranslation()])).toEqual([
+      ['cylinder-lower-part', [0, 0, 0]],
+      ['cylinder-upper-part', [0, 0, 0]],
+    ]);
+    // 0,15 of the longest side, 80 mm, along the plane's normal +Z, which is glTF +Y, in metres.
+    const gap = SECTION_PREVIEW_GAP_RELATIVE * 80;
+    const [, lift] = separated.listNodes().map((node) => node.getTranslation());
+    expect(lift?.[0]).toBe(0);
+    expect(lift?.[1]).toBeCloseTo(gap / 1000, 9);
+    expect(lift?.[2]).toBe(0);
+    expect(separated.listNodes()[0]?.getTranslation()).toEqual([0, 0, 0]);
+
+    // The same triangles in both previews: only the node moved.
+    const arrays = (root: typeof assembled) =>
+      root
+        .listMeshes()
+        .flatMap((mesh) => mesh.listPrimitives().map((primitive) => primitive.getAttribute('POSITION')?.getArray()));
+    expect(arrays(separated)).toEqual(arrays(assembled));
+
+    // Each part has one cut face in the plane z = h/4, glTF y = h/4000, covering the polygon's area.
+    for (const mesh of assembled.listMeshes()) {
+      const cut = mesh.listPrimitives().filter((primitive) => primitive.getMaterial()?.getName() === 'cut');
+      expect(cut).toHaveLength(1);
+      const positions = cut[0]?.getAttribute('POSITION');
+      for (let index = 0; index < (positions?.getCount() ?? 0); index += 1) {
+        expect(positions?.getElement(index, [])[1]).toBeCloseTo(r / 4000, METRE_DIGITS);
+      }
+    }
+    // The print file does not depend on either preview: it holds the parts laid out for printing.
+    expect(printFile.bytes).toEqual(createThreeMf(arrangeInRow(model.solids), { title: model.name }));
+  });
+
+  it('keeps a single object and no separated preview without a section', async () => {
+    const { model, previewGlb, separatedPreviewGlb, printFile } = await buildModelArtifacts(kernel, {
+      ...spec,
+      section: undefined,
+    });
+    expect(separatedPreviewGlb).toBeUndefined();
+    expect(model.section).toBeUndefined();
+    expect(printFile.fileName).toBe('cylinder.3mf');
+    expect(readThreeMf(printFile.bytes).model.objects).toHaveLength(1);
+    const root = (await new WebIO().readBinary(previewGlb)).getRoot();
+    expect(root.listMaterials().map((material) => material.getName())).not.toContain('cut');
   });
 });

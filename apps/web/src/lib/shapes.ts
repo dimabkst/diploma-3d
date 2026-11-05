@@ -12,6 +12,7 @@ import {
   type PyramidBaseType,
   RATIO_LIMITS,
   ROUND_HEIGHT_LIMITS,
+  SECTION_POSITION_LIMITS,
   type ShapeKind,
 } from '@diploma-3d/schema';
 import { formatDecimal, type StepRange } from './decimal.ts';
@@ -21,6 +22,9 @@ import {
   type ParameterChoices,
   type ParameterKey,
   type ParameterValues,
+  type SectionChoice,
+  sectionKeys,
+  type ToggleKey,
 } from './model/parameters.ts';
 import {
   DIRECTION_LIMITS,
@@ -67,6 +71,13 @@ export type ChoiceField = {
   readonly options: readonly { readonly value: ParameterChoices[ChoiceKey]; readonly label: string }[];
 };
 
+/** A switch, such as whether the preview moves the parts of a section apart. */
+export type ToggleField = {
+  readonly type: 'toggle';
+  readonly key: ToggleKey;
+  readonly label: string;
+};
+
 /**
  * A displacement, such as of a prism's upper base or a pyramid's apex, entered as offsets or as angles, with a reset to
  * zero. Whether it is centred follows from the offsets, which the angle mode also reports; nothing else stores it.
@@ -101,7 +112,7 @@ export type TrapezoidGroup = {
   readonly fields: readonly [side: NumericField, height: NumericField, shift: NumericField];
 };
 
-export type ParameterField = NumericField | ChoiceField | TiltGroup | TrapezoidGroup;
+export type ParameterField = NumericField | ChoiceField | ToggleField | TiltGroup | TrapezoidGroup;
 
 /** A collapsible group of the sidebar, such as "Основа" or "Нахил". */
 export type ParameterSection = {
@@ -112,6 +123,11 @@ export type ParameterSection = {
   readonly initiallyOpen: boolean;
   readonly fields: readonly ParameterField[];
   readonly help?: Help | undefined;
+  /**
+   * A short state for the summary, such as the chosen section; highlighted when it departs from the default. Tilt groups
+   * derive theirs from the current offsets instead.
+   */
+  readonly status?: { readonly text: string; readonly highlighted: boolean } | undefined;
 };
 
 /** The sidebar of a shape: one line for fixed proportions, otherwise the reference length's help and the groups. */
@@ -287,8 +303,15 @@ const section = (
   key: string,
   title: string,
   fields: readonly ParameterField[],
-  options: { initiallyOpen?: boolean; help?: Help | undefined } = {},
-): ParameterSection => ({ key, title, fields, initiallyOpen: options.initiallyOpen ?? true, help: options.help });
+  options: { initiallyOpen?: boolean; help?: Help | undefined; status?: ParameterSection['status'] } = {},
+): ParameterSection => ({
+  key,
+  title,
+  fields,
+  initiallyOpen: options.initiallyOpen ?? true,
+  help: options.help,
+  status: options.status,
+});
 
 /** What the sidebar shows besides the choices: the tilt input modes, and the valid values that bound the inclination. */
 export type PanelContext = {
@@ -456,6 +479,51 @@ const pyramidBaseKeys: BaseFieldKeys = {
 
 const sideAMeaning = 'a — сторона основи.';
 
+// The position moves in steps of 5 percentage points; a typed value between them is kept.
+const sectionPositionRange: StepRange = { ...SECTION_POSITION_LIMITS, increment: 5 };
+
+const sectionNames: Readonly<Record<SectionChoice, string>> = {
+  none: 'Без перерізу',
+  'parallel-to-bases': 'Паралельно основам',
+};
+
+const parallelSectionHelp: Help = {
+  label: 'Як задано переріз?',
+  text:
+    'Площина паралельна основам і проходить на заданій відстані від нижньої основи — у відсотках висоти h. Переріз — ' +
+    'круг радіуса r; у похилого циліндра його центр зміщено разом із віссю, а площина не перпендикулярна до осі. ' +
+    'Частини експортуються окремими об’єктами в одному масштабі; розсування змінює лише перегляд. Межі 10–90 % ' +
+    'відсувають площину від основ, але не гарантують, що тонку частину вдасться надрукувати.',
+};
+
+/**
+ * "Переріз": optional, so the group starts collapsed with the chosen section in its summary. The position and the
+ * separation are shown only while a section is chosen.
+ */
+function planeSection(kind: 'cylinder', choices: ParameterChoices): ParameterSection {
+  const keys = sectionKeys[kind];
+  if (keys === undefined) throw new Error(`No section fields for ${kind}.`);
+  const chosen = choices[keys.choice];
+  const selector: ChoiceField = {
+    type: 'choice',
+    key: keys.choice,
+    label: 'Тип перерізу',
+    options: (['none', 'parallel-to-bases'] as const).map((value) => ({ value, label: sectionNames[value] })),
+  };
+  const details: ParameterField[] =
+    chosen === 'none'
+      ? []
+      : [
+          { type: 'number', key: keys.position, label: 'Від нижньої основи', suffix: '% h', range: sectionPositionRange },
+          { type: 'toggle', key: keys.separated, label: 'Розсунути частини' },
+        ];
+  return section(`${kind}-section`, 'Переріз', [selector, ...details], {
+    initiallyOpen: false,
+    help: chosen === 'none' ? undefined : parallelSectionHelp,
+    status: { text: chosen === 'none' ? 'немає' : sectionNames[chosen].toLowerCase(), highlighted: chosen !== 'none' },
+  });
+}
+
 /** The sidebar of the selected shape; for a prism or pyramid, only the selected base type's fields. */
 export function shapePanel(kind: ShapeKind, choices: ParameterChoices, context: PanelContext = {}): ShapePanel {
   switch (kind) {
@@ -578,6 +646,7 @@ export function shapePanel(kind: ShapeKind, choices: ParameterChoices, context: 
             },
             context,
           ),
+          ...(kind === 'cylinder' ? [planeSection(kind, choices)] : []),
         ],
       };
     }
@@ -587,6 +656,6 @@ export function shapePanel(kind: ShapeKind, choices: ParameterChoices, context: 
 /** The numeric fields of a section in display order, including those inside groups. */
 export function sectionNumberFields(target: ParameterSection): NumericField[] {
   return target.fields.flatMap((field): readonly NumericField[] =>
-    field.type === 'number' ? [field] : field.type === 'choice' ? [] : field.fields,
+    field.type === 'number' ? [field] : field.type === 'choice' || field.type === 'toggle' ? [] : field.fields,
   );
 }

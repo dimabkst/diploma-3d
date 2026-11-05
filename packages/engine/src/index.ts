@@ -1,6 +1,7 @@
-export { buildModelArtifacts, type ModelArtifacts } from './artifacts.ts';
+export { buildModelArtifacts, type ModelArtifacts, SECTION_PREVIEW_GAP_RELATIVE } from './artifacts.ts';
 export { GeometryError, InfeasibleGeometryError, InvalidModelSpecError, KernelInitializationError } from './errors.ts';
 export { createPreviewGlb, GLB_MEDIA_TYPE, type PreviewObject, toGltfPosition } from './export/glb.ts';
+export { arrangeInRow, PRINT_LAYOUT_GAP_MM } from './export/layout.ts';
 export { createThreeMf, THREE_MF_MEDIA_TYPE, type ThreeMfObject, type ThreeMfOptions } from './export/three-mf.ts';
 export { type GeometryKernel, type KernelOptions, loadGeometryKernel } from './kernel.ts';
 export {
@@ -12,7 +13,15 @@ export {
   type TriangleMesh,
   type Vec3,
 } from './mesh.ts';
-export { type GeneratedModel, generateModel, modelName, type Solid } from './model.ts';
+export {
+  type GeneratedModel,
+  generateModel,
+  type ModelSection,
+  modelName,
+  type SectionPart,
+  type Solid,
+} from './model.ts';
+export { type Plane, type SplitParts, sectionPlane, splitByPlane } from './section.ts';
 export { cosSinDeg } from './shapes/angle.ts';
 export {
   BALL_SEGMENTS,

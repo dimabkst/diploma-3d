@@ -1,4 +1,4 @@
-import { Document, type GLTF, WebIO } from '@gltf-transform/core';
+import { Document, type GLTF, type Material, WebIO } from '@gltf-transform/core';
 import { GeometryError } from '../errors.ts';
 import {
   assertValidSolidMesh,
@@ -14,6 +14,7 @@ import {
   type Vec3,
   vertexAt,
 } from '../mesh.ts';
+import type { Plane } from '../section.ts';
 
 export interface PreviewObject {
   readonly name: string;
@@ -30,6 +31,13 @@ export interface PreviewObject {
    * and are then mapped to the sheared surface by the inverse transpose of the shear.
    */
   readonly smoothingShear?: readonly [number, number];
+  /** The plane of a section that produced this solid: its faces in that plane are shown in the cut colour. */
+  readonly cutPlane?: Plane;
+  /**
+   * A translation in millimetres, Z up, applied to the object's node only, such as to move the parts of a section
+   * apart. The mesh keeps the exported positions.
+   */
+  readonly displayOffset?: Vec3;
 }
 
 export const GLB_MEDIA_TYPE = 'model/gltf-binary';
@@ -43,6 +51,13 @@ const TRIANGLES: GLTF.MeshPrimitiveMode = 4;
 // Linear RGB. A mid-tone matte surface keeps differently lit faces apart and stands out from the near-black background.
 const SURFACE_COLOR = [0.2, 0.27, 0.4, 1] as const;
 const EDGE_COLOR = [0.9, 0.92, 0.95, 1] as const;
+// A warm tone that no lit side face takes, so that cut faces stand out from the solid's own faces.
+const CUT_COLOR = [0.85, 0.42, 0.08, 1] as const;
+
+// Vertices on a cutting plane are rounded to float32 like all others, so a face counts as cut when its vertices lie
+// within this fraction of the part's bounding-box diagonal from the plane: far above that rounding, and far below the
+// distance of any other face from the plane, which the 10–90 % limits keep at a tenth of the height or more.
+const CUT_PLANE_TOLERANCE_RELATIVE = 1e-6;
 
 // On a smoothly shaded solid, edges between faces meeting at a smaller angle are tessellation edges of a curved surface.
 // Smooth shading blends exactly these faces, so outlined edges such as a cylinder's rims stay sharp.
@@ -89,20 +104,37 @@ export async function createPreviewGlb(objects: readonly PreviewObject[]): Promi
     .setMetallicFactor(0)
     .setRoughnessFactor(0.75);
   const edgeMaterial = document.createMaterial('edges').setBaseColorFactor([...EDGE_COLOR]);
+  // Only previews of a section have cut faces.
+  let cutMaterial: Material | undefined;
+  const cutMaterialOnce = () => {
+    cutMaterial ??= document
+      .createMaterial('cut')
+      .setBaseColorFactor([...CUT_COLOR])
+      .setMetallicFactor(0)
+      .setRoughnessFactor(0.75);
+    return cutMaterial;
+  };
 
   for (const object of objects) {
     assertValidSolidMesh(object.mesh);
     const smooth = object.smoothShading ?? false;
     const shear = smooth ? object.smoothingShear : undefined;
     const rightMesh = shear === undefined ? object.mesh : unshear(object.mesh, shear);
-    const { positions, normals } = shadedTriangles(object.mesh, rightMesh, smooth, shear);
-    const surface = document
-      .createPrimitive()
-      .setMode(TRIANGLES)
-      .setAttribute('POSITION', document.createAccessor().setType('VEC3').setArray(positions).setBuffer(buffer))
-      .setAttribute('NORMAL', document.createAccessor().setType('VEC3').setArray(normals).setBuffer(buffer))
-      .setMaterial(surfaceMaterial);
-    const mesh = document.createMesh(object.name).addPrimitive(surface);
+    const shaded = shadedTriangles(object.mesh, rightMesh, smooth, shear);
+    const onCut = cutTriangles(object.mesh, object.cutPlane);
+    const mesh = document.createMesh(object.name);
+    for (const cut of [false, true]) {
+      const selected = selectTriangles(shaded, (triangle) => onCut[triangle] === cut);
+      if (selected.positions.length === 0) continue;
+      mesh.addPrimitive(
+        document
+          .createPrimitive()
+          .setMode(TRIANGLES)
+          .setAttribute('POSITION', document.createAccessor().setType('VEC3').setArray(selected.positions).setBuffer(buffer))
+          .setAttribute('NORMAL', document.createAccessor().setType('VEC3').setArray(selected.normals).setBuffer(buffer))
+          .setMaterial(cut ? cutMaterialOnce() : surfaceMaterial),
+      );
+    }
 
     const edgePositions = featureEdgeSegments(
       object.mesh,
@@ -118,11 +150,37 @@ export async function createPreviewGlb(objects: readonly PreviewObject[]): Promi
           .setMaterial(edgeMaterial),
       );
     }
-    scene.addChild(document.createNode(object.name).setMesh(mesh));
+    const node = document.createNode(object.name).setMesh(mesh);
+    if (object.displayOffset !== undefined) node.setTranslation([...toGltfPosition(object.displayOffset)]);
+    scene.addChild(node);
   }
 
   // glTF-Transform allocates a regular ArrayBuffer; its typings predate the ArrayBuffer type parameter.
   return (await new WebIO().writeBinary(document)) as Uint8Array<ArrayBuffer>;
+}
+
+type ShadedTriangles = { positions: Float32Array<ArrayBuffer>; normals: Float32Array<ArrayBuffer> };
+
+/** Whether each triangle lies in the cutting plane: all its vertices do, within rounding. */
+function cutTriangles(mesh: TriangleMesh, plane: Plane | undefined): boolean[] {
+  if (plane === undefined) return new Array<boolean>(triangleCount(mesh)).fill(false);
+  const tolerance = CUT_PLANE_TOLERANCE_RELATIVE * length(measureMesh(mesh).size);
+  return Array.from({ length: triangleCount(mesh) }, (_, triangle) =>
+    triangleAt(mesh, triangle).every((vertex) => Math.abs(dot(vertexAt(mesh, vertex), plane.normal) - plane.offset) <= tolerance),
+  );
+}
+
+/** The corners of the triangles that pass `keep`, in their order. */
+function selectTriangles({ positions, normals }: ShadedTriangles, keep: (triangle: number) => boolean): ShadedTriangles {
+  const kept = Array.from({ length: positions.length / 9 }, (_, triangle) => triangle).filter(keep);
+  const pick = (source: Float32Array<ArrayBuffer>) => {
+    const target = new Float32Array(kept.length * 9);
+    kept.forEach((triangle, index) => {
+      target.set(source.subarray(triangle * 9, triangle * 9 + 9), index * 9);
+    });
+    return target;
+  };
+  return { positions: pick(positions), normals: pick(normals) };
 }
 
 /** The right solid before the shear x' = x + kx·z, y' = y + ky·z: the same triangles with x − kx·z, y − ky·z. */
@@ -157,7 +215,7 @@ function shadedTriangles(
   rightMesh: TriangleMesh,
   smooth: boolean,
   shear: readonly [number, number] | undefined,
-): { positions: Float32Array<ArrayBuffer>; normals: Float32Array<ArrayBuffer> } {
+): ShadedTriangles {
   const faceNormals = Array.from({ length: triangleCount(mesh) }, (_, triangle) => unitNormal(rightMesh, triangle));
   const cornersOfVertex = new Map<number, { triangle: number; angle: number }[]>();
   if (smooth) {

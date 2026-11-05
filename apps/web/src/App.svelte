@@ -11,11 +11,13 @@ import { saveFile } from './lib/download.ts';
 import { buildModel } from './lib/model/buildModel.ts';
 import { describeModelError, type ModelState, visibleArtifacts } from './lib/model/modelState.ts';
 import {
+  activeSection,
   canResetShapeParameters,
   initialParameterChoices,
   initialParameterTexts,
   type ParameterExact,
   type ParameterState,
+  partsSeparated,
   resetShapeParameters,
   resolveModelRequest,
   switchTiltMode,
@@ -65,6 +67,9 @@ const invalidFields = $derived(
     .map(({ key, label }) => ({ key, label })),
 );
 const canReset = $derived(selectedKind !== undefined && canResetShapeParameters(selectedKind, parameterState));
+// The download exports the parts of the chosen section, or the whole solid.
+const sectioned = $derived(selectedKind !== undefined && activeSection(selectedKind, parameterChoices) !== undefined);
+const separated = $derived(selectedKind !== undefined && partsSeparated(selectedKind, parameterChoices));
 
 function withStoredPrintSize() {
   const stored = loadPrintSizeText();
@@ -172,7 +177,7 @@ function downloadPrintFile() {
         {#snippet leadingIcon()}
           <svg class="download-icon" viewBox="0 0 16 16"><path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10" /></svg>
         {/snippet}
-        Завантажити 3MF
+        {sectioned ? 'Завантажити частини · 3MF' : 'Завантажити 3MF'}
       </Button>
     </div>
   </AppHeader>
@@ -195,6 +200,7 @@ function downloadPrintFile() {
       <PreviewPanel
         shapeName={selectedShapeName}
         {model}
+        {separated}
         {invalidFields}
         onfocusfield={(key) => controls?.focusField(key)}
         onretry={() => (attempt += 1)}

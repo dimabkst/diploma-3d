@@ -20,6 +20,7 @@ import {
   REGULAR_POLYHEDRON_KINDS,
   ROUND_HEIGHT_LIMITS,
   ROUND_OFFSET_LIMITS,
+  SECTIONS_BY_SHAPE,
   TETRAHEDRON_HEIGHT_RATIO,
   TILT_OFFSET_LIMITS,
 } from './index.ts';
@@ -708,5 +709,38 @@ describe('minimum inclination of a tilted solid', () => {
       modelSpecSchema.safeParse({ shape: { kind: 'pyramid', baseSides: 4, heightRatio: 0.25, apexYRatio: steep }, scale })
         .success,
     ).toBe(true);
+  });
+});
+
+describe('plane sections', () => {
+  const cylinder = { kind: 'cylinder', heightRatio: 2, offsetRatio: 1 } as const;
+  const at = (positionPercent: number) => ({ type: 'parallel-to-bases', positionPercent }) as const;
+  const scale = { longestDimensionMm: 80 } as const;
+
+  it('accepts a cut parallel to a cylinder’s bases at 10–90 % of its height, also between the steps', () => {
+    for (const positionPercent of [10, 12.5, 50, 90]) {
+      expect(modelSpecSchema.parse({ shape: cylinder, scale, section: at(positionPercent) }).section).toEqual(
+        at(positionPercent),
+      );
+    }
+    expect(modelSpecSchema.parse({ shape: cylinder, scale })).not.toHaveProperty('section');
+  });
+
+  it('rejects positions outside 10–90 %, non-finite ones and unknown section types', () => {
+    for (const positionPercent of [9.999, 90.001, 0, 100, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(modelSpecSchema.safeParse({ shape: cylinder, scale, section: at(positionPercent) }).success).toBe(false);
+    }
+    expect(modelSpecSchema.safeParse({ shape: cylinder, scale, section: { type: 'axial', positionPercent: 50 } }).success).toBe(
+      false,
+    );
+    expect(modelSpecSchema.safeParse({ shape: cylinder, scale, section: { ...at(50), extra: 1 } }).success).toBe(false);
+  });
+
+  it('offers the section only for the cylinder so far', () => {
+    expect(SECTIONS_BY_SHAPE).toEqual({ cylinder: ['parallel-to-bases'] });
+    const cone = modelSpecSchema.safeParse({ shape: { kind: 'cone', heightRatio: 2 }, scale, section: at(50) });
+    expect(cone.success).toBe(false);
+    expect(cone.error?.issues[0]?.path).toEqual(['section']);
+    expect(modelSpecSchema.safeParse({ shape: { kind: 'cube' }, scale, section: at(50) }).success).toBe(false);
   });
 });

@@ -21,6 +21,7 @@ import {
   trapezoidKindName,
 } from '../shapes.ts';
 import Button from './Button.svelte';
+import Checkbox from './Checkbox.svelte';
 import Field from './Field.svelte';
 import HelpToggle from './HelpToggle.svelte';
 import NumberField from './NumberField.svelte';
@@ -135,8 +136,8 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
         <ParameterSection
           title={section.title}
           bind:open={() => openSections[sectionKey] ?? initiallyOpen, (open) => (openSections[sectionKey] = open)}
-          status={tilt === undefined || state === undefined ? undefined : tilt.status[state]}
-          highlighted={state === 'moved'}
+          status={section.status?.text ?? (tilt === undefined || state === undefined ? undefined : tilt.status[state])}
+          highlighted={section.status?.highlighted ?? state === 'moved'}
           invalid={hasError(section)}
         >
           {#each section.fields as field (field.key)}
@@ -144,6 +145,8 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
               <Field label={field.label} forId={field.key}>
                 <Select id={field.key} bind:value={choices[field.key]} options={field.options} />
               </Field>
+            {:else if field.type === 'toggle'}
+              <Checkbox id={field.key} label={field.label} bind:checked={choices[field.key]} />
             {:else if field.type === 'tilt'}
               <SegmentedControl
                 legend="Спосіб задання"

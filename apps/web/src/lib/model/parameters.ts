@@ -6,6 +6,7 @@ import {
   baseShiftSchema,
   DEFAULT_LONGEST_DIMENSION_MM,
   DEFAULT_PARALLELOGRAM_BASE,
+  DEFAULT_SECTION_POSITION_PERCENT,
   DEFAULT_TRAPEZOID_BASE,
   DEFAULT_TRIANGLE_BASE,
   defaultModelSpecs,
@@ -28,7 +29,11 @@ import {
   ratioSchema,
   roundHeightRatioSchema,
   roundOffsetSchema,
+  SECTION_POSITION_LIMITS,
+  type Section,
+  type SectionType,
   type ShapeKind,
+  sectionPositionSchema,
   TILT_OFFSET_LIMITS,
 } from '@diploma-3d/schema';
 import { formatDecimal, halfSumDecimal, parseDecimal } from '../decimal.ts';
@@ -91,6 +96,7 @@ export type ParameterKey =
   | 'cylinderHeightRatio'
   | 'cylinderOffsetRatio'
   | 'cylinderInclinationDeg'
+  | 'cylinderSectionPercent'
   | 'coneHeightRatio'
   | 'coneOffsetRatio'
   | 'coneInclinationDeg';
@@ -98,15 +104,25 @@ export type ParameterKey =
 /** Raw field text, kept separately from parsed values so that empty and partially typed input stays editable. */
 export type ParameterTexts = Record<ParameterKey, string>;
 
-/** Parameters picked from fixed options. */
+/** A plane section of the solid, or none. */
+export type SectionChoice = 'none' | SectionType;
+
+/** Parameters picked from fixed options, and switches. */
 export type ParameterChoices = {
   prismBaseType: PrismBaseType;
   prismBaseSides: PrismBaseSides;
   pyramidBaseType: PyramidBaseType;
   pyramidBaseSides: PyramidBaseSides;
+  cylinderSection: SectionChoice;
+  /** Whether the preview moves the parts of the section apart; it changes neither the geometry nor the print file. */
+  cylinderPartsSeparated: boolean;
 };
 
-export type ChoiceKey = keyof ParameterChoices;
+/** The switches among the choices. */
+export type ToggleKey = 'cylinderPartsSeparated';
+
+/** The choices picked from options. */
+export type ChoiceKey = Exclude<keyof ParameterChoices, ToggleKey>;
 
 export type ParameterErrors = Partial<Record<ParameterKey, string>>;
 
@@ -171,6 +187,7 @@ export const initialParameterTexts = (): ParameterTexts => ({
   coneHeightRatio: formatDecimal(defaultModelSpecs.cone.shape.heightRatio),
   coneOffsetRatio: formatDecimal(defaultModelSpecs.cone.shape.offsetRatio),
   coneInclinationDeg: RIGHT_INCLINATION_TEXT,
+  cylinderSectionPercent: formatDecimal(DEFAULT_SECTION_POSITION_PERCENT),
 });
 
 export const initialParameterChoices = (): ParameterChoices => ({
@@ -178,6 +195,9 @@ export const initialParameterChoices = (): ParameterChoices => ({
   prismBaseSides: defaultModelSpecs.prism.shape.baseSides,
   pyramidBaseType: defaultModelSpecs.pyramid.shape.baseType,
   pyramidBaseSides: defaultModelSpecs.pyramid.shape.baseSides,
+  // The section is optional; once it is chosen, the parts start apart so that the cut faces show.
+  cylinderSection: 'none',
+  cylinderPartsSeparated: true,
 });
 
 type Validation = { value: number } | { error: string };
@@ -244,6 +264,10 @@ export const validateRoundOffset = (text: string, exact?: number): Validation =>
 export const validateDirection = (text: string, exact?: number): Validation =>
   validateNumber(text, inclusiveRange(DIRECTION_LIMITS), DIRECTION_LIMITS, '90', '°', exact);
 
+/** The cutting plane's distance from the lower base, in percent of the height. */
+export const validateSectionPosition = (text: string, exact?: number): Validation =>
+  validateNumber(text, sectionPositionSchema, SECTION_POSITION_LIMITS, '50', ' %', exact);
+
 export const validatePrintSize = (text: string): Validation =>
   validateNumber(
     text,
@@ -290,6 +314,7 @@ const validators: Readonly<Record<IndependentKey, (text: string, exact?: number)
   cylinderOffsetRatio: validateRoundOffset,
   coneHeightRatio: validateRoundHeight,
   coneOffsetRatio: validateRoundOffset,
+  cylinderSectionPercent: validateSectionPosition,
 };
 
 /** The exact value behind a field's text while the field still shows that value's formatted text. */
@@ -421,14 +446,64 @@ export function resolveModelRequest(
   options: ParameterOptions = {},
 ): ModelRequest {
   const resolved = resolveShape(kind, texts, choices, options);
-  const values = { ...resolved.values };
-  const errors = { ...resolved.errors };
+  const section = resolveSection(kind, texts, choices, options.exact);
+  const values = { ...resolved.values, ...section.values };
+  const errors = { ...resolved.errors, ...section.errors };
   const size = validatePrintSize(texts.printSizeMm);
   if ('error' in size) errors.printSizeMm = size.error;
   else values.printSizeMm = size.value;
-  if (resolved.shape === undefined || 'error' in size) return { values, errors, spec: undefined, key: undefined };
-  const spec = modelSpecSchema.parse({ shape: resolved.shape, scale: { longestDimensionMm: size.value } });
+  if (resolved.shape === undefined || section.section === undefined || 'error' in size) {
+    return { values, errors, spec: undefined, key: undefined };
+  }
+  const spec = modelSpecSchema.parse({
+    shape: resolved.shape,
+    scale: { longestDimensionMm: size.value },
+    ...(section.section === 'none' ? {} : { section: section.section }),
+  });
   return { values, errors, spec, key: JSON.stringify(spec) };
+}
+
+/** The fields of the plane section, for the shapes that offer one. */
+export const sectionKeys: Readonly<
+  Partial<
+    Record<
+      ShapeKind,
+      { readonly choice: 'cylinderSection'; readonly position: 'cylinderSectionPercent'; readonly separated: ToggleKey }
+    >
+  >
+> = {
+  cylinder: { choice: 'cylinderSection', position: 'cylinderSectionPercent', separated: 'cylinderPartsSeparated' },
+};
+
+/** The section chosen for the shape; undefined when it offers none or none is chosen. */
+export function activeSection(kind: ShapeKind, choices: ParameterChoices): SectionType | undefined {
+  const keys = sectionKeys[kind];
+  const choice = keys === undefined ? 'none' : choices[keys.choice];
+  return choice === 'none' ? undefined : choice;
+}
+
+/** Whether the preview shows the parts of the shape's active section apart. */
+export function partsSeparated(kind: ShapeKind, choices: ParameterChoices): boolean {
+  const keys = sectionKeys[kind];
+  return keys !== undefined && activeSection(kind, choices) !== undefined && choices[keys.separated];
+}
+
+/**
+ * The section of the specification: 'none' without one; undefined while its position is not valid. The position
+ * field is read only while a section is chosen, so that a hidden draft never blocks the whole solid.
+ */
+function resolveSection(
+  kind: ShapeKind,
+  texts: ParameterTexts,
+  choices: ParameterChoices,
+  exact: ParameterExact | undefined,
+): { values: ParameterValues; errors: ParameterErrors; section: Section | 'none' | undefined } {
+  const keys = sectionKeys[kind];
+  const type = activeSection(kind, choices);
+  if (keys === undefined || type === undefined) return { values: {}, errors: {}, section: 'none' };
+  const { values, errors } = validateFields([keys.position], texts, exact);
+  const positionPercent = values[keys.position];
+  return { values, errors, section: positionPercent === undefined ? undefined : { type, positionPercent } };
 }
 
 const valid = (values: ParameterValues, shape: ShapeInput): ShapeResolution => ({ values, errors: {}, shape });
@@ -581,7 +656,7 @@ export function alignedTrapezoidShift(sideRatio: number, alignment: TrapezoidAli
  * never reset.
  */
 export const shapeParameterKeys: Readonly<
-  Record<ShapeKind, { readonly texts: readonly ParameterKey[]; readonly choices: readonly ChoiceKey[] }>
+  Record<ShapeKind, { readonly texts: readonly ParameterKey[]; readonly choices: readonly (keyof ParameterChoices)[] }>
 > = {
   cube: { texts: [], choices: [] },
   cuboid: { texts: ['cuboidWidthRatio', 'cuboidHeightRatio'], choices: [] },
@@ -626,7 +701,10 @@ export const shapeParameterKeys: Readonly<
   octahedron: { texts: [], choices: [] },
   icosahedron: { texts: [], choices: [] },
   dodecahedron: { texts: [], choices: [] },
-  cylinder: { texts: ['cylinderHeightRatio', 'cylinderOffsetRatio', 'cylinderInclinationDeg'], choices: [] },
+  cylinder: {
+    texts: ['cylinderHeightRatio', 'cylinderOffsetRatio', 'cylinderInclinationDeg', 'cylinderSectionPercent'],
+    choices: ['cylinderSection', 'cylinderPartsSeparated'],
+  },
   cone: { texts: ['coneHeightRatio', 'coneOffsetRatio', 'coneInclinationDeg'], choices: [] },
   ball: { texts: [], choices: [] },
 };
@@ -639,9 +717,10 @@ export type ParameterState = {
 };
 
 /**
- * The state after "Скинути параметри фігури": the shape's own fields and choices, also of its inactive base variants
- * and of both tilt modes, return to their initial values, drafts included. The print size, every other shape and the
- * tilt input mode keep theirs, so a reset in the angle mode shows 90°.
+ * The state after "Скинути параметри фігури": the shape's own fields and choices, also of its inactive base variants,
+ * of both tilt modes and of its section, return to their initial values, drafts included: no section, at 50 %, with
+ * the parts apart. The print size, every other shape and the tilt input mode keep theirs, so a reset in the angle
+ * mode shows 90°.
  */
 export function resetShapeParameters(kind: ShapeKind, state: ParameterState): ParameterState {
   const [initialTexts, initialChoices] = [initialParameterTexts(), initialParameterChoices()];
@@ -671,16 +750,23 @@ function inactiveTiltKeys(kind: ShapeKind, { texts, exact, tiltModes = initialTi
   return validDirection ? [...offsets, direction] : [...offsets];
 }
 
+/** The section's position and the parts' separation, while no section is chosen. */
+function inactiveSectionKeys(kind: ShapeKind, choices: ParameterChoices): (ParameterKey | ToggleKey)[] {
+  const keys = sectionKeys[kind];
+  return keys === undefined || activeSection(kind, choices) !== undefined ? [] : [keys.position, keys.separated];
+}
+
 /**
- * Whether a reset would change the solid: one of the shape's own texts, an invalid draft included, or choices differs
- * from its initial value. The print size does not count, and neither does switching the tilt input mode alone.
+ * Whether a reset would change the solid or its preview: one of the shape's own texts, an invalid draft included, or
+ * choices differs from its initial value. The print size does not count, and neither do switching the tilt input mode
+ * alone and the fields of a section that is not chosen.
  */
 export function canResetShapeParameters(kind: ShapeKind, state: ParameterState): boolean {
   const reset = resetShapeParameters(kind, state);
-  const inactive = new Set(inactiveTiltKeys(kind, state));
+  const inactive = new Set<string>([...inactiveTiltKeys(kind, state), ...inactiveSectionKeys(kind, state.choices)]);
   return (
     shapeParameterKeys[kind].texts.some((key) => !inactive.has(key) && reset.texts[key] !== state.texts[key]) ||
-    shapeParameterKeys[kind].choices.some((key) => reset.choices[key] !== state.choices[key])
+    shapeParameterKeys[kind].choices.some((key) => !inactive.has(key) && reset.choices[key] !== state.choices[key])
   );
 }
 

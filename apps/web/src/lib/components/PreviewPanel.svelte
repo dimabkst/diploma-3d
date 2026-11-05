@@ -9,12 +9,15 @@ import StatusBadge from './StatusBadge.svelte';
 let {
   shapeName,
   model,
+  separated,
   invalidFields,
   onfocusfield,
   onretry,
 }: {
   shapeName: string;
   model: ModelState;
+  /** Show the parts of a section moved apart; the model and its print file stay the same. */
+  separated: boolean;
   /** The fields that keep the model from updating, in panel order. */
   invalidFields: readonly { readonly key: ParameterKey; readonly label: string }[];
   onfocusfield: (key: ParameterKey) => void;
@@ -27,7 +30,9 @@ let modelViewer = $state<ModelViewer>();
 let loadedGlb = $state.raw<Uint8Array<ArrayBuffer>>();
 let failedGlb = $state.raw<Uint8Array<ArrayBuffer>>();
 
-const glb = $derived(visibleArtifacts(model)?.previewGlb);
+const artifacts = $derived(visibleArtifacts(model));
+// Either preview of a section is ready with the model, so toggling the separation only swaps them.
+const glb = $derived(separated ? (artifacts?.separatedPreviewGlb ?? artifacts?.previewGlb) : artifacts?.previewGlb);
 const previewStatus = $derived(
   model.status !== 'ready' ? model.status : glb === failedGlb ? 'failed' : glb === loadedGlb ? 'loaded' : 'loading',
 );
@@ -41,7 +46,9 @@ const showsPreview = $derived(glb !== undefined && loadedGlb !== undefined && fa
 // The exported width, depth and height: of the current model, or of the previous one, marked, while it is replaced. The
 // mesh bounds do not depend on the camera.
 const shownArtifacts = $derived(model.status === 'ready' || model.status === 'generating' ? visibleArtifacts(model) : undefined);
-const size = $derived(shownArtifacts?.model.solids[0]?.measurements.size);
+const size = $derived(shownArtifacts?.model.size);
+// The parts of a section together are the whole solid, which the size describes.
+const assembled = $derived(shownArtifacts?.model.section !== undefined);
 </script>
 
 <section class="preview-panel" aria-label="3D-перегляд">
@@ -56,8 +63,8 @@ const size = $derived(shownArtifacts?.model.solids[0]?.measurements.size);
         <ModelViewer
           bind:this={modelViewer}
           {glb}
-          viewKey={visibleArtifacts(model)?.model.kind ?? ''}
-          alt={`Інтерактивна 3D-модель: ${shapeName.toLowerCase()}`}
+          viewKey={artifacts?.model.kind ?? ''}
+          alt={`Інтерактивна 3D-модель: ${shapeName.toLowerCase()}${artifacts?.model.section === undefined ? '' : ', дві частини перерізу'}`}
           onload={(loaded) => (loadedGlb = loaded)}
           onerror={(failed) => (failedGlb = failed)}
         />
@@ -103,7 +110,7 @@ const size = $derived(shownArtifacts?.model.solids[0]?.measurements.size);
     {/if}
   </div>
   <div class="preview-footer">
-    <p class={['dimensions', { outdated: model.status !== 'ready' }]}>Габарити: {formatSize(size)}</p>
+    <p class={['dimensions', { outdated: model.status !== 'ready' }]}>{assembled ? 'Габарити в зборі' : 'Габарити'}: {formatSize(size)}</p>
     <p class="viewer-tip">Перетягніть — обертання, колесо або два пальці — масштаб</p>
     <Button variant="secondary" disabled={previewStatus !== 'loaded'} onclick={() => modelViewer?.fit()}>
       Вписати модель
