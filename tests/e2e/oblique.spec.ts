@@ -111,8 +111,10 @@ test('oblique prism: offsets tilt the square prism, change the 3MF, and can be r
   await expect(offsetX).toHaveValue('0');
   await offsetX.press('ArrowDown');
   await expect(offsetX).toHaveValue('-0,25');
+  // At h = a the slider ends where the lean reaches 15°: |X| ≤ a / tan 15° ≈ 3,732a with Y = 0.
+  await expect(slider(page, 'Зміщення X')).toHaveAttribute('min', '-3.732');
   await slider(page, 'Зміщення X').press('Home');
-  await expect(offsetX).toHaveValue('-2');
+  await expect(offsetX).toHaveValue('-3,732');
   await expect(stepButton(page, 'Зміщення X', 'зменшити')).toBeDisabled();
   await offsetX.fill('-1.35');
   await offsetX.blur();
@@ -193,7 +195,7 @@ test('oblique prism: an invalid offset blocks the download, and the reset repair
   await openSection(page, 'Нахил');
 
   for (const [text, message] of [
-    ['2,5', 'Допустимі значення — від -2 до 2.'],
+    ['абв', 'Введіть число, наприклад -0,5.'],
     ['-', 'Введіть число, наприклад -0,5.'],
     ['', 'Введіть значення.'],
   ] as const) {

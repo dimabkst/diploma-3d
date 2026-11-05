@@ -70,12 +70,12 @@ test('cylinder: h/r drives the preview and the downloaded 3MF', async ({ page })
   await expect(heightRatio(page)).toHaveValue('2,25');
   await expectPreviewOf(page, summary('cylinder', 2.25));
 
-  // The limits: h = 4r gives r = 20 mm; h = r gives a squat 80 × 80 × 40 mm cylinder.
+  // The slider's end: h = 8r gives r = 10 mm; h = r gives a squat 80 × 80 × 40 mm cylinder.
   await heightSlider(page).press('End');
-  await expect(heightRatio(page)).toHaveValue('4');
+  await expect(heightRatio(page)).toHaveValue('8');
   await expect(stepButton(page, 'збільшити')).toBeDisabled();
-  await expectPreviewOf(page, summary('cylinder', 4));
-  await expectDownloaded(page, 'cylinder', 4);
+  await expectPreviewOf(page, summary('cylinder', 8));
+  await expectDownloaded(page, 'cylinder', 8);
   await heightRatio(page).fill('1');
   await expectPreviewOf(page, `${NAMES.cylinder} · 80 × 80 × 40 мм`);
   await expectDownloaded(page, 'cylinder', 1);
@@ -97,10 +97,10 @@ test('cone: h/r drives the preview and the downloaded 3MF', async ({ page }) => 
   await expectDownloaded(page, 'cone', 1.1);
 
   await heightSlider(page).press('Home');
-  await expect(heightRatio(page)).toHaveValue('0,25');
+  await expect(heightRatio(page)).toHaveValue('0,5');
   await expect(stepButton(page, 'зменшити')).toBeDisabled();
-  await expectPreviewOf(page, summary('cone', 0.25));
-  await expectDownloaded(page, 'cone', 0.25);
+  await expectPreviewOf(page, summary('cone', 0.5));
+  await expectDownloaded(page, 'cone', 0.5);
 
   expect(errors).toEqual([]);
 });
@@ -123,8 +123,8 @@ test('cylinder and cone: rapid changes never offer outdated geometry, and invali
 
   for (const [text, message] of [
     ['', 'Введіть значення.'],
-    ['абв', 'Введіть число, наприклад 1,5.'],
-    ['0,2', 'Допустимі значення — від 0,25 до 4.'],
+    ['абв', 'Введіть число, наприклад 2.'],
+    ['0,25', 'Допустимі значення — від 0,5 до 8.'],
   ] as const) {
     await heightRatio(page).fill(text);
     await expect(heightRatio(page)).toHaveAttribute('aria-invalid', 'true');
@@ -159,7 +159,7 @@ for (const [layout, width] of [
     for (const kind of ['cylinder', 'cone'] as const) {
       await shapeSelect(page).selectOption({ label: NAMES[kind] });
       let reference: Awaited<ReturnType<typeof previewPlace>> | undefined;
-      for (const ratio of [2, 1, 1.1, 0.25, 4, 2.05]) {
+      for (const ratio of [2, 1, 1.1, 0.5, 8, 4.8, 2.05]) {
         await heightRatio(page).fill(String(ratio).replace('.', ','));
         await expectPreviewOf(page, summary(kind, ratio));
         const current = await previewPlace(page);

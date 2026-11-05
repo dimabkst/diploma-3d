@@ -7,12 +7,13 @@ import {
   type ShapeKind,
 } from '@diploma-3d/schema';
 import type { Manifold } from 'manifold-3d';
-import { GeometryError, InvalidModelSpecError } from './errors.ts';
+import { GeometryError, InfeasibleGeometryError, InvalidModelSpecError } from './errors.ts';
 import type { GeometryKernel } from './kernel.ts';
 import { assertValidSolidMesh, type MeshMeasurements, measureMesh, meshFromManifold, type TriangleMesh } from './mesh.ts';
 import { type Track, withScope } from './scope.ts';
 import { buildBall } from './shapes/ball.ts';
 import { buildUnitBox } from './shapes/box.ts';
+import { checkNumericalFeasibility } from './shapes/feasibility.ts';
 import { buildParallelepiped } from './shapes/parallelepiped.ts';
 import { buildPrismShape } from './shapes/prism.ts';
 import { buildPyramidShape } from './shapes/pyramid.ts';
@@ -41,13 +42,18 @@ export interface GeneratedModel {
   readonly solids: readonly Solid[];
 }
 
-/** Validates the specification, filling in defaults, and builds the shape in millimetres with one uniform scale. */
+/**
+ * Validates the specification, filling in defaults, checks that the solid can be represented reliably, and builds it in
+ * millimetres with one uniform scale.
+ */
 export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): GeneratedModel {
   const parsed = modelSpecSchema.safeParse(input);
   if (!parsed.success) {
     throw new InvalidModelSpecError(parsed.error.issues.map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`));
   }
   const spec = parsed.data;
+  const feasibility = checkNumericalFeasibility(spec.shape);
+  if (!feasibility.feasible) throw new InfeasibleGeometryError(feasibility.relativeRounding);
 
   const mesh = withScope((track) => {
     const solid = buildShape(kernel, track, spec.shape, spec.scale);

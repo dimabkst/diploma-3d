@@ -175,8 +175,8 @@ describe('generateModel for a rectangular cuboid', () => {
     ['a negative ratio', cuboid(1.5, -2)],
     ['a NaN ratio', cuboid(Number.NaN, 2)],
     ['an infinite ratio', cuboid(1.5, Number.POSITIVE_INFINITY)],
-    ['a ratio below the minimum', cuboid(0.2, 2)],
-    ['a ratio above the maximum', cuboid(1.5, 4.5)],
+    ['a ratio below the minimum', cuboid(0.12, 2)],
+    ['a ratio above the maximum', cuboid(1.5, 8.5)],
     ['a missing ratio', { shape: { kind: 'cuboid', widthRatio: 1.5 }, scale: scale(80) }],
     ['a string ratio', { shape: { kind: 'cuboid', widthRatio: '1.5', heightRatio: 2 }, scale: scale(80) }],
   ])('rejects %s before allocating geometry', (_, spec) => {
@@ -323,7 +323,7 @@ describe('releases Manifold objects', () => {
   // Built by manifold-3d at their physical size: cylinders and cones in one step, the ball as sphere and translate.
   const obliqueRound = {
     cylinder: { shape: { kind: 'cylinder', heightRatio: 1, offsetRatio: 1.5 }, scale: { longestDimensionMm: 80 } },
-    cone: { shape: { kind: 'cone', heightRatio: 0.5, offsetRatio: 3 }, scale: { longestDimensionMm: 80 } },
+    cone: { shape: { kind: 'cone', heightRatio: 1, offsetRatio: 3 }, scale: { longestDimensionMm: 80 } },
   } as const satisfies Record<string, ModelSpecInput>;
   const curvedSolids: readonly (readonly [string, ModelSpecInput, number])[] = [
     ['cylinder', defaultModelSpecs.cylinder, 1],

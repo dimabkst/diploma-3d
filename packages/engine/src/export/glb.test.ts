@@ -279,7 +279,7 @@ describe('createPreviewGlb shading', () => {
 
   it.each([
     ['a leaning cylinder', { kind: 'cylinder', heightRatio: 1, offsetRatio: 1 }],
-    ['a strongly leaning cylinder', { kind: 'cylinder', heightRatio: 0.25, offsetRatio: 4 }],
+    ['a strongly leaning cylinder', { kind: 'cylinder', heightRatio: 1.5, offsetRatio: 4 }],
   ] as const)('shades %s along the sheared surface normals, with flat caps and only the rims outlined', async (_, shape) => {
     const { positions, normals, faces, edgeSegments } = await shadedCorners({ shape, scale: { longestDimensionMm: 80 } });
     const k = shape.offsetRatio / shape.heightRatio;
@@ -313,7 +313,7 @@ describe('createPreviewGlb shading', () => {
   });
 
   it('shades an oblique cone with its apex outside the base with finite normals and a sharp base rim', async () => {
-    const shape = { kind: 'cone', heightRatio: 0.5, offsetRatio: 4 } as const;
+    const shape = { kind: 'cone', heightRatio: 1.5, offsetRatio: 4 } as const;
     const { positions, normals, faces, edgeSegments } = await shadedCorners({ shape, scale: { longestDimensionMm: 80 } });
     const apexHeight = Math.max(...positions.map((position) => position[1]));
     let apexCorners = 0;

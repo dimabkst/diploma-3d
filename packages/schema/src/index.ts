@@ -1,4 +1,4 @@
-export { APEX_LIMITS, apexRatioSchema } from './apex.ts';
+export { apexRatioSchema } from './apex.ts';
 export { type BallShape, ballShapeSchema } from './ball.ts';
 export {
   BASE_SHIFT_LIMITS,
@@ -19,7 +19,7 @@ export {
   type ShapeKind,
   shapeSchema,
 } from './model.ts';
-export { OFFSET_LIMITS, offsetRatioSchema } from './offset.ts';
+export { offsetRatioSchema, TILT_OFFSET_LIMITS } from './offset.ts';
 export { type ParallelepipedShape, parallelepipedShapeSchema } from './parallelepiped.ts';
 export {
   PRISM_BASE_SIDES,
@@ -44,7 +44,7 @@ export {
   pyramidShapeSchema,
   type RegularPyramidShape,
 } from './pyramid.ts';
-export { RATIO_LIMITS, ratioSchema } from './ratio.ts';
+export { RATIO_LIMITS, ROUND_HEIGHT_LIMITS, ratioSchema, roundHeightRatioSchema } from './ratio.ts';
 export {
   type DodecahedronShape,
   dodecahedronShapeSchema,
@@ -73,3 +73,10 @@ export {
   physicalScaleSchema,
 } from './scale.ts';
 export { TETRAHEDRON_HEIGHT_RATIO, type TetrahedronShape, tetrahedronShapeSchema } from './tetrahedron.ts';
+export {
+  INCLINATION_LIMITS,
+  isWithinMinimumInclination,
+  MIN_INCLINATION_DEG,
+  maxTiltDisplacement,
+  tiltOf,
+} from './tilt.ts';

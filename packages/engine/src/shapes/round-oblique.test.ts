@@ -1,4 +1,5 @@
 import type { ModelSpecInput } from '@diploma-3d/schema';
+import { isWithinMinimumInclination } from '@diploma-3d/schema';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { type GeometryKernel, loadGeometryKernel } from '../kernel.ts';
 import {
@@ -142,7 +143,14 @@ describe('roundSolidMeasurements for oblique solids', () => {
 });
 
 describe('generateModel for an oblique cylinder and cone', () => {
-  const cases = KINDS.flatMap((kind) => [0.25, 1, 4].flatMap((h0) => [0.25, 1.1, 2.5, 4].map((d0) => [kind, h0, d0] as const)));
+  const cases = KINDS.flatMap((kind) =>
+    [0.5, 1, 8].flatMap((h0) =>
+      [0.25, 1.1, 2.5, 4]
+        // Flatter than the minimum inclination is outside the domain: h/r = 0,5 allows d/r up to about 1,87.
+        .filter((d0) => isWithinMinimumInclination(h0, d0))
+        .map((d0) => [kind, h0, d0] as const),
+    ),
+  );
 
   it.each(cases)('builds the %s with h/r = %s and d/r = %s with its circles, bounds and volume', (kind, h0, d0) => {
     const shape = shapeOf(kind, h0, d0);
@@ -204,7 +212,7 @@ describe('generateModel for an oblique cylinder and cone', () => {
   });
 
   it.each(KINDS)('reproduces the right %s exactly without a displacement', (kind) => {
-    for (const h0 of [0.25, 2, 4]) {
+    for (const h0 of [0.5, 2, 8]) {
       const omitted = onlySolid({ shape: { kind, heightRatio: h0 }, scale: L80 });
       const zero = onlySolid({ shape: shapeOf(kind, h0, 0), scale: L80 });
       expect(zero.mesh).toEqual(omitted.mesh);

@@ -20,7 +20,11 @@ let {
   text: string;
   /** The validated value of `text`, or undefined while it is not valid; the controls never parse `text` themselves. */
   value: number | undefined;
-  /** Bounds of the slider and stepping; buttons, arrow keys and dragging move to multiples of `increment`. */
+  /**
+   * The allowed values: the bounds of the slider, the buttons and the arrow keys, which move to multiples of `increment`,
+   * and of a valid typed value, which may lie between those multiples. A range narrowed by other parameters is passed
+   * as it is; nothing widens it to fit a value.
+   */
   range: StepRange;
   suffix?: string | undefined;
   error?: string | undefined;
@@ -42,7 +46,8 @@ let lastValid = $state<number>();
 $effect.pre(() => {
   if (value !== undefined) lastValid = value;
 });
-const sliderValue = $derived(value ?? lastValid ?? range.min);
+// Shown within the range: a value that a narrowed range no longer allows is invalid, and the slider waits at its end.
+const sliderValue = $derived(Math.min(range.max, Math.max(range.min, value ?? lastValid ?? range.min)));
 
 function select(next: number | undefined) {
   if (next !== undefined) text = formatSteppedDecimal(next);
@@ -124,7 +129,7 @@ function onsliderinput(event: Event & { currentTarget: HTMLInputElement }) {
       max={range.max}
       step="any"
       value={sliderValue}
-      style:--fill={(sliderValue - range.min) / (range.max - range.min)}
+      style:--fill={range.max > range.min ? (sliderValue - range.min) / (range.max - range.min) : 1}
       disabled={value === undefined}
       aria-label={`${label}: повзунок`}
       aria-valuetext={formatSteppedDecimal(sliderValue)}

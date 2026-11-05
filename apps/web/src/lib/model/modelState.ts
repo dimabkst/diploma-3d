@@ -1,4 +1,9 @@
-import { InvalidModelSpecError, KernelInitializationError, type ModelArtifacts } from '@diploma-3d/engine';
+import {
+  InfeasibleGeometryError,
+  InvalidModelSpecError,
+  KernelInitializationError,
+  type ModelArtifacts,
+} from '@diploma-3d/engine';
 
 /**
  * Only `ready` artifacts may be downloaded. While a replacement is generated or the parameters are invalid, the
@@ -25,6 +30,9 @@ export function visibleArtifacts(state: ModelState): ModelArtifacts | undefined 
 export function describeModelError(error: unknown): string {
   if (error instanceof KernelInitializationError) {
     return 'Не вдалося завантажити геометричний модуль. Перевірте з’єднання з мережею та спробуйте ще раз.';
+  }
+  if (error instanceof InfeasibleGeometryError) {
+    return 'Тіло задовге й тонке для надійного обчислення. Збільште кут нахилу або зменште зміщення.';
   }
   if (error instanceof InvalidModelSpecError) {
     return 'Параметри моделі некоректні. Перевірте значення й спробуйте ще раз.';

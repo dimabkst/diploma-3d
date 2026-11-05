@@ -1,5 +1,5 @@
 import type { ModelSpecInput, PyramidShape } from '@diploma-3d/schema';
-import { TETRAHEDRON_HEIGHT_RATIO } from '@diploma-3d/schema';
+import { isWithinMinimumInclination, TETRAHEDRON_HEIGHT_RATIO } from '@diploma-3d/schema';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { type GeometryKernel, loadGeometryKernel } from '../kernel.ts';
 import {
@@ -198,7 +198,10 @@ function apexPositions(base: readonly Vec2[]): readonly (readonly [string, Vec2]
 describe('generateModel for a pyramid over every base type with a positioned apex', () => {
   const cases = BASES.flatMap(([name, base]) =>
     apexPositions(baseVertices(base)).flatMap(([where, apex]) =>
-      [0.25, 1, 4].map((h0) => [name, where, h0, base, apex] as const),
+      [0.25, 1, 4]
+        // Flatter than the minimum inclination is outside the domain.
+        .filter((h0) => isWithinMinimumInclination(h0, Math.hypot(...apex)))
+        .map((h0) => [name, where, h0, base, apex] as const),
     ),
   );
 

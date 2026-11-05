@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { shapePanel } from '../shapes.ts';
+import { formatSteppedDecimal } from '../decimal.ts';
+import { sectionNumberFields, shapePanel } from '../shapes.ts';
 import {
   alignedTrapezoidShift,
   canResetShapeParameters,
@@ -18,6 +19,7 @@ import {
   validateOffset,
   validatePrintSize,
   validateRatio,
+  validateRoundHeight,
   validateRoundOffset,
 } from './parameters.ts';
 import { initialTiltModes, type TiltMode, type TiltSolid } from './tilt.ts';
@@ -30,7 +32,7 @@ describe('validateRatio', () => {
     ['0,25', 0.25],
     ['4', 4],
     ['1,5', 1.5],
-    // Values between the 0,1 stepping grid are as valid as typed.
+    // Between the 0,25 stepping grid, kept as typed.
     ['2.05', 2.05],
     ['1,234', 1.234],
   ])('accepts %s, including the limits', (text, value) => {
@@ -44,10 +46,27 @@ describe('validateRatio', () => {
     ['abc', 'Введіть число, наприклад 1,5.'],
     ['0,2', 'Допустимі значення — від 0,25 до 4.'],
     ['4,01', 'Допустимі значення — від 0,25 до 4.'],
+    ['4,8', 'Допустимі значення — від 0,25 до 4.'],
     ['0', 'Допустимі значення — від 0,25 до 4.'],
     ['-1', 'Допустимі значення — від 0,25 до 4.'],
+    [`1${'0'.repeat(400)}`, 'Число надто велике.'],
   ])('reports "%s" without clamping it', (text, error) => {
     expect(validateRatio(text)).toEqual({ error });
+  });
+});
+
+describe('validateRoundHeight', () => {
+  it.each([
+    ['0,5', 0.5],
+    ['8', 8],
+    ['4,8', 4.8],
+    ['2,05', 2.05],
+  ])('accepts h/r = %s: h/(2r) from 0,25 to 4', (text, value) => {
+    expect(validateRoundHeight(text)).toEqual({ value });
+  });
+
+  it.each(['0,49', '0,25', '8,01', '16', '0'])('rejects h/r = %s without clamping it', (text) => {
+    expect(validateRoundHeight(text)).toEqual({ error: 'Допустимі значення — від 0,5 до 8.' });
   });
 });
 
@@ -85,6 +104,8 @@ describe('validateOffset', () => {
     ['-0,1', -0.1],
     ['-0.75', -0.75],
     ['1,234', 1.234],
+    ['-4', -4],
+    ['4', 4],
   ])('accepts %s, including the limits and negative values', (text, value) => {
     expect(validateOffset(text)).toEqual({ value });
   });
@@ -93,8 +114,10 @@ describe('validateOffset', () => {
     ['', 'Введіть значення.'],
     ['-', 'Введіть число, наприклад -0,5.'],
     ['−1', 'Введіть число, наприклад -0,5.'],
-    ['-2,01', 'Допустимі значення — від -2 до 2.'],
-    ['2.5', 'Допустимі значення — від -2 до 2.'],
+    ['1e3', 'Введіть число, наприклад -0,5.'],
+    ['4,01', 'Допустимі значення — від -4 до 4.'],
+    ['-6,928', 'Допустимі значення — від -4 до 4.'],
+    [`-1${'0'.repeat(400)}`, 'Число надто велике.'],
   ])('reports "%s" without clamping it', (text, error) => {
     expect(validateOffset(text)).toEqual({ error });
   });
@@ -309,8 +332,6 @@ describe('resolveModelRequest', () => {
     });
 
     it.each([
-      ['4,5', 'Допустимі значення — від -4 до 4.'],
-      ['-4,01', 'Допустимі значення — від -4 до 4.'],
       ['', 'Введіть значення.'],
       ['−1', 'Введіть число, наприклад -0,5.'],
     ])('reports the apex coordinate "%s" without clamping it', (text, error) => {
@@ -374,9 +395,14 @@ describe('resolveModelRequest', () => {
       heightRatio: 2.05,
       offsetRatio: 0,
     });
-    const invalid = resolveModelRequest(kind, texts({ [key]: '4,5' }), triangle);
-    expect(invalid.spec).toBeUndefined();
-    expect(invalid.errors).toEqual({ [key]: 'Допустимі значення — від 0,25 до 4.' });
+    // h/r = 4,8 lies off the slider's quarters and is kept as typed; 8 is the limit.
+    expect(resolveModelRequest(kind, texts({ [key]: '4,8' }), triangle).spec?.shape).toMatchObject({ heightRatio: 4.8 });
+    expect(resolveModelRequest(kind, texts({ [key]: '8' }), triangle).spec?.shape).toMatchObject({ heightRatio: 8 });
+    for (const text of ['8,5', '0,25']) {
+      const invalid = resolveModelRequest(kind, texts({ [key]: text }), triangle);
+      expect(invalid.spec).toBeUndefined();
+      expect(invalid.errors).toEqual({ [key]: 'Допустимі значення — від 0,5 до 8.' });
+    }
   });
 
   it('keeps the cylinder and cone ratios apart', () => {
@@ -392,28 +418,25 @@ describe('resolveModelRequest', () => {
   it.each([
     ['cylinder', 'cylinderOffsetRatio', 'cylinderHeightRatio'],
     ['cone', 'coneOffsetRatio', 'coneHeightRatio'],
-  ] as const)(
-    'displaces the %s by its own d/r, keeping its height, and validates the range [0, 4]',
-    (kind, offsetKey, heightKey) => {
-      const typed = resolveModelRequest(kind, texts({ [offsetKey]: '1.35', [heightKey]: '0,5' }), triangle);
-      expect(typed.spec?.shape).toEqual({ kind, heightRatio: 0.5, offsetRatio: 1.35 });
-      expect(resolveModelRequest(kind, texts({ [offsetKey]: '4' }), triangle).spec?.shape).toMatchObject({ offsetRatio: 4 });
-      for (const [text, error] of [
-        ['-0,25', 'Допустимі значення — від 0 до 4.'],
-        ['4,25', 'Допустимі значення — від 0 до 4.'],
-        ['', 'Введіть значення.'],
-        ['abc', 'Введіть число, наприклад 0,5.'],
-      ] as const) {
-        const invalid = resolveModelRequest(kind, texts({ [offsetKey]: text }), triangle);
-        expect(invalid.spec).toBeUndefined();
-        expect(invalid.errors).toEqual({ [offsetKey]: error });
-        expect(validateRoundOffset(text)).toEqual({ error });
-      }
-      // The other round solid keeps its own, still zero, displacement.
-      const other = kind === 'cylinder' ? 'cone' : 'cylinder';
-      expect(resolveModelRequest(other, texts({ [offsetKey]: '2' }), triangle).spec?.shape).toMatchObject({ offsetRatio: 0 });
-    },
-  );
+  ] as const)('displaces the %s by its own d/r, keeping its height, within [0, 4] and β ≥ 15°', (kind, offsetKey, heightKey) => {
+    const typed = resolveModelRequest(kind, texts({ [offsetKey]: '1.35', [heightKey]: '0,5' }), triangle);
+    expect(typed.spec?.shape).toEqual({ kind, heightRatio: 0.5, offsetRatio: 1.35 });
+    expect(resolveModelRequest(kind, texts({ [offsetKey]: '4' }), triangle).spec?.shape).toMatchObject({ offsetRatio: 4 });
+    for (const [text, error] of [
+      ['-0,25', 'Допустимі значення — від 0 до 4.'],
+      ['4,25', 'Допустимі значення — від 0 до 4.'],
+      ['', 'Введіть значення.'],
+      ['abc', 'Введіть число, наприклад 0,5.'],
+    ] as const) {
+      const invalid = resolveModelRequest(kind, texts({ [offsetKey]: text }), triangle);
+      expect(invalid.spec).toBeUndefined();
+      expect(invalid.errors).toEqual({ [offsetKey]: error });
+      expect(validateRoundOffset(text)).toEqual({ error });
+    }
+    // The other round solid keeps its own, still zero, displacement.
+    const other = kind === 'cylinder' ? 'cone' : 'cylinder';
+    expect(resolveModelRequest(other, texts({ [offsetKey]: '2' }), triangle).spec?.shape).toMatchObject({ offsetRatio: 0 });
+  });
 
   it('starts the parallelepiped with b = a, h = a and α = 60°', () => {
     expect(resolveModelRequest('parallelepiped', initialParameterTexts(), triangle).spec).toEqual({
@@ -500,9 +523,9 @@ describe('resolveModelRequest', () => {
     ['prism', 'prismOffsetXRatio', 'prismOffsetYRatio'],
     ['parallelepiped', 'parallelepipedOffsetXRatio', 'parallelepipedOffsetYRatio'],
   ] as const)('reports invalid %s offsets with their limits and builds no model', (kind, x, y) => {
-    const request = resolveModelRequest(kind, texts({ [x]: '2,25', [y]: '' }), triangle);
+    const request = resolveModelRequest(kind, texts({ [x]: '4,25', [y]: '' }), triangle);
     expect(request.spec).toBeUndefined();
-    expect(request.errors).toEqual({ [x]: 'Допустимі значення — від -2 до 2.', [y]: 'Введіть значення.' });
+    expect(request.errors).toEqual({ [x]: 'Допустимі значення — від -4 до 4.', [y]: 'Введіть значення.' });
   });
 
   it('keeps the prism and parallelepiped offsets apart', () => {
@@ -836,7 +859,7 @@ describe('tilt entered as angles', () => {
     ['parallelepiped', { parallelepipedHeightRatio: '0,8', parallelepipedOffsetXRatio: '0,5', parallelepipedOffsetYRatio: '-2' }],
     ['pyramid', { pyramidHeightRatio: '1,7', pyramidApexXRatio: '-3,2', pyramidApexYRatio: '-0,15' }],
     ['cylinder', { cylinderHeightRatio: '1,5', cylinderOffsetRatio: '2,2' }],
-    ['cone', { coneHeightRatio: '0,6', coneOffsetRatio: '3,75' }],
+    ['cone', { coneHeightRatio: '1,5', coneOffsetRatio: '3,75' }],
   ] as const)('builds the same %s from offsets and from the equivalent angles', (solid, offsets) => {
     const offsetState: ParameterState = {
       texts: texts(offsets),
@@ -937,39 +960,114 @@ describe('tilt entered as angles', () => {
     expect(along('360')).toEqual(along('0'));
   });
 
-  it('reports an inclination outside the range of the height and direction at the field, without clamping', () => {
-    // H = 1 along +Y: |Y| ≤ 2 needs β ≥ atan(1/2) = 26,57°.
-    const flat = inAngles('prism', { prismHeightRatio: '1', prismInclinationDeg: '20', prismDirectionDeg: '90' });
-    const request = resolve('prism', flat);
+  it('rejects angles whose offsets would leave [−4, 4], naming the steeper range, without clamping', () => {
+    // h/a = 4 at 30° along +X: X/a = 4√3 ≈ 6,93; along +X the limit 4 needs β ≥ 45°.
+    const along = inAngles('prism', { prismHeightRatio: '4', prismInclinationDeg: '30', prismDirectionDeg: '0' });
+    const request = resolve('prism', along);
     expect(request.spec).toBeUndefined();
-    expect(request.errors).toEqual({
-      prismInclinationDeg: 'Допустимі значення за цієї висоти й напряму — від 26,57° до 90°.',
+    expect(request.errors).toEqual({ prismInclinationDeg: 'Допустимі значення за цієї висоти й напряму — від 45° до 90°.' });
+    expect(request.values.prismOffsetXRatio).toBeUndefined();
+    // The diagonal reaches the corner (4, 4): β ≥ atan2(4, 4√2) ≈ 35,26°.
+    const diagonal = { ...along, texts: { ...along.texts, prismDirectionDeg: '45' } };
+    expect(resolve('prism', diagonal).errors).toEqual({
+      prismInclinationDeg: 'Допустимі значення за цієї висоти й напряму — від 35,27° до 90°.',
     });
-    // The same angle along the diagonal reaches the corner region and is valid.
-    const diagonal = resolve('prism', { ...flat, texts: { ...flat.texts, prismDirectionDeg: '45' } });
-    expect(diagonal.errors).toEqual({});
-    // At H = 3 along +Y, β = 60° gives D = √3 ≤ 2.
-    const steeper = { ...flat, texts: { ...flat.texts, prismHeightRatio: '3', prismInclinationDeg: '60' } };
-    expect(resolve('prism', steeper).spec?.shape).toMatchObject({ offsetXRatio: 0 });
+    const steeper = { ...diagonal, texts: { ...diagonal.texts, prismInclinationDeg: '35,27' } };
+    const corner = resolve('prism', steeper).spec?.shape as Record<string, number> | undefined;
+    expect(corner?.offsetXRatio).toBeLessThanOrEqual(4);
+    expect(corner?.offsetXRatio).toBeCloseTo(corner?.offsetYRatio ?? 0, 12);
+    // h/r = 8: d ≤ 4 needs β ≥ atan(2) ≈ 63,43°.
+    const cone = resolve('cone', inAngles('cone', { coneHeightRatio: '8', coneInclinationDeg: '60' }));
+    expect(cone.errors).toEqual({ coneInclinationDeg: 'Допустимі значення за цієї висоти — від 63,44° до 90°.' });
+  });
+
+  it('rejects inclinations below 15° or above 90° in the angle mode, keeping both limits', () => {
+    const typed = (prismInclinationDeg: string) =>
+      resolve('prism', inAngles('prism', { prismHeightRatio: '1', prismInclinationDeg, prismDirectionDeg: '0' }));
+    // 15° at h/a = 1: X/a = 1/tan 15° ≈ 3,732.
+    expect(typed('15').spec?.shape).toMatchObject({ offsetXRatio: expect.closeTo(1 / Math.tan(Math.PI / 12), 11) });
+    expect(typed('90').spec?.shape).toMatchObject({ offsetXRatio: 0, offsetYRatio: 0 });
     for (const [text, error] of [
-      ['0', 'Допустимі значення за цієї висоти й напряму — від 26,57° до 90°.'],
-      ['91', 'Допустимі значення за цієї висоти й напряму — від 26,57° до 90°.'],
+      ['14,99', 'Допустимі значення — від 15° до 90°.'],
+      ['5', 'Допустимі значення — від 15° до 90°.'],
+      ['0', 'Допустимі значення — від 15° до 90°.'],
+      ['91', 'Допустимі значення — від 15° до 90°.'],
       ['', 'Введіть значення.'],
       ['-', 'Введіть число, наприклад 45.'],
     ] as const) {
-      expect(resolve('prism', { ...flat, texts: { ...flat.texts, prismInclinationDeg: text } }).errors).toEqual({
-        prismInclinationDeg: error,
-      });
+      expect(typed(text).errors).toEqual({ prismInclinationDeg: error });
+      expect(typed(text).spec).toBeUndefined();
     }
-    const cone = resolve('cone', inAngles('cone', { coneHeightRatio: '1', coneInclinationDeg: '10' }));
-    expect(cone.errors).toEqual({ coneInclinationDeg: 'Допустимі значення за цієї висоти — від 14,04° до 90°.' });
+  });
+
+  it('rejects offsets leaning flatter than 15° in the offset mode, at every displacing field, with the values allowed', () => {
+    const offsets = (prismOffsetXRatio: string, prismOffsetYRatio: string) =>
+      resolveModelRequest('prism', texts({ prismHeightRatio: '0,25', prismOffsetXRatio, prismOffsetYRatio }), triangle);
+    // h/a = 0,25: D ≤ 0,25/tan 15° ≈ 0,933, the same in every direction.
+    const along = offsets('1', '0');
+    expect(along.spec).toBeUndefined();
+    expect(along.errors).toEqual({
+      prismOffsetXRatio: 'Кут нахилу має бути не менше 15°: за цієї висоти й другого зміщення допустимо від -0,933 до 0,933.',
+    });
+    expect(along.values.prismOffsetXRatio).toBeUndefined();
+    expect(along.values.prismOffsetYRatio).toBe(0);
+    // Each component within ±4 and below 0,933, but together D ≈ 0,85·√2 ≈ 1,2: both fields are at fault, each with
+    // |X| ≤ √(0,933² − 0,85²) ≈ 0,3847 given the other.
+    const diagonal = offsets('0,85', '-0,85');
+    expect(Object.keys(diagonal.errors).sort()).toEqual(['prismOffsetXRatio', 'prismOffsetYRatio']);
+    expect(diagonal.errors.prismOffsetYRatio).toBe(
+      'Кут нахилу має бути не менше 15°: за цієї висоти й другого зміщення допустимо від -0,384 до 0,384.',
+    );
+    expect(offsets('0,933', '0').errors).toEqual({});
+    expect(offsets('0,6', '-0,7').errors).toEqual({});
+    const cone = resolveModelRequest('cone', texts({ coneHeightRatio: '0,5', coneOffsetRatio: '2' }), triangle);
+    expect(cone.errors).toEqual({
+      coneOffsetRatio: 'Кут нахилу має бути не менше 15°: за цієї висоти допустимо від 0 до 1,866.',
+    });
+  });
+
+  it('checks the combination again when the height or the direction changes, in either mode', () => {
+    // Offsets keep their values, so a lower height can make them too flat.
+    const tall = texts({ prismHeightRatio: '1', prismOffsetXRatio: '3' });
+    expect(resolveModelRequest('prism', tall, triangle).errors).toEqual({});
+    const low = resolveModelRequest('prism', { ...tall, prismHeightRatio: '0,5' }, triangle);
+    expect(low.spec).toBeUndefined();
+    expect(Object.keys(low.errors)).toEqual(['prismOffsetXRatio']);
+    // Angles keep their values, so a greater height or another direction can push the offsets past ±4.
+    const angles = inAngles('prism', { prismHeightRatio: '2', prismInclinationDeg: '30', prismDirectionDeg: '0' });
+    expect(resolve('prism', angles).errors).toEqual({});
+    const taller = resolve('prism', { ...angles, texts: { ...angles.texts, prismHeightRatio: '4' } });
+    expect(taller.errors).toEqual({ prismInclinationDeg: 'Допустимі значення за цієї висоти й напряму — від 45° до 90°.' });
+    const diagonal = inAngles('prism', { prismHeightRatio: '4', prismInclinationDeg: '40', prismDirectionDeg: '45' });
+    expect(resolve('prism', diagonal).errors).toEqual({});
+    const turned = resolve('prism', { ...diagonal, texts: { ...diagonal.texts, prismDirectionDeg: '0' } });
+    expect(turned.errors).toEqual({ prismInclinationDeg: 'Допустимі значення за цієї висоти й напряму — від 45° до 90°.' });
+    expect(turned.spec).toBeUndefined();
+  });
+
+  it('switches modes at the limits without leaving the domain or changing the model', () => {
+    // Exactly 15° along +Y at h/a = 1, and the corner (−4, 4) at h/a = 4.
+    for (const offsets of [
+      { prismHeightRatio: '1', prismOffsetXRatio: '0', prismOffsetYRatio: String(1 / Math.tan(Math.PI / 12)) },
+      { prismHeightRatio: '4', prismOffsetXRatio: '-4', prismOffsetYRatio: '4' },
+    ]) {
+      const state: ParameterState = { texts: texts(offsets), choices: triangle, exact: {}, tiltModes: initialTiltModes() };
+      const before = resolve('prism', state);
+      expect(before.errors).toEqual({});
+      const angles = switchTiltMode('prism', state, before.values);
+      if (angles === undefined) throw new Error('A valid prism must switch modes.');
+      expect(resolve('prism', angles).errors).toEqual({});
+      expect(resolve('prism', angles).key).toBe(before.key);
+      const back = switchTiltMode('prism', angles, resolve('prism', angles).values);
+      expect(back && resolve('prism', back).key).toBe(before.key);
+    }
   });
 
   it('switches modes only from valid input', () => {
     const invalidHeight = inAngles('prism', { prismHeightRatio: '', prismInclinationDeg: '60' });
     expect(canSwitchTiltMode('prism', resolve('prism', invalidHeight).values)).toBe(false);
     expect(switchTiltMode('prism', invalidHeight, resolve('prism', invalidHeight).values)).toBeUndefined();
-    const invalidOffset = { ...invalidHeight, texts: texts({ prismOffsetXRatio: '5' }), tiltModes: initialTiltModes() };
+    const invalidOffset = { ...invalidHeight, texts: texts({ prismOffsetXRatio: 'abc' }), tiltModes: initialTiltModes() };
     expect(canSwitchTiltMode('prism', resolve('prism', invalidOffset).values)).toBe(false);
     // Without a displacement the height is not needed: β is 90° whatever it is.
     const right = { ...invalidOffset, texts: texts({ prismHeightRatio: '' }) };
@@ -1009,5 +1107,53 @@ describe('tilt entered as angles', () => {
     const offsets = switchTiltMode('prism', angles, resolve('prism', angles).values);
     expect(offsets?.exact?.prismOffsetXRatio).toBeCloseTo(0.866, 3);
     expect(offsets && resetShapeParameters('prism', offsets).exact).toEqual({});
+  });
+});
+
+describe('one range per control', () => {
+  const variants = [
+    ...(['cuboid', 'parallelepiped', 'cylinder', 'cone'] as const).map((kind) => ({ kind, choices: triangle })),
+    ...(['regular', 'triangle', 'trapezoid'] as const).map((prismBaseType) => ({
+      kind: 'prism' as const,
+      choices: { ...triangle, prismBaseType },
+    })),
+    ...(['regular', 'triangle', 'parallelogram', 'trapezoid'] as const).map((pyramidBaseType) => ({
+      kind: 'pyramid' as const,
+      choices: { ...triangle, pyramidBaseType },
+    })),
+  ];
+
+  it.each(
+    variants.flatMap((variant) => (['offset', 'angle'] as const).map((mode) => [variant.kind, variant.choices, mode] as const)),
+  )('makes the slider and buttons of every %s field span exactly the values it accepts (%j, %s mode)', (kind, choices, mode) => {
+    const tiltModes = kind === 'cuboid' ? initialTiltModes() : { ...initialTiltModes(), [kind as TiltSolid]: mode as TiltMode };
+    const options = { exact: {}, tiltModes };
+    const initial = resolveModelRequest(kind, initialParameterTexts(), choices, options);
+    // The defaults of every figure are valid in both modes.
+    expect(initial.errors).toEqual({});
+    const panel = shapePanel(kind, choices, { tiltModes, values: initial.values });
+    if (panel.type === 'fixed') throw new Error('A configurable figure has fields.');
+    for (const field of panel.sections.flatMap(sectionNumberFields)) {
+      const { min, max } = field.range;
+      const errorAt = (value: number) =>
+        resolveModelRequest(kind, texts({ [field.key]: formatSteppedDecimal(value) }), choices, options).errors[field.key];
+      expect(errorAt(min), `${field.key} at ${min}`).toBeUndefined();
+      expect(errorAt(max), `${field.key} at ${max}`).toBeUndefined();
+      // The direction wraps around; every other field rejects values beyond its ends.
+      if (field.key.endsWith('DirectionDeg')) continue;
+      expect(errorAt(min - 0.01), `${field.key} below ${min}`).toBeDefined();
+      expect(errorAt(max + 0.01), `${field.key} above ${max}`).toBeDefined();
+    }
+  });
+
+  it('never widens a range for a value outside it: the outer limits stay as they are', () => {
+    const tall = texts({ prismHeightRatio: '4,5', prismOffsetXRatio: '6' });
+    const request = resolveModelRequest('prism', tall, triangle);
+    expect(Object.keys(request.errors).sort()).toEqual(['prismHeightRatio', 'prismOffsetXRatio']);
+    const panel = shapePanel('prism', triangle, { values: request.values });
+    if (panel.type === 'fixed') throw new Error('A prism has fields.');
+    const ranges = Object.fromEntries(panel.sections.flatMap(sectionNumberFields).map((field) => [field.key, field.range]));
+    expect(ranges.prismHeightRatio).toMatchObject({ min: 0.25, max: 4 });
+    expect(ranges.prismOffsetXRatio).toMatchObject({ min: -4, max: 4 });
   });
 });

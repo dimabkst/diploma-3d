@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  APEX_LIMITS,
   BASE_ANGLE_LIMITS,
   BASE_SHIFT_LIMITS,
   DEFAULT_LONGEST_DIMENSION_MM,
@@ -9,17 +8,20 @@ import {
   DEFAULT_TRIANGLE_BASE,
   defaultModelSpecs,
   MAX_LONGEST_DIMENSION_MM,
+  MIN_INCLINATION_DEG,
   MIN_LONGEST_DIMENSION_MM,
+  maxTiltDisplacement,
   modelSpecSchema,
-  OFFSET_LIMITS,
   PRISM_BASE_SIDES,
   PRISM_BASE_TYPES,
   PYRAMID_BASE_SIDES,
   PYRAMID_BASE_TYPES,
   RATIO_LIMITS,
   REGULAR_POLYHEDRON_KINDS,
+  ROUND_HEIGHT_LIMITS,
   ROUND_OFFSET_LIMITS,
   TETRAHEDRON_HEIGHT_RATIO,
+  TILT_OFFSET_LIMITS,
 } from './index.ts';
 
 const scale = { longestDimensionMm: 80 };
@@ -94,8 +96,12 @@ describe('modelSpecSchema', () => {
 describe('cuboid proportions', () => {
   const { min, max } = RATIO_LIMITS;
 
-  it('limits both ratios to [0.25, 4]', () => {
+  it('limits both ratios to [0.25, 4], keeping values between the slider steps', () => {
     expect(RATIO_LIMITS).toEqual({ min: 0.25, max: 4 });
+    for (const ratio of [2.05, 0.26, 3.99]) {
+      expect(modelSpecSchema.parse(cuboid(ratio, ratio)).shape).toMatchObject({ widthRatio: ratio, heightRatio: ratio });
+    }
+    for (const ratio of [0.2, 4.8]) expect(modelSpecSchema.safeParse(cuboid(ratio, 1)).success).toBe(false);
   });
 
   it.each([
@@ -371,18 +377,17 @@ describe('prism over a configurable trapezoid', () => {
 });
 
 describe('prism and parallelepiped displacement of the upper base', () => {
-  const { min, max } = OFFSET_LIMITS;
   const withOffsets = (kind: 'prism' | 'parallelepiped', offsets: Record<string, unknown>) => ({
     shape:
       kind === 'prism'
-        ? { kind, baseSides: 4, heightRatio: 1, ...offsets }
-        : { kind, baseSideRatio: 1, heightRatio: 1, baseAngleDeg: 60, ...offsets },
+        ? { kind, baseSides: 4, heightRatio: 4, ...offsets }
+        : { kind, baseSideRatio: 1, heightRatio: 4, baseAngleDeg: 60, ...offsets },
     scale,
   });
   const kinds = ['prism', 'parallelepiped'] as const;
 
-  it('limits both offsets to [−2, 2]', () => {
-    expect(OFFSET_LIMITS).toEqual({ min: -2, max: 2 });
+  it('limits both offsets to [−4, 4]', () => {
+    expect(TILT_OFFSET_LIMITS).toEqual({ min: -4, max: 4 });
   });
 
   it.each(kinds)('defaults missing %s offsets to 0, so earlier specifications keep their right solid', (kind) => {
@@ -396,14 +401,14 @@ describe('prism and parallelepiped displacement of the upper base', () => {
   it.each(
     kinds.flatMap((kind) =>
       [
-        [min, max],
-        [max, min],
+        [-4, 4],
+        [4, -4],
         [-0.1, 0],
         [1.1, -0.75],
         [0, -2],
       ].map(([x, y]) => [kind, x, y] as const),
     ),
-  )('accepts a %s with offsets (%s, %s), including the limits and negative or off-step values', (kind, x, y) => {
+  )('accepts a %s at h/a = 4 with offsets (%s, %s), including the corners and negative or off-step values', (kind, x, y) => {
     expect(modelSpecSchema.parse(withOffsets(kind, { offsetXRatio: x, offsetYRatio: y })).shape).toMatchObject({
       offsetXRatio: x,
       offsetYRatio: y,
@@ -418,8 +423,8 @@ describe('prism and parallelepiped displacement of the upper base', () => {
         ['negative infinity', Number.NEGATIVE_INFINITY],
         ['a numeric string', '0.5'],
         ['null', null],
-        ['just below the minimum', min - 1e-9],
-        ['just above the maximum', max + 1e-9],
+        ['just below the minimum', -4 - 1e-9],
+        ['just above the maximum', 4 + 1e-9],
       ].map(([label, value]) => [kind, label, value] as const),
     ),
   )('rejects a %s offset that is %s, without clamping', (kind, _, value) => {
@@ -449,9 +454,8 @@ describe('pyramid bases and apex position', () => {
     trapezoid: { baseType: 'trapezoid', parallelSideRatio: 0.5, baseHeightRatio: 0.375, baseShiftRatio: -0.25 },
   } as const;
 
-  it('offers the regular polygon, triangle, parallelogram and trapezoid, with the apex limited to [−4, 4]', () => {
+  it('offers the regular polygon, triangle, parallelogram and trapezoid', () => {
     expect(PYRAMID_BASE_TYPES).toEqual(['regular', 'triangle', 'parallelogram', 'trapezoid']);
-    expect(APEX_LIMITS).toEqual({ min: -4, max: 4 });
     expect(DEFAULT_PARALLELOGRAM_BASE).toEqual({ baseSideRatio: 1, baseAngleDeg: 60 });
   });
 
@@ -466,13 +470,14 @@ describe('pyramid bases and apex position', () => {
   });
 
   it.each([
-    [APEX_LIMITS.min, APEX_LIMITS.max],
-    [APEX_LIMITS.max, APEX_LIMITS.min],
+    [-4, 4],
+    [4, -4],
     [-0.1, 0],
     [2.35, -3.05],
-  ])('accepts the apex at (%s, %s), including the limits, negative and off-step values', (x, y) => {
+  ])('accepts the apex at (%s, %s) at h/a = 4, including the limits, negative and off-step values', (x, y) => {
     for (const base of Object.values(bases)) {
-      expect(modelSpecSchema.parse(pyramidWith({ ...base, apexXRatio: x, apexYRatio: y })).shape).toMatchObject({
+      const shape = pyramidWith({ ...base, heightRatio: 4, apexXRatio: x, apexYRatio: y });
+      expect(modelSpecSchema.parse(shape).shape).toMatchObject({
         apexXRatio: x,
         apexYRatio: y,
       });
@@ -484,8 +489,8 @@ describe('pyramid bases and apex position', () => {
     ['infinite', Number.POSITIVE_INFINITY],
     ['a numeric string', '1'],
     ['null', null],
-    ['below the minimum', APEX_LIMITS.min - 1e-9],
-    ['above the maximum', APEX_LIMITS.max + 1e-9],
+    ['below the minimum', -4 - 1e-9],
+    ['above the maximum', 4 + 1e-9],
   ])('rejects an apex coordinate that is %s', (_, value) => {
     expect(modelSpecSchema.safeParse(pyramidWith({ ...bases.triangle, apexXRatio: value })).success).toBe(false);
     expect(modelSpecSchema.safeParse(pyramidWith({ ...bases.trapezoid, apexYRatio: value })).success).toBe(false);
@@ -592,14 +597,18 @@ describe('octahedron, icosahedron and dodecahedron', () => {
 });
 
 describe('circular cylinder and cone parameters', () => {
-  const { min, max } = RATIO_LIMITS;
+  const { min, max } = ROUND_HEIGHT_LIMITS;
   const round = (kind: string, heightRatio: unknown) => ({ shape: { kind, heightRatio }, scale });
+
+  it('limits h/r as the other ratios limit the diameter: h/(2r) in [0.25, 4]', () => {
+    expect(ROUND_HEIGHT_LIMITS).toEqual({ min: 0.5, max: 8 });
+  });
 
   it.each(['cylinder', 'cone'] as const)('defaults the %s to h/r = 2', (kind) => {
     expect(modelSpecSchema.parse(defaultModelSpecs[kind])).toEqual({ shape: { kind, heightRatio: 2, offsetRatio: 0 }, scale });
   });
 
-  it.each(['cylinder', 'cone'].flatMap((kind) => [min, 1.1, 2.05, max].map((heightRatio) => [kind, heightRatio] as const)))(
+  it.each(['cylinder', 'cone'].flatMap((kind) => [min, 1.1, 2.05, 4.8, max].map((heightRatio) => [kind, heightRatio] as const)))(
     'accepts a %s with h/r = %s, including the boundaries and values off the 0,25 grid',
     (kind, heightRatio) => {
       // Without a displacement the solid keeps its earlier meaning: a right cylinder or cone.
@@ -617,23 +626,22 @@ describe('circular cylinder and cone parameters', () => {
     expect(modelSpecSchema.safeParse(round(kind, ratio)).success).toBe(false);
   });
 
-  it.each(
-    ['cylinder', 'cone'].flatMap((kind) =>
-      [ROUND_OFFSET_LIMITS.min, 0.25, 1.1, ROUND_OFFSET_LIMITS.max].map((offsetRatio) => [kind, offsetRatio] as const),
-    ),
-  )('accepts a %s with d/r = %s, including the boundaries and off-step values', (kind, offsetRatio) => {
-    expect(modelSpecSchema.parse({ shape: { kind, heightRatio: 1, offsetRatio }, scale }).shape).toEqual({
-      kind,
-      heightRatio: 1,
-      offsetRatio,
-    });
-  });
+  it.each(['cylinder', 'cone'].flatMap((kind) => [0, 0.25, 1.1, 4].map((offsetRatio) => [kind, offsetRatio] as const)))(
+    'accepts a %s at h/r = 2 with d/r = %s, including the limits and off-step values',
+    (kind, offsetRatio) => {
+      expect(modelSpecSchema.parse({ shape: { kind, heightRatio: 2, offsetRatio }, scale }).shape).toEqual({
+        kind,
+        heightRatio: 2,
+        offsetRatio,
+      });
+    },
+  );
 
   it.each(
     ['cylinder', 'cone'].flatMap((kind) =>
       [
         ['negative', -0.25],
-        ['just above the maximum', ROUND_OFFSET_LIMITS.max + 1e-9],
+        ['just above the maximum', 4 + 1e-9],
         ['NaN', Number.NaN],
         ['infinite', Number.POSITIVE_INFINITY],
         ['a numeric string', '1'],
@@ -642,7 +650,7 @@ describe('circular cylinder and cone parameters', () => {
     ),
   )('rejects a %s whose displacement is %s', (kind, _, offsetRatio) => {
     expect(ROUND_OFFSET_LIMITS).toEqual({ min: 0, max: 4 });
-    expect(modelSpecSchema.safeParse({ shape: { kind, heightRatio: 1, offsetRatio }, scale }).success).toBe(false);
+    expect(modelSpecSchema.safeParse({ shape: { kind, heightRatio: 2, offsetRatio }, scale }).success).toBe(false);
   });
 
   it.each(['cylinder', 'cone'])('rejects a %s with a base, a top radius, a resolution or absolute dimensions', (kind) => {
@@ -666,4 +674,39 @@ describe('solid ball', () => {
       expect(modelSpecSchema.safeParse({ shape: { kind: 'ball' }, scale: { longestDimensionMm } }).success).toBe(false);
     },
   );
+});
+
+describe('minimum inclination of a tilted solid', () => {
+  const tan15 = Math.tan((MIN_INCLINATION_DEG * Math.PI) / 180);
+  const prism = (heightRatio: number, offsetXRatio: number, offsetYRatio: number) => ({
+    shape: { kind: 'prism', baseSides: 4, heightRatio, offsetXRatio, offsetYRatio },
+    scale,
+  });
+
+  it('allows a total displacement of h / tan 15°, the same in every direction', () => {
+    expect(MIN_INCLINATION_DEG).toBe(15);
+    expect(maxTiltDisplacement(1)).toBeCloseTo(1 / tan15, 12);
+    const limit = maxTiltDisplacement(0.5);
+    // ≈ 1,866 along X and along the diagonal alike: the total displacement counts, not each component.
+    expect(modelSpecSchema.safeParse(prism(0.5, limit, 0)).success).toBe(true);
+    expect(modelSpecSchema.safeParse(prism(0.5, limit * Math.SQRT1_2, -limit * Math.SQRT1_2)).success).toBe(true);
+    expect(modelSpecSchema.safeParse(prism(0.5, limit * 1.001, 0)).success).toBe(false);
+    expect(modelSpecSchema.safeParse(prism(0.5, 1.5, 1.5)).success).toBe(false);
+  });
+
+  it('applies to pyramids, parallelepipeds, cylinders and cones, with every offset within its own limits', () => {
+    const steep = 0.25 / tan15;
+    for (const shape of [
+      { kind: 'pyramid', baseSides: 4, heightRatio: 0.25, apexXRatio: 0, apexYRatio: steep * 1.01 },
+      { kind: 'parallelepiped', baseSideRatio: 1, heightRatio: 0.25, baseAngleDeg: 60, offsetXRatio: -steep * 1.01 },
+      { kind: 'cylinder', heightRatio: 0.5, offsetRatio: (0.5 / tan15) * 1.01 },
+      { kind: 'cone', heightRatio: 0.5, offsetRatio: (0.5 / tan15) * 1.01 },
+    ]) {
+      expect(modelSpecSchema.safeParse({ shape, scale }).success).toBe(false);
+    }
+    expect(
+      modelSpecSchema.safeParse({ shape: { kind: 'pyramid', baseSides: 4, heightRatio: 0.25, apexYRatio: steep }, scale })
+        .success,
+    ).toBe(true);
+  });
 });

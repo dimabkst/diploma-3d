@@ -148,7 +148,8 @@ test('pyramid: the apex moves within and beyond the square base, and returns abo
   await entry(page, 'Зміщення Y').fill('0');
   await expectPreviewOf(page, summary(geometry(bases.square(), 1, 1, 0)));
 
-  // Negative and typed values with the quarter steps; the limits are ±4.
+  // Negative and typed values with the quarter steps. The limits are ±4, but at h = a the lean reaches 15° at
+  // a / tan 15° ≈ 3,732a, where the slider ends.
   const x = entry(page, 'Зміщення X');
   await x.fill('-0,1');
   await stepButton(page, 'Зміщення X', 'зменшити').click();
@@ -156,14 +157,17 @@ test('pyramid: the apex moves within and beyond the square base, and returns abo
   await x.fill('-0,1');
   await stepButton(page, 'Зміщення X', 'збільшити').click();
   await expect(x).toHaveValue('0');
+  await expect(slider(page, 'Зміщення X')).toHaveAttribute('max', '3.732');
   await slider(page, 'Зміщення X').press('End');
-  await expect(x).toHaveValue('4');
+  await expect(x).toHaveValue('3,732');
   await expect(stepButton(page, 'Зміщення X', 'збільшити')).toBeDisabled();
+  // At h = 2a the apex may lie as far as (2,35a, −3,05a): about 3,85a from the centroid.
+  await entry(page, 'Висота піраміди h').fill('2');
   await x.fill('2.35');
   await x.blur();
   await expect(x).toHaveValue('2.35');
   await entry(page, 'Зміщення Y').fill('-3,05');
-  const far = geometry(bases.square(), 1, 2.35, -3.05);
+  const far = geometry(bases.square(), 2, 2.35, -3.05);
   await expectPreviewOf(page, summary(far));
   await expectDownloadedPyramid(page, 'pyramid-4-sided.3mf', far);
 
@@ -253,8 +257,8 @@ test('pyramid: switching bases keeps the height and apex and validates only the 
   expect((await downloadThreeMf(page)).fileName).toBe('pyramid-triangle.3mf');
 
   // An invalid apex blocks every base until it is reset.
-  await entry(page, 'Зміщення X').fill('4,5');
-  await expect(page.getByText('Допустимі значення — від -4 до 4.')).toBeVisible();
+  await entry(page, 'Зміщення X').fill('-');
+  await expect(page.getByText('Введіть число, наприклад -0,5.')).toBeVisible();
   await expect(downloadButton(page)).toBeDisabled();
   await expect(apexStatus(page)).toHaveText(/^Вершина\s*помилка\s*$/);
   await resetApex(page).click();
@@ -282,7 +286,8 @@ for (const [layout, width] of [
     for (const [x, y, h] of [
       ['0', '0', '1'],
       ['-0,5', '0', '1'],
-      ['4', '-4', '0,25'],
+      ['4', '-4', '4'],
+      ['0,5', '0,5', '0,25'],
       ['-2,35', '3,05', '4'],
       ['0,1', '-0,2', '2'],
     ] as const) {

@@ -84,10 +84,15 @@ test('oblique cylinder: the upper base moves along X, the dimensions and file fo
   await expect(stepButton(page, 'cylinder', 'зменшити')).toBeDisabled();
   await stepButton(page, 'cylinder', 'збільшити').click();
   await expect(field).toHaveValue('0,25');
+  // At h = r the slider ends where the lean reaches 15°: d = r / tan 15° ≈ 3,732r, short of the limit 4.
+  await expect(offsetSlider(page, 'cylinder')).toHaveAttribute('max', '3.732');
   await offsetSlider(page, 'cylinder').press('End');
-  await expect(field).toHaveValue('4');
+  await expect(field).toHaveValue('3,732');
   await expect(stepButton(page, 'cylinder', 'збільшити')).toBeDisabled();
-  await expectPreviewOf(page, summary('cylinder', geometry('cylinder', 1, 4)));
+  await expectPreviewOf(page, summary('cylinder', geometry('cylinder', 1, 3.732)));
+  await field.fill('3,8');
+  await expect(page.getByText('Кут нахилу має бути не менше 15°: за цієї висоти допустимо від 0 до 3,732.')).toBeVisible();
+  await expect(downloadButton(page)).toBeDisabled();
   await field.fill('1.35');
   await field.blur();
   await expect(field).toHaveValue('1.35');
@@ -122,18 +127,18 @@ test('oblique cone: the apex moves beyond the base and the tilt can be removed',
   await expectDownloaded(page, 'cone', outside);
 
   // A small height with the apex inside the base outline.
-  await heightRatio(page).fill('0,25');
+  await heightRatio(page).fill('0,5');
   await offset(page, 'cone').fill('0,75');
-  const flat = geometry('cone', 0.25, 0.75);
+  const flat = geometry('cone', 0.5, 0.75);
   await expectPreviewOf(page, summary('cone', flat));
   await expectDownloaded(page, 'cone', flat);
 
   await removeTilt(page).click();
   await expect(offset(page, 'cone')).toHaveValue('0');
-  await expect(heightRatio(page)).toHaveValue('0,25');
+  await expect(heightRatio(page)).toHaveValue('0,5');
   await expect(status(page)).toHaveText(tiltState('прямий'));
-  await expectPreviewOf(page, summary('cone', geometry('cone', 0.25, 0)));
-  await expectDownloaded(page, 'cone', geometry('cone', 0.25, 0));
+  await expectPreviewOf(page, summary('cone', geometry('cone', 0.5, 0)));
+  await expectDownloaded(page, 'cone', geometry('cone', 0.5, 0));
 
   expect(errors).toEqual([]);
 });
@@ -198,7 +203,8 @@ for (const [layout, width] of [
       for (const [h, d] of [
         ['2', '0'],
         ['1', '1'],
-        ['0,25', '4'],
+        ['0,5', '1,5'],
+        ['4', '4'],
         ['4', '0,5'],
         ['1', '0'],
       ] as const) {

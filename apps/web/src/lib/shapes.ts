@@ -1,19 +1,17 @@
 import { type TrapezoidKind, trapezoidKind } from '@diploma-3d/engine';
 import {
-  APEX_LIMITS,
   BASE_ANGLE_LIMITS,
   BASE_SHIFT_LIMITS,
   defaultModelSpecs,
   MAX_LONGEST_DIMENSION_MM,
   MIN_LONGEST_DIMENSION_MM,
-  OFFSET_LIMITS,
   PRISM_BASE_SIDES,
   PRISM_BASE_TYPES,
   type PrismBaseSides,
   PYRAMID_BASE_TYPES,
   type PyramidBaseType,
   RATIO_LIMITS,
-  ROUND_OFFSET_LIMITS,
+  ROUND_HEIGHT_LIMITS,
   type ShapeKind,
 } from '@diploma-3d/schema';
 import { formatDecimal, type StepRange } from './decimal.ts';
@@ -28,6 +26,7 @@ import {
   DIRECTION_LIMITS,
   inclinationRange,
   initialTiltModes,
+  offsetRange,
   RIGHT_INCLINATION_DEG,
   type TiltMode,
   type TiltModes,
@@ -48,7 +47,7 @@ export type Help = {
 
 /**
  * A numeric field: "label [value] suffix", e.g. "Ширина b [1,5] × a" for a multiplier or "Кут α [60] °" for an angle,
- * with a slider over `range`.
+ * with a slider over `range`, the values the field allows.
  */
 export type NumericField = {
   readonly type: 'number';
@@ -56,6 +55,7 @@ export type NumericField = {
   readonly label: string;
   /** The unit after the entry, such as "× a" or "°"; empty when the label names it. */
   readonly suffix: string;
+  /** The allowed values, shared by the entry, the slider and the buttons, and the increment of their steps. */
   readonly range: StepRange;
 };
 
@@ -258,16 +258,14 @@ const trapezoidKindNames: Readonly<Record<TrapezoidKind, string>> = {
 export const trapezoidKindName = (sideRatio: number | undefined, shiftRatio: number | undefined): string | undefined =>
   sideRatio === undefined || shiftRatio === undefined ? undefined : trapezoidKindNames[trapezoidKind(sideRatio, shiftRatio)];
 
-// Buttons, arrow keys and the slider move ratios to multiples of 0,25; typed values keep any precision.
-const ratioRange: StepRange = { ...RATIO_LIMITS, increment: 0.25 };
+// Buttons, arrow keys and the slider move ratios and offsets to multiples of 0,25; typed values keep any precision.
+const RATIO_INCREMENT = 0.25;
+const ratioRange: StepRange = { ...RATIO_LIMITS, increment: RATIO_INCREMENT };
+const roundHeightRange: StepRange = { ...ROUND_HEIGHT_LIMITS, increment: RATIO_INCREMENT };
 // The base angle moves in whole multiples of 5°.
 const angleRange: StepRange = { ...BASE_ANGLE_LIMITS, increment: 5 };
-const offsetRange: StepRange = { ...OFFSET_LIMITS, increment: 0.25 };
-const apexRange: StepRange = { ...APEX_LIMITS, increment: 0.25 };
 const shiftRange: StepRange = { ...BASE_SHIFT_LIMITS, increment: 0.25 };
-const roundOffsetRange: StepRange = { ...ROUND_OFFSET_LIMITS, increment: 0.25 };
-// The inclination moves in multiples of 5° above its lower limit, which depends on the height and direction; the
-// direction moves in multiples of 15°, through the axes and the diagonals.
+// The inclination moves in multiples of 5°, the direction in multiples of 15°, through the axes and the diagonals.
 const INCLINATION_INCREMENT = 5;
 const directionRange: StepRange = { ...DIRECTION_LIMITS, increment: 15 };
 
@@ -276,7 +274,8 @@ const ratioField = (key: ParameterKey, label: string, reference = 'a'): NumericF
   key,
   label,
   suffix: `× ${reference}`,
-  range: ratioRange,
+  // h/r spans the ratios' limits applied to the diameter.
+  range: reference === 'r' ? roundHeightRange : ratioRange,
 });
 
 const twoSidesAndAngle = ([side, angle]: readonly [ParameterKey, ParameterKey]): NumericField[] => [
@@ -307,8 +306,8 @@ type TiltConfig = {
 };
 
 /**
- * A displacement of an upper base or apex: optional, so its group starts collapsed. In the angle mode the inclination's
- * slider spans exactly the angles allowed at the current height and direction.
+ * A displacement of an upper base or apex: optional, so its group starts collapsed. The sliders of its fields span the
+ * values allowed at the current height and, for an offset, the other offset, or for the inclination, the direction.
  */
 function tiltSection(
   solid: TiltSolid,
@@ -318,18 +317,26 @@ function tiltSection(
 ): ParameterSection {
   const keys = tiltKeys[solid];
   const mode = tiltModes[solid];
+  const circular = keys.direction === undefined;
+  const height = values[keys.height];
   const direction = keys.direction === undefined ? DIRECTION_LIMITS.min : values[keys.direction];
   const inclination: NumericField = {
     type: 'number',
     key: keys.inclination,
     label: 'Кут до площини основи',
     suffix: '°',
-    range: { ...inclinationRange(keys.bounds, values[keys.height], direction), increment: INCLINATION_INCREMENT },
+    range: { ...inclinationRange(circular, height, direction), increment: INCLINATION_INCREMENT },
   };
   const angleFields: TiltGroup['fields'] =
     keys.direction === undefined
       ? [inclination]
       : [inclination, { type: 'number', key: keys.direction, label: 'Напрям зміщення', suffix: '°', range: directionRange }];
+  const [first, ...rest] = config.offsetFields.map((field, index) => {
+    const other = keys.offsets[1 - index];
+    const range = offsetRange(circular, height, other === undefined ? undefined : values[other]);
+    return { ...field, range: { ...range, increment: RATIO_INCREMENT } };
+  });
+  const offsetFields: TiltGroup['fields'] = [first as NumericField, ...rest];
   const group: TiltGroup = {
     type: 'tilt',
     key: `${key}-offset`,
@@ -337,7 +344,7 @@ function tiltSection(
     mode,
     modeLabels: { offset: 'Зміщення', angle: keys.direction === undefined ? 'Кут' : 'Кути' },
     canSwitch: canSwitchTiltMode(solid, values),
-    fields: mode === 'offset' ? config.offsetFields : angleFields,
+    fields: mode === 'offset' ? offsetFields : angleFields,
     offsetKeys: keys.offsets,
     centredTexts:
       mode === 'offset'
@@ -352,9 +359,10 @@ function tiltSection(
   });
 }
 
-const offsetFields = ([x, y]: readonly [ParameterKey, ParameterKey], range: StepRange): TiltGroup['fields'] => [
-  { type: 'number', key: x, label: 'Зміщення X', suffix: '× a', range },
-  { type: 'number', key: y, label: 'Зміщення Y', suffix: '× a', range },
+/** The offsets X and Y; their ranges follow from the current values, see `tiltSection`. */
+const offsetFields = ([x, y]: readonly [ParameterKey, ParameterKey]): TiltGroup['fields'] => [
+  { type: 'number', key: x, label: 'Зміщення X', suffix: '× a', range: ratioRange },
+  { type: 'number', key: y, label: 'Зміщення Y', suffix: '× a', range: ratioRange },
 ];
 
 const baseTypeNames: Readonly<Record<PyramidBaseType, string>> = {
@@ -488,7 +496,7 @@ export function shapePanel(kind: ShapeKind, choices: ParameterChoices, context: 
             'parallelepiped-tilt',
             {
               title: 'Нахил',
-              offsetFields: offsetFields(['parallelepipedOffsetXRatio', 'parallelepipedOffsetYRatio'], offsetRange),
+              offsetFields: offsetFields(['parallelepipedOffsetXRatio', 'parallelepipedOffsetYRatio']),
               offsetHelp: shiftHelp,
               angleHelp: edgeAngleHelp,
               resetLabel: 'Прибрати нахил',
@@ -513,7 +521,7 @@ export function shapePanel(kind: ShapeKind, choices: ParameterChoices, context: 
             'prism-tilt',
             {
               title: 'Нахил',
-              offsetFields: offsetFields(['prismOffsetXRatio', 'prismOffsetYRatio'], offsetRange),
+              offsetFields: offsetFields(['prismOffsetXRatio', 'prismOffsetYRatio']),
               offsetHelp: shiftHelp,
               angleHelp: edgeAngleHelp,
               resetLabel: 'Прибрати нахил',
@@ -535,7 +543,7 @@ export function shapePanel(kind: ShapeKind, choices: ParameterChoices, context: 
             'pyramid-apex',
             {
               title: 'Вершина',
-              offsetFields: offsetFields(['pyramidApexXRatio', 'pyramidApexYRatio'], apexRange),
+              offsetFields: offsetFields(['pyramidApexXRatio', 'pyramidApexYRatio']),
               offsetHelp: apexHelp,
               angleHelp: apexAngleHelp,
               resetLabel: 'Над центром основи',
@@ -562,7 +570,7 @@ export function shapePanel(kind: ShapeKind, choices: ParameterChoices, context: 
             `${kind}-tilt`,
             {
               title: 'Нахил',
-              offsetFields: [{ type: 'number', key: offsetKey, label: offsetLabel, suffix: '× r', range: roundOffsetRange }],
+              offsetFields: [{ type: 'number', key: offsetKey, label: offsetLabel, suffix: '× r', range: ratioRange }],
               offsetHelp: roundShiftHelp(kind === 'cylinder' ? 'Центр верхньої основи' : 'Вершина'),
               angleHelp: roundAngleHelps[kind],
               resetLabel: 'Прибрати нахил',

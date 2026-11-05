@@ -1,8 +1,8 @@
 import { z } from 'zod';
-import { ratioSchema } from './ratio.ts';
+import { roundHeightRatioSchema } from './ratio.ts';
 
 // Practical application limits for d/r. The displacement runs along +X only: any other horizontal direction gives the
-// same ideal solid rotated about the vertical axis.
+// same ideal solid rotated about the vertical axis. The lean is further limited by MIN_INCLINATION_DEG.
 export const ROUND_OFFSET_LIMITS = { min: 0, max: 4 } as const;
 
 /** d/r, where d is the displacement of the cylinder's upper base or the cone's apex; missing means 0, a right solid. */
@@ -14,7 +14,7 @@ export const roundOffsetSchema = z.number().min(ROUND_OFFSET_LIMITS.min).max(ROU
  */
 export const cylinderShapeSchema = z.strictObject({
   kind: z.literal('cylinder'),
-  heightRatio: ratioSchema,
+  heightRatio: roundHeightRatioSchema,
   offsetRatio: roundOffsetSchema,
 });
 
@@ -26,7 +26,7 @@ export type CylinderShape = z.infer<typeof cylinderShapeSchema>;
  */
 export const coneShapeSchema = z.strictObject({
   kind: z.literal('cone'),
-  heightRatio: ratioSchema,
+  heightRatio: roundHeightRatioSchema,
   offsetRatio: roundOffsetSchema,
 });
 

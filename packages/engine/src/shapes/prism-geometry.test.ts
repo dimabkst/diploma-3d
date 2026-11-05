@@ -6,6 +6,7 @@ import type {
   TrapezoidPrismShape,
   TrianglePrismShape,
 } from '@diploma-3d/schema';
+import { isWithinMinimumInclination } from '@diploma-3d/schema';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { type GeometryKernel, loadGeometryKernel } from '../kernel.ts';
 import {
@@ -289,6 +290,9 @@ function expectPrismGeometry(spec: ModelSpecInput, proportions: PrismProportions
   if (!isOblique(proportions)) expectRelativelyClose(dimensions.lateralArea, dimensions.basePerimeter * h);
 }
 
+/** Offsets that keep the lean at or above the minimum inclination at h0; flatter combinations are outside the domain. */
+const leansSteeply = (h0: number, [dx0, dy0]: readonly [number, number]) => isWithinMinimumInclination(h0, Math.hypot(dx0, dy0));
+
 const OFFSETS: readonly Vec2[] = [
   [0, 0],
   [1, 0],
@@ -305,7 +309,9 @@ const OFFSETS: readonly Vec2[] = [
 
 describe('generateModel for a prism over a regular polygon with a displaced upper base', () => {
   const cases = ([3, 4, 5, 6, 8] as const).flatMap((sides) =>
-    [0.25, 1, 4].flatMap((h0) => OFFSETS.map((offset) => [sides, h0, offset] as const)),
+    [0.25, 1, 4].flatMap((h0) =>
+      OFFSETS.filter((offset) => leansSteeply(h0, offset)).map((offset) => [sides, h0, offset] as const),
+    ),
   );
 
   it.each(cases)('with %s sides, h/a = %s and the offset %j matches its definition', (sides, h0, [dx0, dy0]) => {
@@ -335,7 +341,11 @@ describe('generateModel for a parallelepiped with a displaced upper base', () =>
       [0.25, 165],
       [1.5, 90],
     ] as const
-  ).flatMap(([b0, angle]) => [0.25, 1.1, 4].flatMap((h0) => OFFSETS.map((offset) => [b0, angle, h0, offset] as const)));
+  ).flatMap(([b0, angle]) =>
+    [0.25, 1.1, 4].flatMap((h0) =>
+      OFFSETS.filter((offset) => leansSteeply(h0, offset)).map((offset) => [b0, angle, h0, offset] as const),
+    ),
+  );
 
   it.each(cases)('with b/a = %s, α = %s°, h/a = %s and the offset %j matches its definition', (b0, angle, h0, [dx0, dy0]) => {
     const shape = parallelepipedShape(b0, angle, h0, dx0, dy0);
@@ -398,7 +408,9 @@ describe('generateModel for a prism over a configurable triangle', () => {
           [-0.75, 1.25],
           [2, -2],
         ] as const
-      ).map((offset) => [b0, angle, h0, offset] as const),
+      )
+        .filter((offset) => leansSteeply(h0, offset))
+        .map((offset) => [b0, angle, h0, offset] as const),
     ),
   );
 
@@ -519,7 +531,9 @@ describe('generateModel for a prism over a configurable trapezoid', () => {
           [-0.75, 1.25],
           [2, -2],
         ] as const
-      ).map((offset) => [b0, t0, delta0, h0, offset] as const),
+      )
+        .filter((offset) => leansSteeply(h0, offset))
+        .map((offset) => [b0, t0, delta0, h0, offset] as const),
     ),
   );
 

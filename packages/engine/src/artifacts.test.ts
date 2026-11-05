@@ -674,7 +674,7 @@ describe('buildModelArtifacts', () => {
 
   it.each([
     ['cube', { shape: { kind: 'cube' }, scale: { longestDimensionMm: -1 } }],
-    ['cuboid', { shape: { kind: 'cuboid', widthRatio: 5, heightRatio: 2 }, scale: { longestDimensionMm: 80 } }],
+    ['cuboid', { shape: { kind: 'cuboid', widthRatio: 9, heightRatio: 2 }, scale: { longestDimensionMm: 80 } }],
     [
       'parallelepiped',
       {
@@ -684,8 +684,11 @@ describe('buildModelArtifacts', () => {
     ],
     ['prism', { shape: { kind: 'prism', baseSides: 9, heightRatio: 2 }, scale: { longestDimensionMm: 80 } }],
     [
-      'pyramid with the apex too far out',
-      { shape: { kind: 'pyramid', baseSides: 4, heightRatio: 1, apexXRatio: 4.5 }, scale: { longestDimensionMm: 80 } },
+      'pyramid with an infinite apex coordinate',
+      {
+        shape: { kind: 'pyramid', baseSides: 4, heightRatio: 1, apexXRatio: Number.POSITIVE_INFINITY },
+        scale: { longestDimensionMm: 80 },
+      },
     ],
     [
       'trapezoid prism',
@@ -709,16 +712,19 @@ describe('buildModelArtifacts', () => {
       },
     ],
     [
-      'oblique prism',
-      { shape: { kind: 'prism', baseSides: 4, heightRatio: 1, offsetXRatio: 2.5 }, scale: { longestDimensionMm: 80 } },
+      'oblique prism with a NaN offset',
+      { shape: { kind: 'prism', baseSides: 4, heightRatio: 1, offsetXRatio: Number.NaN }, scale: { longestDimensionMm: 80 } },
     ],
     ['pyramid', { shape: { kind: 'pyramid', baseSides: 9, heightRatio: 1 }, scale: { longestDimensionMm: 80 } }],
     ['tetrahedron', { shape: { kind: 'tetrahedron', heightRatio: 1 }, scale: { longestDimensionMm: 80 } }],
     ['cylinder', { shape: { kind: 'cylinder', heightRatio: 0 }, scale: { longestDimensionMm: 80 } }],
     ['cone', { shape: { kind: 'cone', heightRatio: Number.NaN }, scale: { longestDimensionMm: 80 } }],
     [
-      'cylinder displaced too far',
-      { shape: { kind: 'cylinder', heightRatio: 1, offsetRatio: 4.5 }, scale: { longestDimensionMm: 80 } },
+      'cylinder displaced infinitely',
+      {
+        shape: { kind: 'cylinder', heightRatio: 1, offsetRatio: Number.POSITIVE_INFINITY },
+        scale: { longestDimensionMm: 80 },
+      },
     ],
     ['cone displaced backwards', { shape: { kind: 'cone', heightRatio: 1, offsetRatio: -1 }, scale: { longestDimensionMm: 80 } }],
     ['ball', { shape: { kind: 'ball', radius: 40 }, scale: { longestDimensionMm: 80 } }],

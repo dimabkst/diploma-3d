@@ -121,38 +121,71 @@ test('pyramid and cone: angles give the same solid as the offsets they describe'
   expectSameModel(await exported(page), coneAngle);
 });
 
-test('prism: an inclination outside the allowed range is reported with the range and blocks the download', async ({ page }) => {
+const slider = (page: Page, label: string) => page.getByRole('slider', { name: `${label}: повзунок`, exact: true });
+
+test('prism: β ≥ 15° in both modes, angles within the offset limits, and both checked after every change', async ({ page }) => {
   await page.goto('/');
+  await printSize(page).fill('120');
   await shapeSelect(page).selectOption({ label: 'Призма' });
   await openSection(page, 'Нахил');
   await entry(page, 'Висота h').fill('1');
-  await mode(page, 'Кути').check();
-  await direction(page).fill('90');
-  await inclination(page).fill('20');
 
-  // Along +Y, |Y| ≤ 2 at H = 1 needs β ≥ atan(1/2) ≈ 26,57°.
-  await expect(page.getByText('Допустимі значення за цієї висоти й напряму — від 26,57° до 90°.')).toBeVisible();
-  await expect(inclination(page)).toHaveAttribute('aria-invalid', 'true');
+  // Offsets: at h = a the lean reaches 15° at a / tan 15° ≈ 3,732a, so the sliders end there, not at ±4.
+  await expect(slider(page, 'Зміщення X')).toHaveAttribute('min', '-3.732');
+  await expect(slider(page, 'Зміщення X')).toHaveAttribute('max', '3.732');
+  await entry(page, 'Зміщення X').fill('3,8');
+  const flatOffset = 'Кут нахилу має бути не менше 15°: за цієї висоти й другого зміщення допустимо від -3,732 до 3,732.';
+  await expect(page.getByText(flatOffset)).toBeVisible();
   await expect(previewViewport(page)).toHaveAttribute('data-preview-status', 'invalid');
   await expect(downloadButton(page)).toBeDisabled();
-  // The values cannot be shown as offsets until they are valid.
-  await expect(mode(page, 'Зміщення')).toBeDisabled();
-  await expect(page.getByText('Перемкнути спосіб можна, коли висоту й поля нижче задано правильно.')).toBeVisible();
+  await expect(mode(page, 'Кути')).toBeDisabled();
 
-  // The diagonal allows the corner of the X/Y range, so the same 20° is valid there.
-  await direction(page).fill('45');
-  await expect(inclination(page)).not.toHaveAttribute('aria-invalid', 'true');
+  // (2, 3)·a leans at atan(1/√13) ≈ 15,5°; the Y slider ends at √(3,732² − 2²) ≈ 3,15.
+  await entry(page, 'Зміщення X').fill('2');
+  await entry(page, 'Зміщення Y').fill('3');
   await expect(downloadButton(page)).toBeEnabled({ timeout: 30_000 });
-  // A direction change can make it invalid again; the slider shows the range for the current direction.
-  await direction(page).fill('0');
+  await expect(slider(page, 'Зміщення Y')).toHaveAttribute('max', '3.15');
+  // A lower height keeps the offsets, which now lean too flat: both are at fault, the last model stays.
+  await entry(page, 'Висота h').fill('0,5');
+  await expect(entry(page, 'Зміщення X')).toHaveAttribute('aria-invalid', 'true');
+  await expect(entry(page, 'Зміщення Y')).toHaveAttribute('aria-invalid', 'true');
   await expect(downloadButton(page)).toBeDisabled();
-  await expect(parameterSection(page, 'Нахил').getByText('26,57', { exact: true })).toBeVisible();
-  await inclination(page).fill('26,57');
+  await entry(page, 'Висота h').fill('1');
+  await expect(downloadButton(page)).toBeEnabled({ timeout: 30_000 });
+
+  // Angles: the same 15° floor.
+  await mode(page, 'Кути').check();
+  await expect(slider(page, 'Кут до площини основи')).toHaveAttribute('min', '15');
+  await inclination(page).fill('14');
+  await expect(page.getByText('Допустимі значення — від 15° до 90°.')).toBeVisible();
+  await expect(downloadButton(page)).toBeDisabled();
+
+  // h/a = 4 at 30° along +X would need X/a = 4√3 ≈ 6,93: the offset limit 4 requires β ≥ 45° there.
+  await entry(page, 'Висота h').fill('4');
+  await direction(page).fill('0');
+  await inclination(page).fill('30');
+  await expect(page.getByText('Допустимі значення за цієї висоти й напряму — від 45° до 90°.')).toBeVisible();
+  await expect(slider(page, 'Кут до площини основи')).toHaveAttribute('min', '45');
+  await expect(downloadButton(page)).toBeDisabled();
+  // Along the diagonal the corner (4, 4) is reachable from atan2(4, 4√2) ≈ 35,26°.
+  await direction(page).fill('45');
+  await expect(page.getByText('Допустимі значення за цієї висоти й напряму — від 35,27° до 90°.')).toBeVisible();
+  await inclination(page).fill('36');
   await expect(downloadButton(page)).toBeEnabled({ timeout: 30_000 });
   await mode(page, 'Зміщення').check();
-  // D = 1/tan 26,57° ≈ 1,9996 along +X: not clamped, and the direction kept.
-  await expect(entry(page, 'Зміщення X')).toHaveValue('1,9996');
-  await expect(entry(page, 'Зміщення Y')).toHaveValue('0');
+  const [x, y] = await Promise.all(
+    ['Зміщення X', 'Зміщення Y'].map(async (label) => Number((await entry(page, label).inputValue()).replace(',', '.'))),
+  );
+  expect(x).toBe(y);
+  expect(x).toBeGreaterThan(3.8);
+  expect(x).toBeLessThanOrEqual(4);
+  await expect(downloadButton(page)).toBeEnabled();
+
+  // The reset returns the right prism with its default ranges; the print size stays.
+  await resetShape(page).click();
+  await expect(entry(page, 'Зміщення X')).toHaveValue('0');
+  await expect(slider(page, 'Зміщення X')).toHaveAttribute('max', '4');
+  await expect(printSize(page)).toHaveValue('120');
 });
 
 test('switching modes never changes the model, does not drift, and the reset keeps the mode', async ({ page }) => {

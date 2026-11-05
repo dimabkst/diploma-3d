@@ -9,21 +9,33 @@ import { dodecahedronShapeSchema, icosahedronShapeSchema, octahedronShapeSchema 
 import { coneShapeSchema, cylinderShapeSchema } from './round.ts';
 import { DEFAULT_LONGEST_DIMENSION_MM, physicalScaleSchema } from './scale.ts';
 import { tetrahedronShapeSchema } from './tetrahedron.ts';
+import { isWithinMinimumInclination, MIN_INCLINATION_DEG, tiltOf } from './tilt.ts';
 
-export const shapeSchema = z.discriminatedUnion('kind', [
-  cubeShapeSchema,
-  cuboidShapeSchema,
-  parallelepipedShapeSchema,
-  prismShapeSchema,
-  pyramidShapeSchema,
-  tetrahedronShapeSchema,
-  octahedronShapeSchema,
-  icosahedronShapeSchema,
-  dodecahedronShapeSchema,
-  cylinderShapeSchema,
-  coneShapeSchema,
-  ballShapeSchema,
-]);
+export const shapeSchema = z
+  .discriminatedUnion('kind', [
+    cubeShapeSchema,
+    cuboidShapeSchema,
+    parallelepipedShapeSchema,
+    prismShapeSchema,
+    pyramidShapeSchema,
+    tetrahedronShapeSchema,
+    octahedronShapeSchema,
+    icosahedronShapeSchema,
+    dodecahedronShapeSchema,
+    cylinderShapeSchema,
+    coneShapeSchema,
+    ballShapeSchema,
+  ])
+  .superRefine((shape, context) => {
+    // Each offset is within its own limits; together they must not lean the solid flatter than the minimum inclination.
+    const tilt = tiltOf(shape);
+    if (tilt !== undefined && !isWithinMinimumInclination(tilt.height, tilt.displacement)) {
+      context.addIssue({
+        code: 'custom',
+        message: `The solid leans flatter than ${MIN_INCLINATION_DEG}° to its base plane.`,
+      });
+    }
+  });
 
 export type Shape = z.infer<typeof shapeSchema>;
 export type ShapeKind = Shape['kind'];

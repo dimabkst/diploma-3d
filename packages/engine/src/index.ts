@@ -1,5 +1,5 @@
 export { buildModelArtifacts, type ModelArtifacts } from './artifacts.ts';
-export { GeometryError, InvalidModelSpecError, KernelInitializationError } from './errors.ts';
+export { GeometryError, InfeasibleGeometryError, InvalidModelSpecError, KernelInitializationError } from './errors.ts';
 export { createPreviewGlb, GLB_MEDIA_TYPE, type PreviewObject, toGltfPosition } from './export/glb.ts';
 export { createThreeMf, THREE_MF_MEDIA_TYPE, type ThreeMfObject, type ThreeMfOptions } from './export/three-mf.ts';
 export { type GeometryKernel, type KernelOptions, loadGeometryKernel } from './kernel.ts';
@@ -23,6 +23,11 @@ export {
 } from './shapes/ball.ts';
 export { type BaseShape, type BaseSides, baseSidesMm, baseVertices } from './shapes/base.ts';
 export { type BoxShape, boxEdgeLengthsMm, boxProportions } from './shapes/box.ts';
+export {
+  checkNumericalFeasibility,
+  MAX_RELATIVE_ROUNDING,
+  type NumericalFeasibility,
+} from './shapes/feasibility.ts';
 export {
   type ParallelepipedDimensions,
   parallelepipedDimensionsMm,

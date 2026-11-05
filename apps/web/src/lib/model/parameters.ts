@@ -1,5 +1,4 @@
 import {
-  APEX_LIMITS,
   apexRatioSchema,
   BASE_ANGLE_LIMITS,
   BASE_SHIFT_LIMITS,
@@ -10,23 +9,27 @@ import {
   DEFAULT_TRAPEZOID_BASE,
   DEFAULT_TRIANGLE_BASE,
   defaultModelSpecs,
+  isWithinMinimumInclination,
   longestDimensionSchema,
   MAX_LONGEST_DIMENSION_MM,
+  MIN_INCLINATION_DEG,
   MIN_LONGEST_DIMENSION_MM,
   type ModelSpec,
   type ModelSpecInput,
   modelSpecSchema,
-  OFFSET_LIMITS,
   offsetRatioSchema,
   type PrismBaseSides,
   type PrismBaseType,
   type PyramidBaseSides,
   type PyramidBaseType,
   RATIO_LIMITS,
+  ROUND_HEIGHT_LIMITS,
   ROUND_OFFSET_LIMITS,
   ratioSchema,
+  roundHeightRatioSchema,
   roundOffsetSchema,
   type ShapeKind,
+  TILT_OFFSET_LIMITS,
 } from '@diploma-3d/schema';
 import { formatDecimal, halfSumDecimal, parseDecimal } from '../decimal.ts';
 import {
@@ -35,6 +38,8 @@ import {
   type InclinationKey,
   inclinationRange,
   initialTiltModes,
+  isInclination,
+  offsetRange,
   offsetsFromAngles,
   RIGHT_INCLINATION_DEG,
   type TiltModes,
@@ -191,18 +196,20 @@ function validateNumber(
 ): Validation {
   const read = readNumber(text, example, exact);
   if ('error' in read) return read;
-  if (!schema.safeParse(read.value).success) {
-    return { error: `Допустимі значення — від ${formatDecimal(limits.min)}${unit} до ${formatDecimal(limits.max)}${unit}.` };
-  }
-  return read;
+  return schema.safeParse(read.value).success ? read : { error: rangeMessage(limits, unit) };
 }
 
-/** The number in the text, or the exact value behind it, without any range check. */
+const rangeMessage = ({ min, max }: { readonly min: number; readonly max: number }, unit = ''): string =>
+  `Допустимі значення — від ${formatDecimal(min)}${unit} до ${formatDecimal(max)}${unit}.`;
+
+/** The finite number in the text, or the exact value behind it, without any range check. */
 function readNumber(text: string, example: string, exact?: number): Validation {
   if (exact !== undefined) return { value: exact };
   if (text.trim() === '') return { error: 'Введіть значення.' };
   const value = parseDecimal(text);
-  return value === undefined ? { error: `Введіть число, наприклад ${example}.` } : { value };
+  if (value === undefined) return { error: `Введіть число, наприклад ${example}.` };
+  // A plain decimal with hundreds of digits parses to Infinity.
+  return Number.isFinite(value) ? { value } : { error: 'Число надто велике.' };
 }
 
 /** An inclusive range in the shape of a schema, for limits that have no schema of their own. */
@@ -213,17 +220,22 @@ const inclusiveRange = (limits: { readonly min: number; readonly max: number }) 
 export const validateRatio = (text: string, exact?: number): Validation =>
   validateNumber(text, ratioSchema, RATIO_LIMITS, '1,5', '', exact);
 
+/** h/r of a cylinder or cone. */
+export const validateRoundHeight = (text: string, exact?: number): Validation =>
+  validateNumber(text, roundHeightRatioSchema, ROUND_HEIGHT_LIMITS, '2', '', exact);
+
 export const validateAngle = (text: string, exact?: number): Validation =>
   validateNumber(text, baseAngleSchema, BASE_ANGLE_LIMITS, '60', '°', exact);
 
+/** An offset of an upper base or apex on its own; together with the other offset and the height it must also keep β ≥ 15°. */
 export const validateOffset = (text: string, exact?: number): Validation =>
-  validateNumber(text, offsetRatioSchema, OFFSET_LIMITS, '-0,5', '', exact);
+  validateNumber(text, offsetRatioSchema, TILT_OFFSET_LIMITS, '-0,5', '', exact);
 
 export const validateShift = (text: string, exact?: number): Validation =>
   validateNumber(text, baseShiftSchema, BASE_SHIFT_LIMITS, '-0,5', '', exact);
 
 export const validateApex = (text: string, exact?: number): Validation =>
-  validateNumber(text, apexRatioSchema, APEX_LIMITS, '-0,5', '', exact);
+  validateNumber(text, apexRatioSchema, TILT_OFFSET_LIMITS, '-0,5', '', exact);
 
 export const validateRoundOffset = (text: string, exact?: number): Validation =>
   validateNumber(text, roundOffsetSchema, ROUND_OFFSET_LIMITS, '0,5', '', exact);
@@ -274,9 +286,9 @@ const validators: Readonly<Record<IndependentKey, (text: string, exact?: number)
   pyramidTrapezoidSideRatio: validateRatio,
   pyramidTrapezoidHeightRatio: validateRatio,
   pyramidTrapezoidShiftRatio: validateShift,
-  cylinderHeightRatio: validateRatio,
+  cylinderHeightRatio: validateRoundHeight,
   cylinderOffsetRatio: validateRoundOffset,
-  coneHeightRatio: validateRatio,
+  coneHeightRatio: validateRoundHeight,
   coneOffsetRatio: validateRoundOffset,
 };
 
@@ -308,11 +320,24 @@ type TiltResolution = {
   readonly offsets: readonly number[] | undefined;
 };
 
+// Relative difference below which an offset computed from angles is the same offset, differing only by roundoff.
+const ROUNDOFF = 1e-9;
+
+/** The inclination's error, naming the range allowed at the current height and direction. */
+function inclinationMessage(circular: boolean, range: { readonly min: number; readonly max: number }): string {
+  if (range.min <= MIN_INCLINATION_DEG) return rangeMessage(range, '°');
+  const context = circular ? 'цієї висоти' : 'цієї висоти й напряму';
+  return `Допустимі значення за ${context} — від ${formatDecimal(range.min)}° до ${formatDecimal(range.max)}°.`;
+}
+
 /**
- * The offsets of a solid in its tilt input mode. In the offset mode they are the fields themselves. In the angle mode
- * they follow from the height, the inclination and the direction, so a new height keeps the angles; the computed
- * offsets are also reported among the values, where the group status and a switch back to offsets read them. An
- * inclination whose offsets would leave their limits is reported with the range allowed at this height and direction.
+ * The offsets of a solid in its tilt input mode, within the same domain in both modes: every offset within its own
+ * limits and the inclination β = atan2(h, hypot(X, Y)) at least 15°. In the offset mode the offsets are the fields
+ * themselves, and a combination that leans flatter is reported at every offset that displaces it, with the values that
+ * the other offset and the height still allow. In the angle mode the offsets follow from the height, the inclination
+ * and the direction, so a new height keeps the angles; an inclination whose offsets would leave their limits is
+ * reported with the range allowed at this height and direction. The computed offsets are also reported among the
+ * values, where the group status and a switch back to offsets read them. Nothing is clamped.
  */
 function resolveTilt(
   solid: TiltSolid,
@@ -321,38 +346,58 @@ function resolveTilt(
   height: number | undefined,
 ): TiltResolution {
   const keys = tiltKeys[solid];
+  const circular = keys.direction === undefined;
   if (tiltModes[solid] === 'offset') {
     const { values, errors } = validateFields(keys.offsets, texts, exact);
     const offsets = keys.offsets.map((key) => values[key]);
-    return { values, errors, offsets: offsets.every((offset) => offset !== undefined) ? offsets : undefined };
+    if (!offsets.every((offset) => offset !== undefined)) return { values, errors, offsets: undefined };
+    if (height === undefined || isWithinMinimumInclination(height, Math.hypot(...offsets))) {
+      return { values, errors, offsets };
+    }
+    const context = circular ? 'цієї висоти' : 'цієї висоти й другого зміщення';
+    keys.offsets.forEach((key, index) => {
+      if (offsets[index] === 0) return;
+      const range = offsetRange(circular, height, offsets[1 - index]);
+      errors[key] =
+        `Кут нахилу має бути не менше ${MIN_INCLINATION_DEG}°: за ${context} допустимо ` +
+        `від ${formatDecimal(range.min)} до ${formatDecimal(range.max)}.`;
+      delete values[key];
+    });
+    return { values, errors, offsets: undefined };
   }
-  const { values, errors } = validateFields(keys.direction === undefined ? [] : [keys.direction], texts, exact);
+  const { values, errors } = validateFields(circular ? [] : [keys.direction], texts, exact);
   // Circular bases keep their displacement along +X.
   const direction = keys.direction === undefined ? DIRECTION_LIMITS.min : values[keys.direction];
   const inclination = readNumber(texts[keys.inclination], '45', exactValueOf(keys.inclination, texts, exact));
-  if ('error' in inclination) return { values, errors: { ...errors, [keys.inclination]: inclination.error }, offsets: undefined };
-  const range = inclinationRange(keys.bounds, height, direction);
-  const outOfRange: TiltResolution = {
+  const invalid = (message: string): TiltResolution => ({
     values,
-    errors: {
-      ...errors,
-      [keys.inclination]:
-        `Допустимі значення за цієї висоти${keys.direction === undefined ? '' : ' й напряму'} — ` +
-        `від ${formatDecimal(range.min)}° до ${formatDecimal(range.max)}°.`,
-    },
+    errors: { ...errors, [keys.inclination]: message },
     offsets: undefined,
-  };
-  if (!(inclination.value > 0 && inclination.value <= RIGHT_INCLINATION_DEG)) return outOfRange;
+  });
+  if ('error' in inclination) return invalid(inclination.error);
+  const range = inclinationRange(circular, height, direction);
+  if (!isInclination(inclination.value)) return invalid(inclinationMessage(circular, range));
   // 90° needs no height: the displacement is zero whatever it is.
   const known = direction !== undefined && (height !== undefined || inclination.value === RIGHT_INCLINATION_DEG);
   if (!known) return { values: { ...values, [keys.inclination]: inclination.value }, errors, offsets: undefined };
-  const offsets = offsetsFromAngles(keys.bounds, height ?? RATIO_LIMITS.min, inclination.value, direction);
-  if (offsets === undefined) return outOfRange;
-  const computed: ParameterValues = { [keys.inclination]: inclination.value };
-  keys.offsets.forEach((key, index) => {
-    computed[key] = offsets[index] ?? 0;
+  const computed = offsetsFromAngles(circular, height ?? 1, inclination.value, direction);
+  // Angles shown for offsets that were typed with more digits than the conversion keeps give them back only to within
+  // roundoff; the typed offsets, still behind the hidden fields, are used then, so switching modes changes nothing.
+  const stored = validateFields(keys.offsets, texts, exact).values;
+  const offsets = computed?.map((offset, index) => {
+    const previous = stored[keys.offsets[index] as ParameterKey];
+    return previous !== undefined && Math.abs(offset - previous) <= ROUNDOFF * Math.max(1, Math.abs(previous))
+      ? previous
+      : offset;
   });
-  return { values: { ...values, ...computed }, errors, offsets };
+  if (offsets === undefined || !isWithinMinimumInclination(height ?? 1, Math.hypot(...offsets))) {
+    return invalid(inclinationMessage(circular, range));
+  }
+  const resolved: ParameterValues = { [keys.inclination]: inclination.value };
+  keys.offsets.forEach((key, index) => {
+    resolved[key] = offsets[index] ?? 0;
+  });
+  return { values: { ...values, ...resolved }, errors, offsets };
 }
 
 type ShapeInput = ModelSpecInput['shape'];

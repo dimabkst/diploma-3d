@@ -142,7 +142,7 @@ describe('roundSolidMeasurements', () => {
 });
 
 describe('generateModel for a cylinder and a cone', () => {
-  const cases = KINDS.flatMap((kind) => [0.25, 1, 1.1, 2, 2.05, 4].map((heightRatio) => [kind, heightRatio] as const));
+  const cases = KINDS.flatMap((kind) => [0.5, 1, 1.1, 2, 2.05, 4, 4.8, 8].map((heightRatio) => [kind, heightRatio] as const));
 
   it.each(cases)('builds a closed, outward %s with h/r = %s at its physical size', (kind, heightRatio) => {
     const { mesh, measurements, smoothShading } = onlySolid(spec(kind, heightRatio));
@@ -242,8 +242,8 @@ describe('generateModel for a cylinder and a cone', () => {
   it.each(
     KINDS.flatMap((kind) =>
       [
-        ['a ratio below the minimum', { kind, heightRatio: 0.2 }],
-        ['a ratio above the maximum', { kind, heightRatio: 4.5 }],
+        ['a ratio below the minimum', { kind, heightRatio: 0.24 }],
+        ['a ratio above the maximum', { kind, heightRatio: 16.5 }],
         ['a NaN ratio', { kind, heightRatio: Number.NaN }],
         ['an infinite ratio', { kind, heightRatio: Number.POSITIVE_INFINITY }],
         ['a string ratio', { kind, heightRatio: '2' }],

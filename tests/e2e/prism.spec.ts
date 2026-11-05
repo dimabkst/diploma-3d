@@ -184,7 +184,7 @@ test('prism: an invalid height is explained, blocks the download and survives ba
   await expect(heightRatio(page)).toHaveValue('0,2');
   await expect(downloadButton(page)).toBeDisabled();
 
-  // The limits are valid: the hexagon is 80 mm wide at h = 0,25a = 10 mm, and h = 4a = 80 mm with a = 20 mm.
+  // The slider's limits are valid: the hexagon is 80 mm wide at h = 0,25a = 10 mm, and h = 4a = 80 mm with a = 20 mm.
   await heightRatio(page).fill('0,25');
   await expectPreviewOf(page, summary(6, 0.25));
   await expect(stepButton(page, 'зменшити')).toBeDisabled();
