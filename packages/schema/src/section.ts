@@ -36,7 +36,66 @@ export const dovetailConnectorSchema = z.strictObject({
 
 export type DovetailConnector = z.infer<typeof dovetailConnectorSchema>;
 
-export const CONNECTOR_TYPES = ['dovetail'] as const;
+// Experimental ranges for round connectors: the multipliers of the diameter d = 0,0625·M and of the insertion length
+// e = 0,05·M, the distance of a pair from the centre in percent of the radius, and diametral fit clearances in mm.
+export const ROUND_CONNECTOR_COUNTS = [1, 2] as const;
+export const ROUND_CONNECTOR_DIAMETER_LIMITS = { min: 0.75, max: 1.5 } as const;
+export const ROUND_CONNECTOR_DEPTH_LIMITS = { min: 0.75, max: 1.5 } as const;
+export const ROUND_CONNECTOR_SPACING_LIMITS = { min: 25, max: 65 } as const;
+export const DIAMETRAL_CLEARANCE_LIMITS = { min: 0, max: 0.4 } as const;
+
+export const DEFAULT_ROUND_CONNECTOR = { count: 1, diameterFactor: 1, depthFactor: 1, spacingPercent: 45 } as const;
+export const DEFAULT_PLUG_CLEARANCE_MM = 0.2;
+export const DEFAULT_DOWEL_CLEARANCES_MM = { lower: 0.1, upper: 0.2 } as const;
+
+const diametralClearanceSchema = z.number().min(DIAMETRAL_CLEARANCE_LIMITS.min).max(DIAMETRAL_CLEARANCE_LIMITS.max);
+
+/**
+ * The fields that plugs and dowels share. One connector sits at the section's centre; a pair sits at ±spacing·r along
+ * the section's u direction, with diameters d and 0,8d, so that the parts cannot be joined turned by 180°. The spacing
+ * belongs to a pair only.
+ */
+const roundConnectorFields = {
+  count: z.union([z.literal(1), z.literal(2)]),
+  diameterFactor: z.number().min(ROUND_CONNECTOR_DIAMETER_LIMITS.min).max(ROUND_CONNECTOR_DIAMETER_LIMITS.max),
+  depthFactor: z.number().min(ROUND_CONNECTOR_DEPTH_LIMITS.min).max(ROUND_CONNECTOR_DEPTH_LIMITS.max),
+  spacingPercent: z.number().min(ROUND_CONNECTOR_SPACING_LIMITS.min).max(ROUND_CONNECTOR_SPACING_LIMITS.max).optional(),
+};
+
+const spacingOfPairsOnly = (connector: { count: 1 | 2; spacingPercent?: number | undefined }) =>
+  (connector.count === 2) === (connector.spacingPercent !== undefined);
+const spacingMessage = { message: 'A pair needs its spacing; a single connector has none.', path: ['spacingPercent'] };
+
+/**
+ * Integral plugs: a cylindrical protrusion of length e on the lower part and a blind hole in the upper part. The
+ * clearance is diametral: the hole is that much wider than the plug, half of it on each side.
+ */
+export const plugConnectorSchema = z
+  .strictObject({ type: z.literal('plug'), ...roundConnectorFields, holeClearanceMm: diametralClearanceSchema })
+  .refine(spacingOfPairsOnly, spacingMessage);
+
+/**
+ * Separate removable dowels of length 2e in blind holes of both parts, with diametral clearances per part: a tighter
+ * lower hole is meant to keep the dowel in the lower part, which only a print can confirm.
+ */
+export const dowelConnectorSchema = z
+  .strictObject({
+    type: z.literal('dowel'),
+    ...roundConnectorFields,
+    lowerClearanceMm: diametralClearanceSchema,
+    upperClearanceMm: diametralClearanceSchema,
+  })
+  .refine(spacingOfPairsOnly, spacingMessage);
+
+export type PlugConnector = z.infer<typeof plugConnectorSchema>;
+export type DowelConnector = z.infer<typeof dowelConnectorSchema>;
+export type RoundConnector = PlugConnector | DowelConnector;
+
+export const connectorSchema = z.discriminatedUnion('type', [dovetailConnectorSchema, plugConnectorSchema, dowelConnectorSchema]);
+
+export type Connector = z.infer<typeof connectorSchema>;
+
+export const CONNECTOR_TYPES = ['dovetail', 'plug', 'dowel'] as const;
 
 export type ConnectorType = (typeof CONNECTOR_TYPES)[number];
 
@@ -45,7 +104,7 @@ export const parallelSectionSchema = z.strictObject({
   type: z.literal('parallel-to-bases'),
   positionPercent: sectionPositionSchema,
   /** Joins the parts; without one, both cut faces stay flat. */
-  connector: dovetailConnectorSchema.optional(),
+  connector: connectorSchema.optional(),
 });
 
 export type ParallelSection = z.infer<typeof parallelSectionSchema>;

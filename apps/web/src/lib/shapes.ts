@@ -2,6 +2,7 @@ import { type TrapezoidKind, trapezoidKind } from '@diploma-3d/engine';
 import {
   BASE_ANGLE_LIMITS,
   BASE_SHIFT_LIMITS,
+  DIAMETRAL_CLEARANCE_LIMITS,
   DOVETAIL_CLEARANCE_LIMITS,
   DOVETAIL_LENGTH_LIMITS,
   DOVETAIL_SIZE_LIMITS,
@@ -14,13 +15,16 @@ import {
   PYRAMID_BASE_TYPES,
   type PyramidBaseType,
   RATIO_LIMITS,
+  ROUND_CONNECTOR_DEPTH_LIMITS,
+  ROUND_CONNECTOR_DIAMETER_LIMITS,
+  ROUND_CONNECTOR_SPACING_LIMITS,
   ROUND_HEIGHT_LIMITS,
   SECTION_POSITION_LIMITS,
   type ShapeKind,
 } from '@diploma-3d/schema';
 import { formatDecimal, type StepRange } from './decimal.ts';
 import {
-  activeConnector,
+  activeSection,
   type ChoiceKey,
   type ConnectorChoice,
   canSwitchTiltMode,
@@ -117,7 +121,14 @@ export type TrapezoidGroup = {
   readonly fields: readonly [side: NumericField, height: NumericField, shift: NumericField];
 };
 
-export type ParameterField = NumericField | ChoiceField | ToggleField | TiltGroup | TrapezoidGroup;
+/** A short explanation among the fields, such as what a single round connector allows. */
+export type NoteField = {
+  readonly type: 'note';
+  readonly key: string;
+  readonly text: string;
+};
+
+export type ParameterField = NumericField | ChoiceField | ToggleField | NoteField | TiltGroup | TrapezoidGroup;
 
 /** A collapsible group of the sidebar, such as "Основа" or "Нахил". */
 export type ParameterSection = {
@@ -504,6 +515,32 @@ const parallelSectionHelp: Help = {
 const connectorNames: Readonly<Record<ConnectorChoice, string>> = {
   none: 'Без кріплення',
   dovetail: 'Ластівчин хвіст',
+  plug: 'Виступ і отвір',
+  dowel: 'Знімні штифти',
+};
+
+// Multipliers move in quarters, a pair's spacing in 5 % of the radius, diametral clearances in 0,05 mm.
+const roundDiameterRange: StepRange = { ...ROUND_CONNECTOR_DIAMETER_LIMITS, increment: 0.25 };
+const roundDepthRange: StepRange = { ...ROUND_CONNECTOR_DEPTH_LIMITS, increment: 0.25 };
+const roundSpacingRange: StepRange = { ...ROUND_CONNECTOR_SPACING_LIMITS, increment: 5 };
+const diametralClearanceRange: StepRange = { ...DIAMETRAL_CLEARANCE_LIMITS, increment: 0.05 };
+
+const roundConnectorText =
+  'За габариту 80 мм і множників 1 діаметр — 5 мм (у парі другий — 4 мм), а в кожну частину кріплення заходить на ' +
+  '4 мм; отвори глибші на 0,3 мм. Пара має різні діаметри, тож частини не з’єднати, повернувши на 180°. Зазор за ' +
+  'діаметром — на скільки отвір ширший за виступ чи штифт; з кожного боку лишається половина. Це інша умовність, ніж ' +
+  'у ластівчиного хвоста. Значення — початкові для пробного друку.';
+
+const plugHelp: Help = {
+  label: 'Як працює кріплення?',
+  text: `Циліндричний виступ на нижній частині входить у глухий отвір верхньої; частини з’єднують і розбирають уздовж осі. ${roundConnectorText}`,
+};
+
+const dowelHelp: Help = {
+  label: 'Як працює кріплення?',
+  text:
+    'Окремі штифти вставляють в отвори обох частин. Менший зазор у нижній частині має допомогти штифту лишатися в ній ' +
+    `під час розбирання — це покаже лише пробний друк. ${roundConnectorText}`,
 };
 
 // The size multiplier moves in quarters, the length in 5 %, the clearance in 0,05 mm; typed values between are kept.
@@ -522,22 +559,90 @@ const dovetailHelp: Help = {
     'можливо, доведеться змінити.',
 };
 
-/** "Параметри кріплення": shown while the dovetail is chosen for an active section. */
+/**
+ * "Кріплення", after the section's own group: the connector's type and the settings of the chosen one. Shown while a
+ * section is chosen; a connector is optional, so its state is summarised.
+ */
 function connectorSection(kind: 'cylinder', choices: ParameterChoices): ParameterSection[] {
   const keys = sectionKeys[kind];
-  if (keys === undefined || activeConnector(kind, choices) !== 'dovetail') return [];
-  const { size, length, clearance } = keys.dovetail;
-  return [
-    section(
-      `${kind}-connector`,
-      'Параметри кріплення',
-      [
-        { type: 'number', key: size, label: 'Розмір кріплення', suffix: '×', range: dovetailSizeRange },
-        { type: 'number', key: length, label: 'Довжина виступу', suffix: '%', range: dovetailLengthRange },
-        { type: 'number', key: clearance, label: 'Зазор, мм', suffix: '', range: dovetailClearanceRange },
+  if (keys === undefined || activeSection(kind, choices) === undefined) return [];
+  const chosen = choices[keys.connector];
+  const selector: ChoiceField = {
+    type: 'choice',
+    key: keys.connector,
+    label: 'Тип кріплення',
+    options: (['none', 'dovetail', 'plug', 'dowel'] as const).map((value) => ({ value, label: connectorNames[value] })),
+  };
+  const { dovetail, round } = keys;
+  const pair = choices[round.count] === 2;
+  const fields: Record<ConnectorChoice, ParameterField[]> = {
+    none: [],
+    dovetail: [
+      { type: 'number', key: dovetail.size, label: 'Розмір кріплення', suffix: '×', range: dovetailSizeRange },
+      { type: 'number', key: dovetail.length, label: 'Довжина виступу', suffix: '%', range: dovetailLengthRange },
+      { type: 'number', key: dovetail.clearance, label: 'Зазор, мм', suffix: '', range: dovetailClearanceRange },
+    ],
+    plug: [],
+    dowel: [],
+  };
+  const shared: ParameterField[] = [
+    {
+      type: 'choice',
+      key: round.count,
+      label: 'Кількість',
+      options: [
+        { value: 1, label: '1' },
+        { value: 2, label: '2' },
       ],
-      { help: dovetailHelp },
-    ),
+    },
+    pair
+      ? {
+          type: 'number',
+          key: round.spacing,
+          label: 'Відстань від центра, % радіуса',
+          suffix: '%',
+          range: roundSpacingRange,
+        }
+      : {
+          type: 'note',
+          key: `${kind}-single-connector`,
+          text: 'Одне кругле кріплення в центрі не заважає частинам повертатися навколо його осі.',
+        },
+    { type: 'number', key: round.diameter, label: 'Товщина кріплення', suffix: '×', range: roundDiameterRange },
+    { type: 'number', key: round.depth, label: 'Глибина з’єднання', suffix: '×', range: roundDepthRange },
+  ];
+  fields.plug = [
+    ...shared,
+    { type: 'number', key: round.plugClearance, label: 'Зазор за діаметром, мм', suffix: '', range: diametralClearanceRange },
+  ];
+  fields.dowel = [
+    ...shared,
+    {
+      type: 'number',
+      key: round.dowelLowerClearance,
+      label: 'Зазор за діаметром у нижній частині, мм',
+      suffix: '',
+      range: diametralClearanceRange,
+    },
+    {
+      type: 'number',
+      key: round.dowelUpperClearance,
+      label: 'Зазор за діаметром у верхній частині, мм',
+      suffix: '',
+      range: diametralClearanceRange,
+    },
+  ];
+  const help: Record<ConnectorChoice, Help | undefined> = {
+    none: undefined,
+    dovetail: dovetailHelp,
+    plug: plugHelp,
+    dowel: dowelHelp,
+  };
+  return [
+    section(`${kind}-connector`, 'Кріплення', [selector, ...fields[chosen]], {
+      help: help[chosen],
+      status: { text: chosen === 'none' ? 'немає' : connectorNames[chosen].toLowerCase(), highlighted: chosen !== 'none' },
+    }),
   ];
 }
 
@@ -555,18 +660,11 @@ function planeSection(kind: 'cylinder', choices: ParameterChoices): ParameterSec
     label: 'Тип перерізу',
     options: (['none', 'parallel-to-bases'] as const).map((value) => ({ value, label: sectionNames[value] })),
   };
-  const connector: ChoiceField = {
-    type: 'choice',
-    key: keys.connector,
-    label: 'Кріплення',
-    options: (['none', 'dovetail'] as const).map((value) => ({ value, label: connectorNames[value] })),
-  };
   const details: ParameterField[] =
     chosen === 'none'
       ? []
       : [
           { type: 'number', key: keys.position, label: 'Від нижньої основи', suffix: '% h', range: sectionPositionRange },
-          connector,
           { type: 'toggle', key: keys.separated, label: 'Розсунути частини' },
         ];
   return section(`${kind}-section`, 'Переріз', [selector, ...details], {
@@ -708,6 +806,6 @@ export function shapePanel(kind: ShapeKind, choices: ParameterChoices, context: 
 /** The numeric fields of a section in display order, including those inside groups. */
 export function sectionNumberFields(target: ParameterSection): NumericField[] {
   return target.fields.flatMap((field): readonly NumericField[] =>
-    field.type === 'number' ? [field] : field.type === 'choice' || field.type === 'toggle' ? [] : field.fields,
+    field.type === 'number' ? [field] : field.type === 'tilt' || field.type === 'trapezoid' ? field.fields : [],
   );
 }

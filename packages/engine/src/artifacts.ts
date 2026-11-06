@@ -26,6 +26,13 @@ export interface ModelArtifacts {
 export const SECTION_PREVIEW_GAP_RELATIVE = 0.15;
 
 /**
+ * The same for plugs and dowels, which come apart along the normal: from the default viewing direction, about 28°
+ * above the cut, the upper part must rise about half the cut's diameter to uncover nearly all of the lower part's cut
+ * face, with the plugs or seated dowels on it, also those on the far side.
+ */
+export const CONNECTOR_PREVIEW_GAP_RELATIVE = 0.5;
+
+/**
  * Preview and print file are both derived from the single validated mesh set of `generateModel`. The parts of a
  * section are separate objects of the print file, laid out side by side; the preview's separation moves only display
  * nodes, so it changes neither the meshes nor the print file.
@@ -36,7 +43,8 @@ export async function buildModelArtifacts(kernel: GeometryKernel, spec: ModelSpe
   const printFile = { fileName: `${model.name}.3mf`, bytes: createThreeMf(objects, { title: model.name }) };
   const previewGlb = await createPreviewGlb(previewObjects(model, 0));
   if (model.section === undefined) return { model, previewGlb, printFile };
-  const gap = SECTION_PREVIEW_GAP_RELATIVE * Math.max(...model.size);
+  const round = model.section.connector !== undefined && model.section.connector.type !== 'dovetail';
+  const gap = (round ? CONNECTOR_PREVIEW_GAP_RELATIVE : SECTION_PREVIEW_GAP_RELATIVE) * Math.max(...model.size);
   return { model, previewGlb, separatedPreviewGlb: await createPreviewGlb(previewObjects(model, gap)), printFile };
 }
 
@@ -47,18 +55,20 @@ export async function buildModelArtifacts(kernel: GeometryKernel, spec: ModelSpe
  */
 function previewObjects({ solids, section }: GeneratedModel, gap: number): PreviewObject[] {
   if (section === undefined) return [...solids];
+  // Plugs and dowels come apart along the normal; the dowels stay seated in the lower part.
   const [direction, distance] =
-    section.connector === undefined
-      ? [section.plane.normal, gap]
-      : [section.connector.frame.u, section.connector.exitDistance + gap];
+    section.connector?.type === 'dovetail'
+      ? [section.connector.frame.u, section.connector.exitDistance + gap]
+      : [section.plane.normal, gap];
   const offset: Vec3 = [direction[0] * distance, direction[1] * distance, direction[2] * distance];
   return solids.map((solid) => ({ ...solid, ...(solid.part === 'upper' && gap > 0 ? { displayOffset: offset } : {}) }));
 }
 
 /**
- * The print file's objects, side by side on the build plate. With a dovetail both connector faces print upwards: the
- * lower part stands on its lower base, and the upper part is turned half a turn about the sliding direction onto its
- * upper base, which also keeps the groove's flanks at 45° overhangs. Flat cut faces keep the parts as they are.
+ * The print file's objects, side by side on the build plate. With a connector both connector faces print upwards: the
+ * lower part stands on its lower base, and the upper part is turned half a turn about u onto its upper base, which
+ * also keeps a dovetail groove's flanks at 45° overhangs. Removable dowels stand upright on an end face, as they are
+ * built along the normal. Flat cut faces keep the parts as they are.
  */
 function printObjects({ solids, section }: GeneratedModel): readonly ThreeMfObject[] {
   if (solids.length === 1) return solids;

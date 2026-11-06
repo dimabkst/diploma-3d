@@ -1,4 +1,9 @@
-export { buildModelArtifacts, type ModelArtifacts, SECTION_PREVIEW_GAP_RELATIVE } from './artifacts.ts';
+export {
+  buildModelArtifacts,
+  CONNECTOR_PREVIEW_GAP_RELATIVE,
+  type ModelArtifacts,
+  SECTION_PREVIEW_GAP_RELATIVE,
+} from './artifacts.ts';
 export {
   buildDovetail,
   DOVETAIL_EXIT_MARGIN_MM,
@@ -17,6 +22,29 @@ export {
   tonguePoints,
   verifyDovetail,
 } from './connectors/dovetail.ts';
+export {
+  type CylinderSection,
+  connectorVolumeTolerance,
+  cylinderSection,
+  frameMatrix,
+  framePoint,
+  type SectionFrame,
+} from './connectors/frame.ts';
+export {
+  buildRoundConnectors,
+  PLUG_ROOT_OVERLAP_MM,
+  planRoundConnectors,
+  ROUND_CONNECTOR_CHAMFER,
+  ROUND_CONNECTOR_DEPTH_ALLOWANCE_MM,
+  ROUND_CONNECTOR_MINIMUMS_MM,
+  ROUND_CONNECTOR_PROPORTIONS,
+  type RoundConnectorIssue,
+  type RoundConnectorParts,
+  type RoundConnectorPlan,
+  type RoundConnectorSite,
+  roundConnectorDimensionsMm,
+  verifyRoundConnectors,
+} from './connectors/round.ts';
 export {
   ConnectorUnsuitableError,
   ConnectorVerificationError,
@@ -39,6 +67,7 @@ export {
   type Vec3,
 } from './mesh.ts';
 export {
+  type ConnectorPlan,
   type GeneratedModel,
   generateModel,
   type ModelSection,

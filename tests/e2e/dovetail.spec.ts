@@ -50,8 +50,8 @@ const viewerSize = async (page: Page) => {
 async function chooseDovetail(page: Page): Promise<void> {
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно основам' });
-  await expect(entry(page, 'Кріплення')).toHaveValue('none');
-  await entry(page, 'Кріплення').selectOption({ label: 'Ластівчин хвіст' });
+  await expect(entry(page, 'Тип кріплення')).toHaveValue('none');
+  await entry(page, 'Тип кріплення').selectOption({ label: 'Ластівчин хвіст' });
 }
 
 test('cylinder: a sliding dovetail joins the parts, previews them slid apart and exports both connector faces up', async ({
@@ -63,7 +63,7 @@ test('cylinder: a sliding dovetail joins the parts, previews them slid apart and
   await chooseDovetail(page);
 
   // The settings and their ranges; entry, slider and buttons share them.
-  await expect(parameterSection(page, 'Параметри кріплення')).toHaveAttribute('open', '');
+  await expect(parameterSection(page, 'Кріплення')).toHaveAttribute('open', '');
   for (const [label, value, min, max] of [
     ['Розмір кріплення', '1', '0.75', '1.5'],
     ['Довжина виступу', '50', '25', '60'],
@@ -119,8 +119,8 @@ test('cylinder: a sliding dovetail joins the parts, previews them slid apart and
   // The reset removes the cut and its connector and keeps the print size.
   await page.getByRole('button', { name: 'Скинути параметри фігури', exact: true }).click();
   await expect(entry(page, 'Тип перерізу')).toHaveValue('none');
-  await expect(entry(page, 'Кріплення')).toHaveCount(0);
-  await expect(parameterSection(page, 'Параметри кріплення')).toHaveCount(0);
+  await expect(entry(page, 'Тип кріплення')).toHaveCount(0);
+  await expect(parameterSection(page, 'Кріплення')).toHaveCount(0);
   await expect(page.getByLabel('Найбільший габарит', { exact: true })).toHaveValue('60');
   await chooseDovetail(page);
   await expect(entry(page, 'Розмір кріплення')).toHaveValue('1');

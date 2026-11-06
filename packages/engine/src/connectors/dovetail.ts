@@ -2,10 +2,11 @@ import type { CylinderShape, DovetailConnector, PhysicalScale } from '@diploma-3
 import type { Vec3 as KernelVec3, Manifold } from 'manifold-3d';
 import { ConnectorVerificationError, GeometryError } from '../errors.ts';
 import type { GeometryKernel } from '../kernel.ts';
-import { cross, length, type Vec3 } from '../mesh.ts';
+import type { Vec3 } from '../mesh.ts';
 import type { Track } from '../scope.ts';
 import type { Vec2 } from '../shapes/polygon.ts';
-import { circularSegments, roundDimensionsMm } from '../shapes/round.ts';
+import { roundDimensionsMm } from '../shapes/round.ts';
+import { connectorVolumeTolerance, cylinderSection, framePoint, type SectionFrame } from './frame.ts';
 
 /**
  * Initial experimental proportions for print trials, relative to the longest dimension M of the assembled model and the
@@ -30,16 +31,8 @@ export const DOVETAIL_LEAD_IN_RELATIVE = 0.25;
 /** How far beyond the upper part the groove's sweep ends, so that its entrance opens cleanly to the outside. */
 export const DOVETAIL_EXIT_MARGIN_MM = 1;
 
-/**
- * An orthonormal frame at the centre of the section: n is the cut's normal from the lower part into the upper one, u
- * the sliding direction in the cut, and v = u × n across it.
- */
-export interface DovetailFrame {
-  readonly origin: Vec3;
-  readonly u: Vec3;
-  readonly v: Vec3;
-  readonly n: Vec3;
-}
+/** The section's frame; u is the sliding direction. */
+export type DovetailFrame = SectionFrame;
 
 /** A combination that cannot carry the connection, with the value that fails its minimum. */
 export type DovetailIssue =
@@ -53,6 +46,7 @@ export type DovetailIssue =
   | { readonly code: 'base-thin'; readonly valueMm: number; readonly minimumMm: number };
 
 export interface DovetailPlan {
+  readonly type: 'dovetail';
   readonly frame: DovetailFrame;
   /** h, b and B of the tongue, in millimetres. */
   readonly height: number;
@@ -79,8 +73,6 @@ export interface DovetailPlan {
 }
 
 const scaleVec = (a: Vec3, factor: number): Vec3 => [a[0] * factor, a[1] * factor, a[2] * factor];
-const addVec = (a: Vec3, b: Vec3): Vec3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
-const normalised = (a: Vec3): Vec3 => scaleVec(a, 1 / length(a));
 /** The convex hull of the points; manifold-3d's typings ask for mutable tuples. */
 const hullOf = (kernel: GeometryKernel, points: readonly Vec3[]): Manifold =>
   kernel.Manifold.hull(points.map((point) => [...point] as KernelVec3));
@@ -161,13 +153,8 @@ export function planDovetail(
   positionPercent: number,
   connector: DovetailConnector,
 ): DovetailPlan {
-  const { radius: r, height: cylinderHeight, offset: d } = roundDimensionsMm(shape, scale);
-  const inradius = r * Math.cos(Math.PI / circularSegments(r));
-  const t = positionPercent / 100;
-  const n: Vec3 = [0, 0, 1];
-  // Perpendicular to the lean (d, 0); a right cylinder has none and takes the same +Y.
-  const u: Vec3 = d === 0 ? [0, 1, 0] : normalised(cross(n, [d, 0, 0]));
-  const frame: DovetailFrame = { origin: [t * d, 0, t * cylinderHeight], u, v: cross(u, n), n };
+  const { radius: r } = roundDimensionsMm(shape, scale);
+  const { frame, inradius, leanAcross, lowerThickness, upperThickness } = cylinderSection(shape, scale, positionPercent);
 
   const { height, rootWidth, headWidth } = dovetailProfileMm(connector.sizeFactor, scale.longestDimensionMm);
   const clearance = connector.clearanceMm;
@@ -176,8 +163,6 @@ export function planDovetail(
   const grooveProfile = offsetConvexPolygon(tongueProfile, [clearance, clearance, clearance, clearance]);
   const grooveHalfWidth = Math.max(...grooveProfile.map(([gv]) => Math.abs(gv)));
   const grooveTop = Math.max(...grooveProfile.map(([, gn]) => gn));
-  // Each section of the oblique cylinder moves by d/H per millimetre of height; across the groove by its v component.
-  const leanAcross = Math.abs((d / cylinderHeight) * frame.v[0]);
   const engagedEnd = tongueLength / 2 + clearance;
   const undercut = headWidth / 2 - rightEdgeAt(grooveProfile, 0);
 
@@ -195,10 +180,11 @@ export function planDovetail(
   const across = grooveHalfWidth + leanAcross * grooveTop;
   atLeast('side-walls-thin', chord(engagedEnd) - across, wall);
   atLeast('stop-thin', chord(across) - engagedEnd, wall);
-  atLeast('backing-thin', (1 - t) * cylinderHeight - grooveTop, wall);
-  atLeast('base-thin', t * cylinderHeight - DOVETAIL_ROOT_OVERLAP_MM, wall);
+  atLeast('backing-thin', upperThickness - grooveTop, wall);
+  atLeast('base-thin', lowerThickness - DOVETAIL_ROOT_OVERLAP_MM, wall);
 
   return {
+    type: 'dovetail',
     frame,
     height,
     rootWidth,
@@ -216,13 +202,8 @@ export function planDovetail(
   };
 }
 
-/** The point at (along u, across v, along n) in the frame. */
-function worldPoint({ origin, u, v, n }: DovetailFrame, [along, across, normal]: Vec3): Vec3 {
-  return addVec(addVec(addVec(origin, scaleVec(u, along)), scaleVec(v, across)), scaleVec(n, normal));
-}
-
 const ring = (frame: DovetailFrame, profile: readonly Vec2[], along: number): Vec3[] =>
-  profile.map(([across, normal]) => worldPoint(frame, [along, across, normal]));
+  profile.map(([across, normal]) => framePoint(frame, [along, across, normal]));
 
 /**
  * The tongue's corners: its profile from −L/2 to L/2 − e, and at L/2 the profile inset by the lead-in e on the flanks
@@ -278,9 +259,6 @@ export function buildDovetail(
   return { lower: track(parts.lower.add(tongue)), upper: track(parts.upper.subtract(cutter)), tongue };
 }
 
-/** Below this volume, in mm³ for M = 80 mm and scaled with M³, an intersection is Boolean roundoff, not contact. */
-const VOLUME_TOLERANCE_AT_80_MM = 1e-3;
-
 /** How far past the free play the retention check lifts the upper part. */
 const RETENTION_PROBE_MM = 0.05;
 
@@ -304,7 +282,7 @@ export function verifyDovetail(
   plan: DovetailPlan,
   longestDimensionMm: number,
 ): void {
-  const tolerance = VOLUME_TOLERANCE_AT_80_MM * (longestDimensionMm / 80) ** 3;
+  const tolerance = connectorVolumeTolerance(longestDimensionMm);
   const volume = (manifold: Manifold) => track(manifold).volume();
   const fail = (check: string): never => {
     throw new ConnectorVerificationError(check);

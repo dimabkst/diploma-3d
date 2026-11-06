@@ -1,7 +1,7 @@
 import { defaultModelSpecs, type ModelSpecInput } from '@diploma-3d/schema';
 import { type Accessor, WebIO } from '@gltf-transform/core';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { buildModelArtifacts, SECTION_PREVIEW_GAP_RELATIVE } from './artifacts.ts';
+import { buildModelArtifacts, CONNECTOR_PREVIEW_GAP_RELATIVE, SECTION_PREVIEW_GAP_RELATIVE } from './artifacts.ts';
 import { InvalidModelSpecError } from './errors.ts';
 import { toGltfPosition } from './export/glb.ts';
 import { arrangeInRow } from './export/layout.ts';
@@ -904,13 +904,14 @@ describe('for a cylinder joined by a dovetail', () => {
     expect(cutFace).toBeLessThan(circle - 100);
     // The head's top: B wide from −L/2 to the lead-in chamfer, 10 × 39,5 mm².
     const plan = model.section?.connector;
+    if (plan?.type !== 'dovetail') throw new Error('Expected a dovetail');
     expect(horizontalArea(lowerMesh, 22, 1)).toBeCloseTo((plan?.headWidth ?? 0) * ((plan?.length ?? 0) - (plan?.leadIn ?? 0)), 3);
   });
 
   it('previews the parts slid apart along the sliding direction, off the tongue, without moving them along n', async () => {
     const { model, previewGlb, separatedPreviewGlb, printFile } = await buildModelArtifacts(kernel, spec);
     const plan = model.section?.connector;
-    if (separatedPreviewGlb === undefined || plan === undefined) throw new Error('Expected a joined section');
+    if (separatedPreviewGlb === undefined || plan?.type !== 'dovetail') throw new Error('Expected a joined section');
     const nodes = (await new WebIO().readBinary(separatedPreviewGlb)).getRoot().listNodes();
     const distance = plan.exitDistance + SECTION_PREVIEW_GAP_RELATIVE * 80;
     // u = +Y is glTF −Z; nothing along glTF Y, the plane's normal.
@@ -925,5 +926,109 @@ describe('for a cylinder joined by a dovetail', () => {
     }
     // The preview's separation is not in the print file.
     expect(printFile.bytes).toEqual((await buildModelArtifacts(kernel, spec)).printFile.bytes);
+  });
+});
+
+describe('for a cylinder joined by plugs or dowels', () => {
+  const round = (connector: Record<string, unknown>): ModelSpecInput => ({
+    shape: { kind: 'cylinder', heightRatio: 2, offsetRatio: 0 },
+    scale: { longestDimensionMm: 80 },
+    section: {
+      type: 'parallel-to-bases',
+      positionPercent: 50,
+      connector: { diameterFactor: 1, depthFactor: 1, ...connector } as never,
+    },
+  });
+  const plugs = (count: 1 | 2) =>
+    round({ type: 'plug', count, holeClearanceMm: 0.2, ...(count === 2 ? { spacingPercent: 45 } : {}) });
+  const dowels = (count: 1 | 2) =>
+    round({
+      type: 'dowel',
+      count,
+      lowerClearanceMm: 0.1,
+      upperClearanceMm: 0.2,
+      ...(count === 2 ? { spacingPercent: 45 } : {}),
+    });
+
+  it.each([
+    ['one plug', plugs(1), ['cylinder-lower-part', 'cylinder-upper-part']],
+    ['two plugs', plugs(2), ['cylinder-lower-part', 'cylinder-upper-part']],
+    ['one dowel', dowels(1), ['cylinder-lower-part', 'cylinder-upper-part', 'cylinder-dowel-1']],
+    ['two dowels', dowels(2), ['cylinder-lower-part', 'cylinder-upper-part', 'cylinder-dowel-1', 'cylinder-dowel-2']],
+  ] as const)(
+    'exports %s as independent objects on the bed, in a row 5 mm apart, at the scale of the whole',
+    async (_, spec, names) => {
+      const { model, printFile } = await buildModelArtifacts(kernel, spec);
+      const parsed = readThreeMf(printFile.bytes).model;
+      expect(parsed.unit).toBe('millimeter');
+      expect(parsed.objects.map(({ name }) => name)).toEqual(names);
+      expect(parsed.buildItems).toEqual(parsed.objects.map(({ id }) => ({ objectId: id })));
+      expect(new Set(parsed.objects.map(({ id }) => id)).size).toBe(names.length);
+      const printed = parsed.objects.map(({ mesh }) => {
+        expect(findMeshDefects(mesh)).toEqual([]);
+        return measureMesh(mesh);
+      });
+      printed.forEach((measured, index) => {
+        expect(measured.bounds.min[2]).toBe(0);
+        const solid = model.solids[index]?.measurements;
+        measured.size.forEach((value, axis) => {
+          expect(value).toBeCloseTo(solid?.size[axis] ?? Number.NaN, 4);
+        });
+        expect(measured.volume / (solid?.volume ?? Number.NaN)).toBeCloseTo(1, 6);
+        if (index > 0) expect(measured.bounds.min[0] - (printed[index - 1]?.bounds.max[0] ?? 0)).toBeCloseTo(5, 4);
+      });
+      // Both halves stand on their full bases: the lower part 40 mm high, plus a 4 mm plug; the upper part flipped.
+      expect(printed[0]?.size[2]).toBeCloseTo(spec.section?.connector?.type === 'plug' ? 44 : 40, 4);
+      expect(printed[1]?.size[2]).toBeCloseTo(40, 4);
+      // Dowels stand upright: 2e = 8 mm high, d and 0,8d wide.
+      printed.slice(2).forEach((dowel, index) => {
+        expect(dowel.size[2]).toBeCloseTo(8, 4);
+        expect(dowel.size[0]).toBeCloseTo([5, 4][index] ?? Number.NaN, 4);
+      });
+    },
+  );
+
+  it('turns the upper part over, so that its hole openings face up', async () => {
+    const { printFile } = await buildModelArtifacts(kernel, plugs(1));
+    const upper = readThreeMf(printFile.bytes).model.objects[1]?.mesh as TriangleMesh;
+    const { bounds } = measureMesh(upper);
+    const centre = [(bounds.min[0] + bounds.max[0]) / 2, (bounds.min[1] + bounds.max[1]) / 2];
+    // Vertices of the hole, 2,6 mm in radius and 3 mm at its chamfered entrance, lie between the top, where it opens,
+    // and 4,3 mm below it.
+    const nearAxis = Array.from({ length: upper.positions.length / 3 }, (_, vertex) => vertexAt(upper, vertex)).filter(
+      ([x, y]) => Math.hypot(x - (centre[0] ?? 0), y - (centre[1] ?? 0)) < 3.05,
+    );
+    const heights = nearAxis.map(([, , z]) => z);
+    expect(Math.max(...heights)).toBeCloseTo(40, 4);
+    expect(Math.min(...heights)).toBeCloseTo(40 - 4.3, 4);
+  });
+
+  it('previews the halves apart along the normal with the dowels seated in the lower part, as separate nodes', async () => {
+    const { previewGlb, separatedPreviewGlb, printFile } = await buildModelArtifacts(kernel, dowels(2));
+    if (separatedPreviewGlb === undefined) throw new Error('Expected a separated preview');
+    const nodes = (await new WebIO().readBinary(separatedPreviewGlb)).getRoot().listNodes();
+    expect(nodes.map((node) => node.getName())).toEqual([
+      'cylinder-lower-part',
+      'cylinder-upper-part',
+      'cylinder-dowel-1',
+      'cylinder-dowel-2',
+    ]);
+    // +Z, the cut's normal, is glTF +Y; only the upper part moves, by 0,5 × 80 mm, enough to uncover the dowels.
+    expect(CONNECTOR_PREVIEW_GAP_RELATIVE).toBe(0.5);
+    expect(nodes.map((node) => node.getTranslation())).toEqual([
+      [0, 0, 0],
+      [0, 0.04, 0],
+      [0, 0, 0],
+      [0, 0, 0],
+    ]);
+    const assembled = (await new WebIO().readBinary(previewGlb)).getRoot().listNodes();
+    expect(assembled.map((node) => node.getTranslation())).toEqual(nodes.map(() => [0, 0, 0]));
+    // Dowels are entirely new faces, shown in the cut colour; the preview's separation is not in the print file.
+    const dowelMaterials = assembled[2]
+      ?.getMesh()
+      ?.listPrimitives()
+      .map((primitive) => primitive.getMaterial()?.getName());
+    expect(dowelMaterials?.[0]).toBe('cut');
+    expect(printFile.bytes).toEqual((await buildModelArtifacts(kernel, dowels(2))).printFile.bytes);
   });
 });

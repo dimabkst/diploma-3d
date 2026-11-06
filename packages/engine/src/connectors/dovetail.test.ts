@@ -68,7 +68,7 @@ const probe = (track: Track, [x, y, z]: Vec3, side = 0.2) =>
 function partsOf(model: GeneratedModel) {
   const [lower, upper] = model.solids;
   const plan = model.section?.connector;
-  if (lower === undefined || upper === undefined || plan === undefined) throw new Error('Expected two joined parts');
+  if (lower === undefined || upper === undefined || plan?.type !== 'dovetail') throw new Error('Expected two joined parts');
   return { lower, upper, plan };
 }
 

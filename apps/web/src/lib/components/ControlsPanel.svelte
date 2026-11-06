@@ -145,6 +145,8 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
               <Field label={field.label} forId={field.key}>
                 <Select id={field.key} bind:value={choices[field.key]} options={field.options} />
               </Field>
+            {:else if field.type === 'note'}
+              <p class="group-status">{field.text}</p>
             {:else if field.type === 'toggle'}
               <Checkbox id={field.key} label={field.label} bind:checked={choices[field.key]} />
             {:else if field.type === 'tilt'}

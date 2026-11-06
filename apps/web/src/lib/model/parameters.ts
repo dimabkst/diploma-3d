@@ -1,4 +1,4 @@
-import { type DovetailIssue, planDovetail } from '@diploma-3d/engine';
+import { type DovetailIssue, planDovetail, planRoundConnectors, type RoundConnectorIssue } from '@diploma-3d/engine';
 import {
   apexRatioSchema,
   BASE_ANGLE_LIMITS,
@@ -7,11 +7,15 @@ import {
   baseShiftSchema,
   type ConnectorType,
   DEFAULT_DOVETAIL,
+  DEFAULT_DOWEL_CLEARANCES_MM,
   DEFAULT_LONGEST_DIMENSION_MM,
   DEFAULT_PARALLELOGRAM_BASE,
+  DEFAULT_PLUG_CLEARANCE_MM,
+  DEFAULT_ROUND_CONNECTOR,
   DEFAULT_SECTION_POSITION_PERCENT,
   DEFAULT_TRAPEZOID_BASE,
   DEFAULT_TRIANGLE_BASE,
+  DIAMETRAL_CLEARANCE_LIMITS,
   DOVETAIL_CLEARANCE_LIMITS,
   DOVETAIL_LENGTH_LIMITS,
   DOVETAIL_SIZE_LIMITS,
@@ -31,6 +35,9 @@ import {
   type PyramidBaseSides,
   type PyramidBaseType,
   RATIO_LIMITS,
+  ROUND_CONNECTOR_DEPTH_LIMITS,
+  ROUND_CONNECTOR_DIAMETER_LIMITS,
+  ROUND_CONNECTOR_SPACING_LIMITS,
   ROUND_HEIGHT_LIMITS,
   ROUND_OFFSET_LIMITS,
   ratioSchema,
@@ -107,6 +114,12 @@ export type ParameterKey =
   | 'cylinderDovetailSize'
   | 'cylinderDovetailLengthPercent'
   | 'cylinderDovetailClearanceMm'
+  | 'cylinderRoundSpacingPercent'
+  | 'cylinderRoundDiameter'
+  | 'cylinderRoundDepth'
+  | 'cylinderPlugClearanceMm'
+  | 'cylinderDowelLowerClearanceMm'
+  | 'cylinderDowelUpperClearanceMm'
   | 'coneHeightRatio'
   | 'coneOffsetRatio'
   | 'coneInclinationDeg';
@@ -128,6 +141,8 @@ export type ParameterChoices = {
   pyramidBaseSides: PyramidBaseSides;
   cylinderSection: SectionChoice;
   cylinderConnector: ConnectorChoice;
+  /** One round connector at the centre, or a keyed pair; shared by plugs and dowels. */
+  cylinderRoundCount: 1 | 2;
   /** Whether the preview moves the parts of the section apart; it changes neither the geometry nor the print file. */
   cylinderPartsSeparated: boolean;
 };
@@ -205,6 +220,12 @@ export const initialParameterTexts = (): ParameterTexts => ({
   cylinderDovetailSize: formatDecimal(DEFAULT_DOVETAIL.sizeFactor),
   cylinderDovetailLengthPercent: formatDecimal(DEFAULT_DOVETAIL.lengthPercent),
   cylinderDovetailClearanceMm: formatDecimal(DEFAULT_DOVETAIL.clearanceMm),
+  cylinderRoundSpacingPercent: formatDecimal(DEFAULT_ROUND_CONNECTOR.spacingPercent),
+  cylinderRoundDiameter: formatDecimal(DEFAULT_ROUND_CONNECTOR.diameterFactor),
+  cylinderRoundDepth: formatDecimal(DEFAULT_ROUND_CONNECTOR.depthFactor),
+  cylinderPlugClearanceMm: formatDecimal(DEFAULT_PLUG_CLEARANCE_MM),
+  cylinderDowelLowerClearanceMm: formatDecimal(DEFAULT_DOWEL_CLEARANCES_MM.lower),
+  cylinderDowelUpperClearanceMm: formatDecimal(DEFAULT_DOWEL_CLEARANCES_MM.upper),
 });
 
 export const initialParameterChoices = (): ParameterChoices => ({
@@ -215,6 +236,7 @@ export const initialParameterChoices = (): ParameterChoices => ({
   // The section is optional; once it is chosen, the parts start apart so that the cut faces show.
   cylinderSection: 'none',
   cylinderConnector: 'none',
+  cylinderRoundCount: DEFAULT_ROUND_CONNECTOR.count,
   cylinderPartsSeparated: true,
 });
 
@@ -297,6 +319,22 @@ export const validateDovetailLength = (text: string, exact?: number): Validation
 export const validateDovetailClearance = (text: string, exact?: number): Validation =>
   validateNumber(text, dovetailConnectorSchema.shape.clearanceMm, DOVETAIL_CLEARANCE_LIMITS, '0,2', ' мм', exact);
 
+/** The multiplier of the round connectors' diameter. */
+export const validateRoundConnectorDiameter = (text: string, exact?: number): Validation =>
+  validateNumber(text, inclusiveRange(ROUND_CONNECTOR_DIAMETER_LIMITS), ROUND_CONNECTOR_DIAMETER_LIMITS, '1', '', exact);
+
+/** The multiplier of the round connectors' insertion length. */
+export const validateRoundConnectorDepth = (text: string, exact?: number): Validation =>
+  validateNumber(text, inclusiveRange(ROUND_CONNECTOR_DEPTH_LIMITS), ROUND_CONNECTOR_DEPTH_LIMITS, '1', '', exact);
+
+/** A pair's distance from the section's centre, in percent of the radius. */
+export const validateRoundConnectorSpacing = (text: string, exact?: number): Validation =>
+  validateNumber(text, inclusiveRange(ROUND_CONNECTOR_SPACING_LIMITS), ROUND_CONNECTOR_SPACING_LIMITS, '45', ' %', exact);
+
+/** A diametral clearance: how much wider a hole is than its pin, in millimetres. */
+export const validateDiametralClearance = (text: string, exact?: number): Validation =>
+  validateNumber(text, inclusiveRange(DIAMETRAL_CLEARANCE_LIMITS), DIAMETRAL_CLEARANCE_LIMITS, '0,2', ' мм', exact);
+
 export const validatePrintSize = (text: string): Validation =>
   validateNumber(
     text,
@@ -347,6 +385,12 @@ const validators: Readonly<Record<IndependentKey, (text: string, exact?: number)
   cylinderDovetailSize: validateDovetailSize,
   cylinderDovetailLengthPercent: validateDovetailLength,
   cylinderDovetailClearanceMm: validateDovetailClearance,
+  cylinderRoundSpacingPercent: validateRoundConnectorSpacing,
+  cylinderRoundDiameter: validateRoundConnectorDiameter,
+  cylinderRoundDepth: validateRoundConnectorDepth,
+  cylinderPlugClearanceMm: validateDiametralClearance,
+  cylinderDowelLowerClearanceMm: validateDiametralClearance,
+  cylinderDowelUpperClearanceMm: validateDiametralClearance,
 };
 
 /** The exact value behind a field's text while the field still shows that value's formatted text. */
@@ -507,14 +551,72 @@ function connectorIssues(kind: ShapeKind, spec: ModelSpec): ParameterErrors | un
   const { shape, scale, section } = spec;
   const keys = sectionKeys[kind];
   if (section?.connector === undefined || shape.kind !== 'cylinder' || keys === undefined) return undefined;
-  const { issues } = planDovetail(shape, scale, section.positionPercent, section.connector);
-  if (issues.length === 0) return undefined;
+  const { connector } = section;
+  const explained: [ParameterKey, string][] =
+    connector.type === 'dovetail'
+      ? planDovetail(shape, scale, section.positionPercent, connector).issues.map((issue) => [
+          issueField(issue, keys),
+          dovetailIssueMessage(issue),
+        ])
+      : planRoundConnectors(shape, scale, section.positionPercent, connector).issues.map((issue) => [
+          roundIssueField(issue, keys, connector.type, connector.count),
+          roundConnectorIssueMessage(issue, connector.type),
+        ]);
+  if (explained.length === 0) return undefined;
   const errors: ParameterErrors = {};
-  for (const issue of issues) {
-    const key = issueField(issue, keys);
-    errors[key] = errors[key] === undefined ? dovetailIssueMessage(issue) : `${errors[key]} ${dovetailIssueMessage(issue)}`;
-  }
+  for (const [key, message] of explained) errors[key] = errors[key] === undefined ? message : `${errors[key]} ${message}`;
   return errors;
+}
+
+function roundIssueField(issue: RoundConnectorIssue, keys: SectionKeys, type: 'plug' | 'dowel', count: 1 | 2): ParameterKey {
+  const { diameter, depth, spacing, plugClearance, dowelUpperClearance } = keys.round;
+  switch (issue.code) {
+    case 'pin-too-thin':
+      return diameter;
+    case 'engagement-short':
+    case 'hole-bottom-thin':
+      return depth;
+    case 'keying-lost':
+      return type === 'plug' ? plugClearance : dowelUpperClearance;
+    case 'hole-wall-thin':
+      return count === 2 ? spacing : diameter;
+    case 'holes-too-close':
+      return spacing;
+    case 'base-thin':
+      return keys.position;
+  }
+}
+
+const partNames = { lower: 'нижній', upper: 'верхній' } as const;
+
+/** What falls short, by how much, and what to change, for plugs and dowels; in Ukrainian for the interface. */
+export function roundConnectorIssueMessage(issue: RoundConnectorIssue, type: 'plug' | 'dowel'): string {
+  const shortfall = `${millimetres(issue.valueMm)}, потрібно щонайменше ${millimetres(issue.minimumMm)}`;
+  switch (issue.code) {
+    case 'pin-too-thin':
+      return `Найменший діаметр ${type === 'plug' ? 'виступу' : 'штифта'} — ${shortfall}. Збільште товщину кріплення або найбільший габарит.`;
+    case 'engagement-short':
+      return (
+        `Після фасок${type === 'dowel' ? ' й осьового люфту' : ''} пряма ділянка в отворі — ${shortfall}. ` +
+        'Збільште глибину з’єднання або найбільший габарит.'
+      );
+    case 'keying-lost':
+      return (
+        `Більший ${type === 'plug' ? 'виступ' : 'штифт'} ширший за менший отвір на ${shortfall}, інакше частини можна ` +
+        'з’єднати, повернувши на 180°. Зменште зазор або збільште товщину кріплення.'
+      );
+    case 'hole-wall-thin':
+      return `Стінка біля отвору у ${partNames[issue.part]} частині — ${shortfall}. Зменште відстань від центра або товщину кріплення.`;
+    case 'holes-too-close':
+      return `Між отворами у ${partNames[issue.part]} частині лишається ${shortfall}. Збільште відстань від центра або зменште товщину кріплення.`;
+    case 'hole-bottom-thin':
+      return (
+        `Під дном отвору у ${partNames[issue.part]} частині лишається ${shortfall}. ` +
+        `Зменште глибину з’єднання або ${issue.part === 'upper' ? 'опустіть' : 'підніміть'} переріз.`
+      );
+    case 'base-thin':
+      return `Під виступом лишається ${shortfall} нижньої частини. Підніміть переріз.`;
+  }
 }
 
 function issueField(issue: DovetailIssue, keys: SectionKeys): ParameterKey {
@@ -571,6 +673,16 @@ type SectionKeys = {
     readonly length: 'cylinderDovetailLengthPercent';
     readonly clearance: 'cylinderDovetailClearanceMm';
   };
+  /** Plugs and dowels share the count, spacing and multipliers; each keeps its own clearances. */
+  readonly round: {
+    readonly count: 'cylinderRoundCount';
+    readonly spacing: 'cylinderRoundSpacingPercent';
+    readonly diameter: 'cylinderRoundDiameter';
+    readonly depth: 'cylinderRoundDepth';
+    readonly plugClearance: 'cylinderPlugClearanceMm';
+    readonly dowelLowerClearance: 'cylinderDowelLowerClearanceMm';
+    readonly dowelUpperClearance: 'cylinderDowelUpperClearanceMm';
+  };
 };
 
 /** The fields of the plane section and its connector, for the shapes that offer one. */
@@ -585,8 +697,50 @@ export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys>>> = {
       length: 'cylinderDovetailLengthPercent',
       clearance: 'cylinderDovetailClearanceMm',
     },
+    round: {
+      count: 'cylinderRoundCount',
+      spacing: 'cylinderRoundSpacingPercent',
+      diameter: 'cylinderRoundDiameter',
+      depth: 'cylinderRoundDepth',
+      plugClearance: 'cylinderPlugClearanceMm',
+      dowelLowerClearance: 'cylinderDowelLowerClearanceMm',
+      dowelUpperClearance: 'cylinderDowelUpperClearanceMm',
+    },
   },
 };
+
+/** Every connector field of the section. */
+const connectorTextKeys = ({ dovetail, round }: SectionKeys): ParameterKey[] => [
+  ...Object.values(dovetail),
+  round.spacing,
+  round.diameter,
+  round.depth,
+  round.plugClearance,
+  round.dowelLowerClearance,
+  round.dowelUpperClearance,
+];
+
+/**
+ * The connector fields that shape the solid with this connector and count, in the panel's order: a pair adds its
+ * spacing, and plugs and dowels each read their own diametral clearances.
+ */
+export function activeConnectorKeys(keys: SectionKeys, connector: ConnectorType | undefined, count: 1 | 2): ParameterKey[] {
+  const { round } = keys;
+  switch (connector) {
+    case undefined:
+      return [];
+    case 'dovetail':
+      return Object.values(keys.dovetail);
+    case 'plug':
+    case 'dowel':
+      return [
+        ...(count === 2 ? [round.spacing] : []),
+        round.diameter,
+        round.depth,
+        ...(connector === 'plug' ? [round.plugClearance] : [round.dowelLowerClearance, round.dowelUpperClearance]),
+      ];
+  }
+}
 
 /** The connector chosen for the shape's active section; undefined without a section or a connector. */
 export function activeConnector(kind: ShapeKind, choices: ParameterChoices): ConnectorType | undefined {
@@ -623,18 +777,41 @@ function resolveSection(
   const keys = sectionKeys[kind];
   const type = activeSection(kind, choices);
   if (keys === undefined || type === undefined) return { values: {}, errors: {}, section: 'none' };
-  const { size, length, clearance } = keys.dovetail;
-  const dovetail = activeConnector(kind, choices) === 'dovetail';
-  const { values, errors } = validateFields([keys.position, ...(dovetail ? [size, length, clearance] : [])], texts, exact);
+  const connectorType = activeConnector(kind, choices);
+  const count = choices[keys.round.count];
+  const fields = activeConnectorKeys(keys, connectorType, count) as IndependentKey[];
+  const { values, errors } = validateFields([keys.position, ...fields], texts, exact);
   const positionPercent = values[keys.position];
-  if (positionPercent === undefined) return { values, errors, section: undefined };
-  if (!dovetail) return { values, errors, section: { type, positionPercent } };
-  const [sizeFactor, lengthPercent, clearanceMm] = [values[size], values[length], values[clearance]];
-  if (sizeFactor === undefined || lengthPercent === undefined || clearanceMm === undefined) {
+  if (positionPercent === undefined || fields.some((key) => values[key] === undefined)) {
     return { values, errors, section: undefined };
   }
-  const connector = { type: 'dovetail', sizeFactor, lengthPercent, clearanceMm } as const;
-  return { values, errors, section: { type, positionPercent, connector } };
+  const read = (key: ParameterKey) => values[key] as number;
+  const { dovetail, round } = keys;
+  const shared = {
+    count,
+    diameterFactor: read(round.diameter),
+    depthFactor: read(round.depth),
+    ...(count === 2 ? { spacingPercent: read(round.spacing) } : {}),
+  };
+  const connector =
+    connectorType === 'dovetail'
+      ? {
+          type: connectorType,
+          sizeFactor: read(dovetail.size),
+          lengthPercent: read(dovetail.length),
+          clearanceMm: read(dovetail.clearance),
+        }
+      : connectorType === 'plug'
+        ? { type: connectorType, ...shared, holeClearanceMm: read(round.plugClearance) }
+        : connectorType === 'dowel'
+          ? {
+              type: connectorType,
+              ...shared,
+              lowerClearanceMm: read(round.dowelLowerClearance),
+              upperClearanceMm: read(round.dowelUpperClearance),
+            }
+          : undefined;
+  return { values, errors, section: { type, positionPercent, ...(connector === undefined ? {} : { connector }) } };
 }
 
 const valid = (values: ParameterValues, shape: ShapeInput): ShapeResolution => ({ values, errors: {}, shape });
@@ -841,8 +1018,14 @@ export const shapeParameterKeys: Readonly<
       'cylinderDovetailSize',
       'cylinderDovetailLengthPercent',
       'cylinderDovetailClearanceMm',
+      'cylinderRoundSpacingPercent',
+      'cylinderRoundDiameter',
+      'cylinderRoundDepth',
+      'cylinderPlugClearanceMm',
+      'cylinderDowelLowerClearanceMm',
+      'cylinderDowelUpperClearanceMm',
     ],
-    choices: ['cylinderSection', 'cylinderPartsSeparated', 'cylinderConnector'],
+    choices: ['cylinderSection', 'cylinderPartsSeparated', 'cylinderConnector', 'cylinderRoundCount'],
   },
   cone: { texts: ['coneHeightRatio', 'coneOffsetRatio', 'coneInclinationDeg'], choices: [] },
   ball: { texts: [], choices: [] },
@@ -893,7 +1076,10 @@ function inactiveTiltKeys(kind: ShapeKind, { texts, exact, tiltModes = initialTi
 function inactiveSectionKeys(kind: ShapeKind, choices: ParameterChoices): (keyof ParameterChoices | ParameterKey)[] {
   const keys = sectionKeys[kind];
   if (keys === undefined) return [];
-  const connectorFields = activeConnector(kind, choices) === undefined ? Object.values(keys.dovetail) : [];
+  const connector = activeConnector(kind, choices);
+  const active = new Set(activeConnectorKeys(keys, connector, choices[keys.round.count]));
+  const connectorFields: (keyof ParameterChoices | ParameterKey)[] = connectorTextKeys(keys).filter((key) => !active.has(key));
+  if (connector !== 'plug' && connector !== 'dowel') connectorFields.push(keys.round.count);
   if (activeSection(kind, choices) !== undefined) return connectorFields;
   return [keys.position, keys.separated, keys.connector, ...connectorFields];
 }

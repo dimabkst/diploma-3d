@@ -3,10 +3,14 @@ import {
   BASE_ANGLE_LIMITS,
   BASE_SHIFT_LIMITS,
   DEFAULT_DOVETAIL,
+  DEFAULT_DOWEL_CLEARANCES_MM,
   DEFAULT_LONGEST_DIMENSION_MM,
   DEFAULT_PARALLELOGRAM_BASE,
+  DEFAULT_PLUG_CLEARANCE_MM,
+  DEFAULT_ROUND_CONNECTOR,
   DEFAULT_TRAPEZOID_BASE,
   DEFAULT_TRIANGLE_BASE,
+  DIAMETRAL_CLEARANCE_LIMITS,
   DOVETAIL_CLEARANCE_LIMITS,
   DOVETAIL_LENGTH_LIMITS,
   DOVETAIL_SIZE_LIMITS,
@@ -22,6 +26,9 @@ import {
   PYRAMID_BASE_TYPES,
   RATIO_LIMITS,
   REGULAR_POLYHEDRON_KINDS,
+  ROUND_CONNECTOR_DEPTH_LIMITS,
+  ROUND_CONNECTOR_DIAMETER_LIMITS,
+  ROUND_CONNECTOR_SPACING_LIMITS,
   ROUND_HEIGHT_LIMITS,
   ROUND_OFFSET_LIMITS,
   SECTIONS_BY_SHAPE,
@@ -784,5 +791,57 @@ describe('dovetail connectors', () => {
       { min: 0.1, max: 0.4 },
     ]);
     expect(withConnector({ type: 'pin' })).toBe(false);
+  });
+});
+
+describe('plug and dowel connectors', () => {
+  const parse = (connector: Record<string, unknown>) =>
+    modelSpecSchema.safeParse({
+      shape: { kind: 'cylinder', heightRatio: 2, offsetRatio: 0 },
+      scale: { longestDimensionMm: 80 },
+      section: { type: 'parallel-to-bases', positionPercent: 50, connector },
+    }).success;
+  const plug = { type: 'plug', count: 1, diameterFactor: 1, depthFactor: 1, holeClearanceMm: 0.2 };
+  const dowel = { type: 'dowel', count: 1, diameterFactor: 1, depthFactor: 1, lowerClearanceMm: 0.1, upperClearanceMm: 0.2 };
+
+  it('starts at one connector, both multipliers 1, a pair at 45 % and diametral clearances 0,2 / 0,1 / 0,2 mm', () => {
+    expect(DEFAULT_ROUND_CONNECTOR).toEqual({ count: 1, diameterFactor: 1, depthFactor: 1, spacingPercent: 45 });
+    expect(DEFAULT_PLUG_CLEARANCE_MM).toBe(0.2);
+    expect(DEFAULT_DOWEL_CLEARANCES_MM).toEqual({ lower: 0.1, upper: 0.2 });
+    expect(parse(plug)).toBe(true);
+    expect(parse(dowel)).toBe(true);
+  });
+
+  it('gives a pair, and only a pair, its spacing from 25 % to 65 % of the radius', () => {
+    expect(parse({ ...plug, count: 2, spacingPercent: 45 })).toBe(true);
+    expect(parse({ ...plug, count: 2 })).toBe(false);
+    expect(parse({ ...plug, spacingPercent: 45 })).toBe(false);
+    expect(parse({ ...dowel, count: 3 })).toBe(false);
+    for (const spacingPercent of [ROUND_CONNECTOR_SPACING_LIMITS.min, ROUND_CONNECTOR_SPACING_LIMITS.max]) {
+      expect(parse({ ...dowel, count: 2, spacingPercent })).toBe(true);
+    }
+    expect(parse({ ...dowel, count: 2, spacingPercent: 24.9 })).toBe(false);
+    expect(parse({ ...dowel, count: 2, spacingPercent: 65.1 })).toBe(false);
+  });
+
+  it('bounds the multipliers to 0,75–1,5 and the clearances to 0–0,4 mm, and keeps each type’s own clearances', () => {
+    for (const key of ['diameterFactor', 'depthFactor'] as const) {
+      expect([0.75, 1.5, 0.74, 1.51].map((value) => parse({ ...plug, [key]: value }))).toEqual([true, true, false, false]);
+    }
+    expect([0, 0.4, -0.01, 0.41, Number.NaN].map((value) => parse({ ...plug, holeClearanceMm: value }))).toEqual([
+      true,
+      true,
+      false,
+      false,
+      false,
+    ]);
+    expect(parse({ ...plug, lowerClearanceMm: 0.1 })).toBe(false);
+    expect(parse({ ...dowel, holeClearanceMm: 0.2 })).toBe(false);
+    expect(parse({ ...dowel, clearanceMm: 0.2 })).toBe(false);
+    expect([ROUND_CONNECTOR_DIAMETER_LIMITS, ROUND_CONNECTOR_DEPTH_LIMITS, DIAMETRAL_CLEARANCE_LIMITS]).toEqual([
+      { min: 0.75, max: 1.5 },
+      { min: 0.75, max: 1.5 },
+      { min: 0, max: 0.4 },
+    ]);
   });
 });
