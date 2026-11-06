@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { formatSteppedDecimal } from '../decimal.ts';
 import { sectionNumberFields, shapePanel } from '../shapes.ts';
 import {
+  activeConnector,
   activeSection,
   alignedTrapezoidShift,
   canResetShapeParameters,
@@ -168,6 +169,9 @@ describe('resolveModelRequest', () => {
       coneOffsetRatio: '0',
       coneInclinationDeg: '90',
       cylinderSectionPercent: '50',
+      cylinderDovetailSize: '1',
+      cylinderDovetailLengthPercent: '50',
+      cylinderDovetailClearanceMm: '0,2',
     });
     expect(initialParameterChoices()).toEqual({
       prismBaseType: 'regular',
@@ -176,6 +180,7 @@ describe('resolveModelRequest', () => {
       pyramidBaseSides: 4,
       cylinderSection: 'none',
       cylinderPartsSeparated: true,
+      cylinderConnector: 'none',
     });
     expect(resolveModelRequest('cuboid', initialParameterTexts(), triangle).spec).toEqual({
       shape: { kind: 'cuboid', widthRatio: 1.5, heightRatio: 2 },
@@ -1120,6 +1125,10 @@ describe('one range per control', () => {
   const variants = [
     ...(['cuboid', 'parallelepiped', 'cylinder', 'cone'] as const).map((kind) => ({ kind, choices: triangle })),
     { kind: 'cylinder' as const, choices: { ...triangle, cylinderSection: 'parallel-to-bases' as const } },
+    {
+      kind: 'cylinder' as const,
+      choices: { ...triangle, cylinderSection: 'parallel-to-bases' as const, cylinderConnector: 'dovetail' as const },
+    },
     ...(['regular', 'triangle', 'trapezoid'] as const).map((prismBaseType) => ({
       kind: 'prism' as const,
       choices: { ...triangle, prismBaseType },
@@ -1196,6 +1205,7 @@ describe('a cylinder section parallel to the bases', () => {
     expect(group.fields.map((field) => [field.type, field.key])).toEqual([
       ['choice', 'cylinderSection'],
       ['number', 'cylinderSectionPercent'],
+      ['choice', 'cylinderConnector'],
       ['toggle', 'cylinderPartsSeparated'],
     ]);
     expect(sectionNumberFields(group)[0]?.range).toEqual({ min: 10, max: 90, increment: 5 });
@@ -1296,5 +1306,139 @@ describe('a cylinder section parallel to the bases', () => {
     ).toBe(true);
     // The section is the cylinder's own: it does not make another shape resettable.
     expect(canResetShapeParameters('cone', { ...initial, choices: parallel })).toBe(false);
+  });
+});
+
+describe('a dovetail joining the cylinder’s parts', () => {
+  const joined = { ...triangle, cylinderSection: 'parallel-to-bases', cylinderConnector: 'dovetail' } as const;
+  const request = (overrides: Partial<ParameterTexts>, choices: typeof triangle = joined) =>
+    resolveModelRequest('cylinder', texts(overrides), choices);
+  const groupsOf = (choices: typeof triangle) => {
+    const panel = shapePanel('cylinder', choices);
+    return panel.type === 'parameters' ? panel.sections : [];
+  };
+
+  it('starts without a connector; choosing the dovetail adds its settings at k = 1, 50 % and 0,2 mm', () => {
+    const sectioned = { ...triangle, cylinderSection: 'parallel-to-bases' } as const;
+    expect(request({}, sectioned).spec?.section).toEqual({ type: 'parallel-to-bases', positionPercent: 50 });
+    expect(groupsOf(sectioned).map((group) => group.title)).toEqual(['Висота', 'Нахил', 'Переріз']);
+    const cut = groupsOf(sectioned).find((group) => group.title === 'Переріз');
+    expect(cut?.fields.find((field) => field.key === 'cylinderConnector')).toMatchObject({
+      type: 'choice',
+      label: 'Кріплення',
+      options: [
+        { value: 'none', label: 'Без кріплення' },
+        { value: 'dovetail', label: 'Ластівчин хвіст' },
+      ],
+    });
+
+    expect(request({}).spec?.section).toEqual({
+      type: 'parallel-to-bases',
+      positionPercent: 50,
+      connector: { type: 'dovetail', sizeFactor: 1, lengthPercent: 50, clearanceMm: 0.2 },
+    });
+    const settings = groupsOf(joined).find((group) => group.title === 'Параметри кріплення');
+    expect(settings?.help?.text).toMatch(/не різниця повних ширин/);
+    expect(
+      sectionNumberFields(settings as NonNullable<typeof settings>).map(({ key, label, suffix, range }) => [
+        key,
+        label,
+        suffix,
+        range,
+      ]),
+    ).toEqual([
+      ['cylinderDovetailSize', 'Розмір кріплення', '×', { min: 0.75, max: 1.5, increment: 0.25 }],
+      ['cylinderDovetailLengthPercent', 'Довжина виступу', '%', { min: 25, max: 60, increment: 5 }],
+      ['cylinderDovetailClearanceMm', 'Зазор, мм', '', { min: 0.1, max: 0.4, increment: 0.05 }],
+    ]);
+  });
+
+  it('keeps typed values between the steps and rejects values beyond the ranges without clamping', () => {
+    expect(request({ cylinderDovetailClearanceMm: '0,23', cylinderDovetailSize: '1,1' }).spec?.section?.connector).toEqual({
+      type: 'dovetail',
+      sizeFactor: 1.1,
+      lengthPercent: 50,
+      clearanceMm: 0.23,
+    });
+    for (const [key, text, message] of [
+      ['cylinderDovetailSize', '0,7', 'Допустимі значення — від 0,75 до 1,5.'],
+      ['cylinderDovetailLengthPercent', '61', 'Допустимі значення — від 25 % до 60 %.'],
+      ['cylinderDovetailClearanceMm', '0,05', 'Допустимі значення — від 0,1 мм до 0,4 мм.'],
+    ] as const) {
+      const result = request({ [key]: text });
+      expect(result.errors).toEqual({ [key]: message });
+      expect(result.spec).toBeUndefined();
+    }
+  });
+
+  it('explains a combination that cannot carry the dovetail at the field to change, and builds nothing', () => {
+    // M = 60 mm, k = 0,75: h = 1,125 mm.
+    const low = request({ printSizeMm: '60', cylinderDovetailSize: '0,75' });
+    expect(low.spec).toBeUndefined();
+    expect(low.errors).toEqual({
+      cylinderDovetailSize:
+        'Виступ заввишки 1,12 мм, потрібно щонайменше 1,2 мм. Збільште розмір кріплення або найбільший габарит.',
+    });
+    // h/r = 0,5 at 90 %: the upper part is 2 mm thick over a 2,2 mm groove.
+    const thin = request({ cylinderHeightRatio: '0,5', cylinderSectionPercent: '90' });
+    expect(thin.errors).toEqual({
+      cylinderSectionPercent:
+        'Над пазом лишається 0 мм, потрібно щонайменше 1,2 мм верхньої частини. Опустіть переріз або зменште розмір кріплення.',
+    });
+    expect(thin.values.cylinderSectionPercent).toBe(90);
+    // The same values without the connector are a valid smooth cut.
+    expect(
+      request({ cylinderHeightRatio: '0,5', cylinderSectionPercent: '90' }, { ...joined, cylinderConnector: 'none' }).spec,
+    ).toBeDefined();
+  });
+
+  it('revalidates for the height, tilt, position, size and settings, and rebuilds for each', () => {
+    const base = request({}).key;
+    for (const change of [
+      { cylinderHeightRatio: '3' },
+      { cylinderOffsetRatio: '1' },
+      { cylinderSectionPercent: '40' },
+      { printSizeMm: '120' },
+      { cylinderDovetailSize: '1,25' },
+      { cylinderDovetailLengthPercent: '40' },
+      { cylinderDovetailClearanceMm: '0,3' },
+    ]) {
+      const changed = request(change);
+      expect(changed.errors).toEqual({});
+      expect(changed.key).not.toBe(base);
+    }
+    expect(request({}, { ...joined, cylinderPartsSeparated: false }).key).toBe(base);
+  });
+
+  it('is disabled with the cut, and its hidden drafts do not block the model', () => {
+    const uncut = { ...joined, cylinderSection: 'none' } as const;
+    expect(activeConnector('cylinder', uncut)).toBeUndefined();
+    expect(activeConnector('cylinder', joined)).toBe('dovetail');
+    expect(request({ cylinderDovetailSize: '9' }, uncut).spec).not.toHaveProperty('section');
+    expect(request({ cylinderDovetailSize: '9' }, { ...joined, cylinderConnector: 'none' }).errors).toEqual({});
+    expect(groupsOf(uncut).map((group) => group.title)).toEqual(['Висота', 'Нахил', 'Переріз']);
+  });
+
+  it('resets to no connector and its default settings, keeping the print size', () => {
+    const edited: ParameterState = {
+      texts: texts({ printSizeMm: '120', cylinderDovetailSize: '1,5', cylinderDovetailClearanceMm: '0,35' }),
+      choices: joined,
+    };
+    expect(canResetShapeParameters('cylinder', edited)).toBe(true);
+    const reset = resetShapeParameters('cylinder', edited);
+    expect(reset.choices.cylinderConnector).toBe('none');
+    expect(reset.choices.cylinderSection).toBe('none');
+    expect(reset.texts).toEqual(texts({ printSizeMm: '120' }));
+    // Settings of a connector that is not chosen do not offer a reset on their own.
+    const hidden = { texts: texts({ cylinderDovetailSize: '1,5' }), choices: { ...joined, cylinderConnector: 'none' } } as const;
+    expect(canResetShapeParameters('cylinder', { ...hidden, choices: { ...hidden.choices, cylinderSection: 'none' } })).toBe(
+      false,
+    );
+    expect(
+      canResetShapeParameters('cylinder', {
+        texts: hidden.texts,
+        choices: { ...triangle, cylinderSection: 'parallel-to-bases' },
+      }),
+    ).toBe(true);
   });
 });

@@ -1,7 +1,32 @@
 export { buildModelArtifacts, type ModelArtifacts, SECTION_PREVIEW_GAP_RELATIVE } from './artifacts.ts';
-export { GeometryError, InfeasibleGeometryError, InvalidModelSpecError, KernelInitializationError } from './errors.ts';
+export {
+  buildDovetail,
+  DOVETAIL_EXIT_MARGIN_MM,
+  DOVETAIL_LEAD_IN_RELATIVE,
+  DOVETAIL_MINIMUMS_MM,
+  DOVETAIL_PROPORTIONS,
+  DOVETAIL_ROOT_OVERLAP_MM,
+  type DovetailFrame,
+  type DovetailIssue,
+  type DovetailParts,
+  type DovetailPlan,
+  dovetailProfileMm,
+  isStrictlyConvex,
+  offsetConvexPolygon,
+  planDovetail,
+  tonguePoints,
+  verifyDovetail,
+} from './connectors/dovetail.ts';
+export {
+  ConnectorUnsuitableError,
+  ConnectorVerificationError,
+  GeometryError,
+  InfeasibleGeometryError,
+  InvalidModelSpecError,
+  KernelInitializationError,
+} from './errors.ts';
 export { createPreviewGlb, GLB_MEDIA_TYPE, type PreviewObject, toGltfPosition } from './export/glb.ts';
-export { arrangeInRow, PRINT_LAYOUT_GAP_MM } from './export/layout.ts';
+export { arrangeInRow, PRINT_LAYOUT_GAP_MM, rotateHalfTurn } from './export/layout.ts';
 export { createThreeMf, THREE_MF_MEDIA_TYPE, type ThreeMfObject, type ThreeMfOptions } from './export/three-mf.ts';
 export { type GeometryKernel, type KernelOptions, loadGeometryKernel } from './kernel.ts';
 export {

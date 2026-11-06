@@ -8,7 +8,18 @@ import { arrangeInRow } from './export/layout.ts';
 import { readThreeMf } from './export/three-mf.test-helper.ts';
 import { createThreeMf } from './export/three-mf.ts';
 import { type GeometryKernel, loadGeometryKernel } from './kernel.ts';
-import { cross, dot, findMeshDefects, measureMesh, triangleAt, triangleCount, type Vec3, vertexAt } from './mesh.ts';
+import {
+  cross,
+  dot,
+  findMeshDefects,
+  measureMesh,
+  type TriangleMesh,
+  triangleAreaVector,
+  triangleAt,
+  triangleCount,
+  type Vec3,
+  vertexAt,
+} from './mesh.ts';
 
 let kernel: GeometryKernel;
 
@@ -829,5 +840,90 @@ describe('for a cylinder cut parallel to its bases', () => {
     expect(readThreeMf(printFile.bytes).model.objects).toHaveLength(1);
     const root = (await new WebIO().readBinary(previewGlb)).getRoot();
     expect(root.listMaterials().map((material) => material.getName())).not.toContain('cut');
+  });
+});
+
+describe('for a cylinder joined by a dovetail', () => {
+  // h/r = 2, r = 40 mm, H = 80 mm, cut at 25 %: the lower part is 20 mm high with a 2 mm tongue, the upper part 60 mm.
+  const spec: ModelSpecInput = {
+    shape: { kind: 'cylinder', heightRatio: 2, offsetRatio: 0 },
+    scale: { longestDimensionMm: 80 },
+    section: {
+      type: 'parallel-to-bases',
+      positionPercent: 25,
+      connector: { type: 'dovetail', sizeFactor: 1, lengthPercent: 50, clearanceMm: 0.2 },
+    },
+  };
+
+  /** The area of the mesh's faces in the plane z = height that face up (+1) or down (−1). */
+  function horizontalArea(mesh: TriangleMesh, height: number, facing: 1 | -1): number {
+    let area = 0;
+    for (let triangle = 0; triangle < triangleCount(mesh); triangle += 1) {
+      const corners = triangleAt(mesh, triangle);
+      if (!corners.every((vertex) => Math.abs(vertexAt(mesh, vertex)[2] - height) < 1e-4)) continue;
+      const z = triangleAreaVector(mesh, triangle)[2] / 2;
+      if (Math.sign(z) === facing) area += Math.abs(z);
+    }
+    return area;
+  }
+
+  it('exports both parts with their connector faces up, on the bed and side by side, at the scale of the whole', async () => {
+    const { model, printFile } = await buildModelArtifacts(kernel, spec);
+    const parsed = readThreeMf(printFile.bytes).model;
+    expect(parsed.unit).toBe('millimeter');
+    expect(parsed.objects.map(({ id, name }) => ({ id, name }))).toEqual([
+      { id: '1', name: 'cylinder-lower-part' },
+      { id: '2', name: 'cylinder-upper-part' },
+    ]);
+    expect(parsed.buildItems).toEqual([{ objectId: '1' }, { objectId: '2' }]);
+    const [lowerMesh, upperMesh] = parsed.objects.map(({ mesh }) => mesh) as [TriangleMesh, TriangleMesh];
+    const [lower, upper] = [lowerMesh, upperMesh].map((mesh) => {
+      expect(findMeshDefects(mesh)).toEqual([]);
+      return measureMesh(mesh);
+    }) as [ReturnType<typeof measureMesh>, ReturnType<typeof measureMesh>];
+    // Rigid placement only: sizes and volumes of the generated parts.
+    [lower, upper].forEach((printed, index) => {
+      const solid = model.solids[index]?.measurements;
+      printed.size.forEach((value, axis) => {
+        expect(value).toBeCloseTo(solid?.size[axis] ?? Number.NaN, 4);
+      });
+      expect(printed.volume / (solid?.volume ?? Number.NaN)).toBeCloseTo(1, 6);
+      expect(printed.bounds.min[2]).toBe(0);
+    });
+    expect(lower.size[2]).toBeCloseTo(22, 4);
+    expect(upper.size[2]).toBeCloseTo(60, 4);
+    expect(upper.bounds.min[0] - lower.bounds.max[0]).toBeCloseTo(5, 4);
+
+    // The lower part stands on its full base; the tongue's head is its top. The upper part stands on its former upper
+    // base, so its full circle is down and the cut face, with the groove's opening, is up.
+    const circle = (64 * 40 ** 2 * Math.sin((2 * Math.PI) / 64)) / 2;
+    expect(horizontalArea(lowerMesh, 0, -1)).toBeCloseTo(circle, 1);
+    expect(horizontalArea(upperMesh, 0, -1)).toBeCloseTo(circle, 1);
+    const cutFace = horizontalArea(upperMesh, 60, 1);
+    expect(cutFace).toBeGreaterThan(0.8 * circle);
+    expect(cutFace).toBeLessThan(circle - 100);
+    // The head's top: B wide from −L/2 to the lead-in chamfer, 10 × 39,5 mm².
+    const plan = model.section?.connector;
+    expect(horizontalArea(lowerMesh, 22, 1)).toBeCloseTo((plan?.headWidth ?? 0) * ((plan?.length ?? 0) - (plan?.leadIn ?? 0)), 3);
+  });
+
+  it('previews the parts slid apart along the sliding direction, off the tongue, without moving them along n', async () => {
+    const { model, previewGlb, separatedPreviewGlb, printFile } = await buildModelArtifacts(kernel, spec);
+    const plan = model.section?.connector;
+    if (separatedPreviewGlb === undefined || plan === undefined) throw new Error('Expected a joined section');
+    const nodes = (await new WebIO().readBinary(separatedPreviewGlb)).getRoot().listNodes();
+    const distance = plan.exitDistance + SECTION_PREVIEW_GAP_RELATIVE * 80;
+    // u = +Y is glTF −Z; nothing along glTF Y, the plane's normal.
+    expect(nodes.map((node) => node.getTranslation()[1])).toEqual([0, 0]);
+    expect(nodes[1]?.getTranslation()[2]).toBeCloseTo(-distance / 1000, 9);
+    expect(plan.exitDistance).toBeGreaterThan(40 + plan.length / 2);
+    // Tongue, groove and cut faces share the cut colour; the exterior keeps the surface colour.
+    const meshes = (await new WebIO().readBinary(previewGlb)).getRoot().listMeshes();
+    for (const mesh of meshes) {
+      const materials = mesh.listPrimitives().map((primitive) => primitive.getMaterial()?.getName());
+      expect(materials).toEqual(['surface', 'cut', 'edges']);
+    }
+    // The preview's separation is not in the print file.
+    expect(printFile.bytes).toEqual((await buildModelArtifacts(kernel, spec)).printFile.bytes);
   });
 });

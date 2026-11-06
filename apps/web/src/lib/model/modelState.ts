@@ -1,4 +1,6 @@
 import {
+  ConnectorUnsuitableError,
+  ConnectorVerificationError,
   InfeasibleGeometryError,
   InvalidModelSpecError,
   KernelInitializationError,
@@ -33,6 +35,12 @@ export function describeModelError(error: unknown): string {
   }
   if (error instanceof InfeasibleGeometryError) {
     return 'Тіло задовге й тонке для надійного обчислення. Збільште кут нахилу або зменште зміщення.';
+  }
+  if (error instanceof ConnectorUnsuitableError) {
+    return 'Кріплення не вміщується в ці частини. Змініть розмір, довжину кріплення або положення перерізу.';
+  }
+  if (error instanceof ConnectorVerificationError) {
+    return 'Кріплення не пройшло перевірку геометрії, тому файл не створено. Змініть розмір, довжину або зазор.';
   }
   if (error instanceof InvalidModelSpecError) {
     return 'Параметри моделі некоректні. Перевірте значення й спробуйте ще раз.';

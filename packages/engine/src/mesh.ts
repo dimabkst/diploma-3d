@@ -1,4 +1,4 @@
-import type { Manifold } from 'manifold-3d';
+import type { Manifold, Mesh } from 'manifold-3d';
 import { GeometryError } from './errors.ts';
 
 export type Vec3 = readonly [number, number, number];
@@ -71,7 +71,33 @@ export function triangleAreaVector(mesh: TriangleMesh, triangle: number): Vec3 {
  * its merge vectors map them back to one vertex per position, which keeps the topology closed.
  */
 export function meshFromManifold(manifold: Manifold): TriangleMesh {
-  const { numProp, vertProperties, triVerts, mergeFromVert, mergeToVert } = manifold.getMesh();
+  return meshFromKernelMesh(manifold.getMesh());
+}
+
+/**
+ * The mesh, and per triangle 1 where the face does not come from any of `originalIds`, the manifold-3d provenance IDs
+ * of the solid before it was cut: faces made by the cut or by a connector. Booleans and transforms keep the ID of the
+ * mesh each face came from, so this needs no geometric test.
+ */
+export function meshWithNewFaces(
+  manifold: Manifold,
+  originalIds: ReadonlySet<number>,
+): { mesh: TriangleMesh; newFaces: Uint8Array } {
+  const kernelMesh = manifold.getMesh();
+  const newFaces = new Uint8Array(kernelMesh.triVerts.length / 3);
+  const { runIndex, runOriginalID } = kernelMesh;
+  for (let run = 0; run < runOriginalID.length; run += 1) {
+    if (originalIds.has(runOriginalID[run] as number)) continue;
+    // Run boundaries index triVerts, three entries per triangle.
+    newFaces.fill(1, (runIndex[run] as number) / 3, (runIndex[run + 1] as number) / 3);
+  }
+  return { mesh: meshFromKernelMesh(kernelMesh), newFaces };
+}
+
+/** The provenance IDs of the solid's faces, see `meshWithNewFaces`. */
+export const originalIdsOf = (manifold: Manifold): Set<number> => new Set(manifold.getMesh().runOriginalID);
+
+function meshFromKernelMesh({ numProp, vertProperties, triVerts, mergeFromVert, mergeToVert }: Mesh): TriangleMesh {
   const sourceVertexCount = vertProperties.length / numProp;
   const canonical = new Uint32Array(sourceVertexCount);
   for (let vertex = 0; vertex < sourceVertexCount; vertex += 1) {

@@ -1,15 +1,22 @@
+import { type DovetailIssue, planDovetail } from '@diploma-3d/engine';
 import {
   apexRatioSchema,
   BASE_ANGLE_LIMITS,
   BASE_SHIFT_LIMITS,
   baseAngleSchema,
   baseShiftSchema,
+  type ConnectorType,
+  DEFAULT_DOVETAIL,
   DEFAULT_LONGEST_DIMENSION_MM,
   DEFAULT_PARALLELOGRAM_BASE,
   DEFAULT_SECTION_POSITION_PERCENT,
   DEFAULT_TRAPEZOID_BASE,
   DEFAULT_TRIANGLE_BASE,
+  DOVETAIL_CLEARANCE_LIMITS,
+  DOVETAIL_LENGTH_LIMITS,
+  DOVETAIL_SIZE_LIMITS,
   defaultModelSpecs,
+  dovetailConnectorSchema,
   isWithinMinimumInclination,
   longestDimensionSchema,
   MAX_LONGEST_DIMENSION_MM,
@@ -97,6 +104,9 @@ export type ParameterKey =
   | 'cylinderOffsetRatio'
   | 'cylinderInclinationDeg'
   | 'cylinderSectionPercent'
+  | 'cylinderDovetailSize'
+  | 'cylinderDovetailLengthPercent'
+  | 'cylinderDovetailClearanceMm'
   | 'coneHeightRatio'
   | 'coneOffsetRatio'
   | 'coneInclinationDeg';
@@ -107,6 +117,9 @@ export type ParameterTexts = Record<ParameterKey, string>;
 /** A plane section of the solid, or none. */
 export type SectionChoice = 'none' | SectionType;
 
+/** A connector joining the parts of the section, or flat cut faces. */
+export type ConnectorChoice = 'none' | ConnectorType;
+
 /** Parameters picked from fixed options, and switches. */
 export type ParameterChoices = {
   prismBaseType: PrismBaseType;
@@ -114,6 +127,7 @@ export type ParameterChoices = {
   pyramidBaseType: PyramidBaseType;
   pyramidBaseSides: PyramidBaseSides;
   cylinderSection: SectionChoice;
+  cylinderConnector: ConnectorChoice;
   /** Whether the preview moves the parts of the section apart; it changes neither the geometry nor the print file. */
   cylinderPartsSeparated: boolean;
 };
@@ -188,6 +202,9 @@ export const initialParameterTexts = (): ParameterTexts => ({
   coneOffsetRatio: formatDecimal(defaultModelSpecs.cone.shape.offsetRatio),
   coneInclinationDeg: RIGHT_INCLINATION_TEXT,
   cylinderSectionPercent: formatDecimal(DEFAULT_SECTION_POSITION_PERCENT),
+  cylinderDovetailSize: formatDecimal(DEFAULT_DOVETAIL.sizeFactor),
+  cylinderDovetailLengthPercent: formatDecimal(DEFAULT_DOVETAIL.lengthPercent),
+  cylinderDovetailClearanceMm: formatDecimal(DEFAULT_DOVETAIL.clearanceMm),
 });
 
 export const initialParameterChoices = (): ParameterChoices => ({
@@ -197,6 +214,7 @@ export const initialParameterChoices = (): ParameterChoices => ({
   pyramidBaseSides: defaultModelSpecs.pyramid.shape.baseSides,
   // The section is optional; once it is chosen, the parts start apart so that the cut faces show.
   cylinderSection: 'none',
+  cylinderConnector: 'none',
   cylinderPartsSeparated: true,
 });
 
@@ -268,6 +286,17 @@ export const validateDirection = (text: string, exact?: number): Validation =>
 export const validateSectionPosition = (text: string, exact?: number): Validation =>
   validateNumber(text, sectionPositionSchema, SECTION_POSITION_LIMITS, '50', ' %', exact);
 
+export const validateDovetailSize = (text: string, exact?: number): Validation =>
+  validateNumber(text, dovetailConnectorSchema.shape.sizeFactor, DOVETAIL_SIZE_LIMITS, '1', '', exact);
+
+/** The tongue's length in percent of the section's span along the sliding direction. */
+export const validateDovetailLength = (text: string, exact?: number): Validation =>
+  validateNumber(text, dovetailConnectorSchema.shape.lengthPercent, DOVETAIL_LENGTH_LIMITS, '50', ' %', exact);
+
+/** The gap between mating surfaces, in millimetres. */
+export const validateDovetailClearance = (text: string, exact?: number): Validation =>
+  validateNumber(text, dovetailConnectorSchema.shape.clearanceMm, DOVETAIL_CLEARANCE_LIMITS, '0,2', ' мм', exact);
+
 export const validatePrintSize = (text: string): Validation =>
   validateNumber(
     text,
@@ -315,6 +344,9 @@ const validators: Readonly<Record<IndependentKey, (text: string, exact?: number)
   coneHeightRatio: validateRoundHeight,
   coneOffsetRatio: validateRoundOffset,
   cylinderSectionPercent: validateSectionPosition,
+  cylinderDovetailSize: validateDovetailSize,
+  cylinderDovetailLengthPercent: validateDovetailLength,
+  cylinderDovetailClearanceMm: validateDovetailClearance,
 };
 
 /** The exact value behind a field's text while the field still shows that value's formatted text. */
@@ -460,20 +492,109 @@ export function resolveModelRequest(
     scale: { longestDimensionMm: size.value },
     ...(section.section === 'none' ? {} : { section: section.section }),
   });
+  const connectorErrors = connectorIssues(kind, spec);
+  if (connectorErrors !== undefined) {
+    return { values, errors: { ...errors, ...connectorErrors }, spec: undefined, key: undefined };
+  }
   return { values, errors, spec, key: JSON.stringify(spec) };
 }
 
-/** The fields of the plane section, for the shapes that offer one. */
-export const sectionKeys: Readonly<
-  Partial<
-    Record<
-      ShapeKind,
-      { readonly choice: 'cylinderSection'; readonly position: 'cylinderSectionPercent'; readonly separated: ToggleKey }
-    >
-  >
-> = {
-  cylinder: { choice: 'cylinderSection', position: 'cylinderSectionPercent', separated: 'cylinderPartsSeparated' },
+/**
+ * The connector's problems in the complete specification, explained at the field that addresses each best; the
+ * engine refuses the same combinations. Nothing is shrunk, moved or rescaled to make the connector fit.
+ */
+function connectorIssues(kind: ShapeKind, spec: ModelSpec): ParameterErrors | undefined {
+  const { shape, scale, section } = spec;
+  const keys = sectionKeys[kind];
+  if (section?.connector === undefined || shape.kind !== 'cylinder' || keys === undefined) return undefined;
+  const { issues } = planDovetail(shape, scale, section.positionPercent, section.connector);
+  if (issues.length === 0) return undefined;
+  const errors: ParameterErrors = {};
+  for (const issue of issues) {
+    const key = issueField(issue, keys);
+    errors[key] = errors[key] === undefined ? dovetailIssueMessage(issue) : `${errors[key]} ${dovetailIssueMessage(issue)}`;
+  }
+  return errors;
+}
+
+function issueField(issue: DovetailIssue, keys: SectionKeys): ParameterKey {
+  switch (issue.code) {
+    case 'tongue-too-low':
+    case 'neck-too-narrow':
+    case 'side-walls-thin':
+      return keys.dovetail.size;
+    case 'tongue-outside-section':
+    case 'stop-thin':
+      return keys.dovetail.length;
+    case 'undercut-lost':
+      return keys.dovetail.clearance;
+    case 'backing-thin':
+    case 'base-thin':
+      return keys.position;
+  }
+}
+
+/** A measured value, rounded down to hundredths so that it never reads as more than there is. */
+const millimetres = (value: number) => `${formatDecimal(Math.max(0, Math.floor(value * 100) / 100))} мм`;
+
+/** What falls short, by how much, and what to change; in Ukrainian for the interface. */
+export function dovetailIssueMessage(issue: DovetailIssue): string {
+  if (issue.code === 'tongue-outside-section') {
+    return 'Виступ не вміщується в переріз. Зменште довжину виступу або розмір кріплення.';
+  }
+  const shortfall = `${millimetres(issue.valueMm)}, потрібно щонайменше ${millimetres(issue.minimumMm)}`;
+  switch (issue.code) {
+    case 'tongue-too-low':
+      return `Виступ заввишки ${shortfall}. Збільште розмір кріплення або найбільший габарит.`;
+    case 'neck-too-narrow':
+      return `Шийка виступу завширшки ${shortfall}. Збільште розмір кріплення або найбільший габарит.`;
+    case 'undercut-lost':
+      return `Зазор лишає утримувальний скіс ${shortfall} з кожного боку. Зменште зазор або збільште розмір кріплення.`;
+    case 'side-walls-thin':
+      return `Стінки біля паза — ${shortfall}. Зменште розмір кріплення або довжину виступу.`;
+    case 'stop-thin':
+      return `Упор за пазом — ${shortfall}. Зменште довжину виступу або розмір кріплення.`;
+    case 'backing-thin':
+      return `Над пазом лишається ${shortfall} верхньої частини. Опустіть переріз або зменште розмір кріплення.`;
+    case 'base-thin':
+      return `Під виступом лишається ${shortfall} нижньої частини. Підніміть переріз.`;
+  }
+}
+
+type SectionKeys = {
+  readonly choice: 'cylinderSection';
+  readonly position: 'cylinderSectionPercent';
+  readonly separated: ToggleKey;
+  readonly connector: 'cylinderConnector';
+  readonly dovetail: {
+    readonly size: 'cylinderDovetailSize';
+    readonly length: 'cylinderDovetailLengthPercent';
+    readonly clearance: 'cylinderDovetailClearanceMm';
+  };
 };
+
+/** The fields of the plane section and its connector, for the shapes that offer one. */
+export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys>>> = {
+  cylinder: {
+    choice: 'cylinderSection',
+    position: 'cylinderSectionPercent',
+    separated: 'cylinderPartsSeparated',
+    connector: 'cylinderConnector',
+    dovetail: {
+      size: 'cylinderDovetailSize',
+      length: 'cylinderDovetailLengthPercent',
+      clearance: 'cylinderDovetailClearanceMm',
+    },
+  },
+};
+
+/** The connector chosen for the shape's active section; undefined without a section or a connector. */
+export function activeConnector(kind: ShapeKind, choices: ParameterChoices): ConnectorType | undefined {
+  const keys = sectionKeys[kind];
+  if (keys === undefined || activeSection(kind, choices) === undefined) return undefined;
+  const choice = choices[keys.connector];
+  return choice === 'none' ? undefined : choice;
+}
 
 /** The section chosen for the shape; undefined when it offers none or none is chosen. */
 export function activeSection(kind: ShapeKind, choices: ParameterChoices): SectionType | undefined {
@@ -489,8 +610,9 @@ export function partsSeparated(kind: ShapeKind, choices: ParameterChoices): bool
 }
 
 /**
- * The section of the specification: 'none' without one; undefined while its position is not valid. The position
- * field is read only while a section is chosen, so that a hidden draft never blocks the whole solid.
+ * The section of the specification: 'none' without one; undefined while its position or a connector field is not
+ * valid. The fields are read only while their section and connector are chosen, so that a hidden draft never blocks
+ * the whole solid.
  */
 function resolveSection(
   kind: ShapeKind,
@@ -501,9 +623,18 @@ function resolveSection(
   const keys = sectionKeys[kind];
   const type = activeSection(kind, choices);
   if (keys === undefined || type === undefined) return { values: {}, errors: {}, section: 'none' };
-  const { values, errors } = validateFields([keys.position], texts, exact);
+  const { size, length, clearance } = keys.dovetail;
+  const dovetail = activeConnector(kind, choices) === 'dovetail';
+  const { values, errors } = validateFields([keys.position, ...(dovetail ? [size, length, clearance] : [])], texts, exact);
   const positionPercent = values[keys.position];
-  return { values, errors, section: positionPercent === undefined ? undefined : { type, positionPercent } };
+  if (positionPercent === undefined) return { values, errors, section: undefined };
+  if (!dovetail) return { values, errors, section: { type, positionPercent } };
+  const [sizeFactor, lengthPercent, clearanceMm] = [values[size], values[length], values[clearance]];
+  if (sizeFactor === undefined || lengthPercent === undefined || clearanceMm === undefined) {
+    return { values, errors, section: undefined };
+  }
+  const connector = { type: 'dovetail', sizeFactor, lengthPercent, clearanceMm } as const;
+  return { values, errors, section: { type, positionPercent, connector } };
 }
 
 const valid = (values: ParameterValues, shape: ShapeInput): ShapeResolution => ({ values, errors: {}, shape });
@@ -702,8 +833,16 @@ export const shapeParameterKeys: Readonly<
   icosahedron: { texts: [], choices: [] },
   dodecahedron: { texts: [], choices: [] },
   cylinder: {
-    texts: ['cylinderHeightRatio', 'cylinderOffsetRatio', 'cylinderInclinationDeg', 'cylinderSectionPercent'],
-    choices: ['cylinderSection', 'cylinderPartsSeparated'],
+    texts: [
+      'cylinderHeightRatio',
+      'cylinderOffsetRatio',
+      'cylinderInclinationDeg',
+      'cylinderSectionPercent',
+      'cylinderDovetailSize',
+      'cylinderDovetailLengthPercent',
+      'cylinderDovetailClearanceMm',
+    ],
+    choices: ['cylinderSection', 'cylinderPartsSeparated', 'cylinderConnector'],
   },
   cone: { texts: ['coneHeightRatio', 'coneOffsetRatio', 'coneInclinationDeg'], choices: [] },
   ball: { texts: [], choices: [] },
@@ -719,7 +858,7 @@ export type ParameterState = {
 /**
  * The state after "Скинути параметри фігури": the shape's own fields and choices, also of its inactive base variants,
  * of both tilt modes and of its section, return to their initial values, drafts included: no section, at 50 %, with
- * the parts apart. The print size, every other shape and the tilt input mode keep theirs, so a reset in the angle
+ * the parts apart and without a connector, whose settings return to k = 1, 50 % and 0,2 mm. The print size, every other shape and the tilt input mode keep theirs, so a reset in the angle
  * mode shows 90°.
  */
 export function resetShapeParameters(kind: ShapeKind, state: ParameterState): ParameterState {
@@ -750,10 +889,13 @@ function inactiveTiltKeys(kind: ShapeKind, { texts, exact, tiltModes = initialTi
   return validDirection ? [...offsets, direction] : [...offsets];
 }
 
-/** The section's position and the parts' separation, while no section is chosen. */
-function inactiveSectionKeys(kind: ShapeKind, choices: ParameterChoices): (ParameterKey | ToggleKey)[] {
+/** The fields of a section or connector that is not chosen: they shape nothing until it is. */
+function inactiveSectionKeys(kind: ShapeKind, choices: ParameterChoices): (keyof ParameterChoices | ParameterKey)[] {
   const keys = sectionKeys[kind];
-  return keys === undefined || activeSection(kind, choices) !== undefined ? [] : [keys.position, keys.separated];
+  if (keys === undefined) return [];
+  const connectorFields = activeConnector(kind, choices) === undefined ? Object.values(keys.dovetail) : [];
+  if (activeSection(kind, choices) !== undefined) return connectorFields;
+  return [keys.position, keys.separated, keys.connector, ...connectorFields];
 }
 
 /**

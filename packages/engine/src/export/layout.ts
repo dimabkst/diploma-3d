@@ -25,6 +25,22 @@ export function arrangeInRow(objects: readonly ThreeMfObject[], gapMm = PRINT_LA
   });
 }
 
+/**
+ * Turns the mesh half a turn about the unit axis through the origin, p ↦ 2(a·p)a − p: a proper rotation, so the
+ * triangles keep their outward winding. About an axis in the cut plane it puts a part's top face down.
+ */
+export function rotateHalfTurn(mesh: TriangleMesh, [ax, ay, az]: Vec3): TriangleMesh {
+  const positions = new Float32Array(mesh.positions.length);
+  for (let index = 0; index < positions.length; index += 3) {
+    const [x, y, z] = [mesh.positions[index], mesh.positions[index + 1], mesh.positions[index + 2]] as [number, number, number];
+    const along = 2 * (ax * x + ay * y + az * z);
+    positions[index] = along * ax - x;
+    positions[index + 1] = along * ay - y;
+    positions[index + 2] = along * az - z;
+  }
+  return { positions, triangles: mesh.triangles };
+}
+
 function translateMesh(mesh: TriangleMesh, offset: Vec3): TriangleMesh {
   return {
     positions: mesh.positions.map((value, index) => value + (offset[index % 3] as number)),

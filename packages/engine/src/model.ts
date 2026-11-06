@@ -8,7 +8,8 @@ import {
   type ShapeKind,
 } from '@diploma-3d/schema';
 import type { Manifold } from 'manifold-3d';
-import { GeometryError, InfeasibleGeometryError, InvalidModelSpecError } from './errors.ts';
+import { buildDovetail, type DovetailPlan, planDovetail, verifyDovetail } from './connectors/dovetail.ts';
+import { ConnectorUnsuitableError, GeometryError, InfeasibleGeometryError, InvalidModelSpecError } from './errors.ts';
 import type { GeometryKernel } from './kernel.ts';
 import {
   assertValidSolidMesh,
@@ -16,6 +17,8 @@ import {
   type MeshMeasurements,
   measureMesh,
   meshFromManifold,
+  meshWithNewFaces,
+  originalIdsOf,
   subtract,
   type TriangleMesh,
   type Vec3,
@@ -45,6 +48,11 @@ export interface Solid {
   readonly smoothingShear?: readonly [number, number];
   /** Which part of a sectioned solid this is: below the cutting plane or above it, on the side of its normal. */
   readonly part?: SectionPart;
+  /**
+   * For a part: 1 per triangle that the cut or a connector made, 0 where the solid's original surface remains. The
+   * preview shows these faces apart from the exterior.
+   */
+  readonly newFaces?: Uint8Array;
 }
 
 export type SectionPart = 'lower' | 'upper';
@@ -52,6 +60,8 @@ export type SectionPart = 'lower' | 'upper';
 export interface ModelSection {
   /** The cutting plane in the model's millimetres; the upper part lies on the side its normal points to. */
   readonly plane: Plane;
+  /** The connector joining the parts, with the frame it is built in; absent for flat cut faces. */
+  readonly connector?: DovetailPlan;
 }
 
 export interface GeneratedModel {
@@ -72,7 +82,7 @@ type BuiltMeshes =
   | {
       readonly type: SectionType;
       readonly plane: Plane;
-      readonly parts: Readonly<Record<SectionPart, TriangleMesh>>;
+      readonly parts: Readonly<Record<SectionPart, { readonly mesh: TriangleMesh; readonly newFaces: Uint8Array }>>;
     };
 
 /** Completes the model name of a sectioned solid, e.g. "cylinder-parallel-section". */
@@ -81,7 +91,8 @@ const sectionNames: Readonly<Record<SectionType, string>> = { 'parallel-to-bases
 /**
  * Validates the specification, filling in defaults, checks that the solid can be represented reliably, and builds it in
  * millimetres with one uniform scale. A section splits that solid, already at its physical size, so both parts keep
- * the scale of the whole and their cut faces coincide.
+ * the scale of the whole and their cut faces coincide. A connector is planned and checked before anything is built,
+ * then built in millimetres on the parts and verified on them in three dimensions.
  */
 export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): GeneratedModel {
   const parsed = modelSpecSchema.safeParse(input);
@@ -92,13 +103,24 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
   const feasibility = checkNumericalFeasibility(spec.shape);
   if (!feasibility.feasible) throw new InfeasibleGeometryError(feasibility.relativeRounding);
 
+  const connector = planConnector(spec);
   const built = withScope((track): BuiltMeshes => {
     const solid = checked(buildShape(kernel, track, spec.shape, spec.scale));
     if (spec.section === undefined) return { whole: meshFromManifold(solid) };
+    const originalIds = originalIdsOf(solid);
     const plane = sectionPlane(spec.section, solid.boundingBox());
-    const { positive: upper, negative: lower } = splitByPlane(track, solid, plane);
-    const parts = { lower: meshFromManifold(lower), upper: meshFromManifold(upper) };
-    return { type: spec.section.type, plane, parts };
+    const split = splitByPlane(track, solid, plane);
+    let parts = { lower: split.negative, upper: split.positive };
+    if (connector !== undefined) {
+      const joined = buildDovetail(kernel, track, parts, connector);
+      verifyDovetail(kernel, track, { whole: solid, upper: parts.upper }, joined, connector, spec.scale.longestDimensionMm);
+      parts = { lower: checked(joined.lower), upper: checked(joined.upper) };
+    }
+    return {
+      type: spec.section.type,
+      plane,
+      parts: { lower: meshWithNewFaces(parts.lower, originalIds), upper: meshWithNewFaces(parts.upper, originalIds) },
+    };
   });
 
   const name = modelName(spec.shape);
@@ -120,7 +142,11 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
     return { kind: shape.kind, name, spec, solids: [solid], bounds, size };
   }
   const parts = (['lower', 'upper'] as const).map(
-    (part): Solid => ({ ...solidOf(`${name}-${part}-part`, built.parts[part]), part }),
+    (part): Solid => ({
+      ...solidOf(`${name}-${part}-part`, built.parts[part].mesh),
+      part,
+      newFaces: built.parts[part].newFaces,
+    }),
   );
   const bounds = unionBounds(parts.map((part) => part.measurements.bounds));
   return {
@@ -130,8 +156,17 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
     solids: parts,
     bounds,
     size: subtract(bounds.max, bounds.min),
-    section: { plane: built.plane },
+    section: { plane: built.plane, ...(connector === undefined ? {} : { connector }) },
   };
+}
+
+/** The connector's plan; refuses the specification before any geometry is built when the connector does not fit. */
+function planConnector({ shape, scale, section }: ModelSpec): DovetailPlan | undefined {
+  if (section?.connector === undefined) return undefined;
+  if (shape.kind !== 'cylinder') throw new ConnectorUnsuitableError([{ code: 'unsupported-shape' }]);
+  const plan = planDovetail(shape, scale, section.positionPercent, section.connector);
+  if (plan.issues.length > 0) throw new ConnectorUnsuitableError(plan.issues);
+  return plan;
 }
 
 function checked(solid: Manifold): Manifold {

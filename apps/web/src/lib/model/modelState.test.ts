@@ -1,4 +1,10 @@
-import { GeometryError, InfeasibleGeometryError, InvalidModelSpecError } from '@diploma-3d/engine';
+import {
+  ConnectorUnsuitableError,
+  ConnectorVerificationError,
+  GeometryError,
+  InfeasibleGeometryError,
+  InvalidModelSpecError,
+} from '@diploma-3d/engine';
 import { describe, expect, it } from 'vitest';
 import { describeModelError } from './modelState.ts';
 
@@ -11,5 +17,10 @@ describe('describeModelError', () => {
       'Параметри моделі некоректні. Перевірте значення й спробуйте ще раз.',
     );
     expect(describeModelError(new GeometryError('kernel'))).toBe('Під час обчислення геометрії сталася помилка.');
+  });
+
+  it('explains a connector that the engine refused or that failed its geometric checks', () => {
+    expect(describeModelError(new ConnectorUnsuitableError([{ code: 'stop-thin' }]))).toMatch(/^Кріплення не вміщується/);
+    expect(describeModelError(new ConnectorVerificationError('clear-path'))).toMatch(/^Кріплення не пройшло перевірку/);
   });
 });

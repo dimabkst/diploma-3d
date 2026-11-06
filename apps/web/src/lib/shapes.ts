@@ -2,6 +2,9 @@ import { type TrapezoidKind, trapezoidKind } from '@diploma-3d/engine';
 import {
   BASE_ANGLE_LIMITS,
   BASE_SHIFT_LIMITS,
+  DOVETAIL_CLEARANCE_LIMITS,
+  DOVETAIL_LENGTH_LIMITS,
+  DOVETAIL_SIZE_LIMITS,
   defaultModelSpecs,
   MAX_LONGEST_DIMENSION_MM,
   MIN_LONGEST_DIMENSION_MM,
@@ -17,7 +20,9 @@ import {
 } from '@diploma-3d/schema';
 import { formatDecimal, type StepRange } from './decimal.ts';
 import {
+  activeConnector,
   type ChoiceKey,
+  type ConnectorChoice,
   canSwitchTiltMode,
   type ParameterChoices,
   type ParameterKey,
@@ -496,6 +501,46 @@ const parallelSectionHelp: Help = {
     'відсувають площину від основ, але не гарантують, що тонку частину вдасться надрукувати.',
 };
 
+const connectorNames: Readonly<Record<ConnectorChoice, string>> = {
+  none: 'Без кріплення',
+  dovetail: 'Ластівчин хвіст',
+};
+
+// The size multiplier moves in quarters, the length in 5 %, the clearance in 0,05 mm; typed values between are kept.
+const dovetailSizeRange: StepRange = { ...DOVETAIL_SIZE_LIMITS, increment: 0.25 };
+const dovetailLengthRange: StepRange = { ...DOVETAIL_LENGTH_LIMITS, increment: 5 };
+const dovetailClearanceRange: StepRange = { ...DOVETAIL_CLEARANCE_LIMITS, increment: 0.05 };
+
+const dovetailHelp: Help = {
+  label: 'Як працює кріплення?',
+  text:
+    'На нижній частині — виступ, у верхній — паз, відкритий з одного кінця й закритий упором з іншого. Верхню частину ' +
+    'насувають уздовж перерізу до упору. Скоси під 45° не дають розняти частини перпендикулярно до перерізу, але ' +
+    'зсуву назад до входу ніщо не фіксує. Розмір k: за k = 1 і габариту 80 мм виступ має 2 мм заввишки, 6 мм біля ' +
+    'основи й 10 мм угорі. Довжина — частка діаметра перерізу вздовж напряму насування. Зазор — відстань між ' +
+    'кожною парою дотичних поверхонь, зокрема вздовж скосів, а не різниця повних ширин; після пробного друку його, ' +
+    'можливо, доведеться змінити.',
+};
+
+/** "Параметри кріплення": shown while the dovetail is chosen for an active section. */
+function connectorSection(kind: 'cylinder', choices: ParameterChoices): ParameterSection[] {
+  const keys = sectionKeys[kind];
+  if (keys === undefined || activeConnector(kind, choices) !== 'dovetail') return [];
+  const { size, length, clearance } = keys.dovetail;
+  return [
+    section(
+      `${kind}-connector`,
+      'Параметри кріплення',
+      [
+        { type: 'number', key: size, label: 'Розмір кріплення', suffix: '×', range: dovetailSizeRange },
+        { type: 'number', key: length, label: 'Довжина виступу', suffix: '%', range: dovetailLengthRange },
+        { type: 'number', key: clearance, label: 'Зазор, мм', suffix: '', range: dovetailClearanceRange },
+      ],
+      { help: dovetailHelp },
+    ),
+  ];
+}
+
 /**
  * "Переріз": optional, so the group starts collapsed with the chosen section in its summary. The position and the
  * separation are shown only while a section is chosen.
@@ -510,11 +555,18 @@ function planeSection(kind: 'cylinder', choices: ParameterChoices): ParameterSec
     label: 'Тип перерізу',
     options: (['none', 'parallel-to-bases'] as const).map((value) => ({ value, label: sectionNames[value] })),
   };
+  const connector: ChoiceField = {
+    type: 'choice',
+    key: keys.connector,
+    label: 'Кріплення',
+    options: (['none', 'dovetail'] as const).map((value) => ({ value, label: connectorNames[value] })),
+  };
   const details: ParameterField[] =
     chosen === 'none'
       ? []
       : [
           { type: 'number', key: keys.position, label: 'Від нижньої основи', suffix: '% h', range: sectionPositionRange },
+          connector,
           { type: 'toggle', key: keys.separated, label: 'Розсунути частини' },
         ];
   return section(`${kind}-section`, 'Переріз', [selector, ...details], {
@@ -646,7 +698,7 @@ export function shapePanel(kind: ShapeKind, choices: ParameterChoices, context: 
             },
             context,
           ),
-          ...(kind === 'cylinder' ? [planeSection(kind, choices)] : []),
+          ...(kind === 'cylinder' ? [planeSection(kind, choices), ...connectorSection(kind, choices)] : []),
         ],
       };
     }

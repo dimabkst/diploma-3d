@@ -29,3 +29,25 @@ export class InfeasibleGeometryError extends GeometryError {
 export class KernelInitializationError extends GeometryError {
   override readonly name = 'KernelInitializationError';
 }
+
+/** The connector cannot be built for these parameters; each issue names the dimension that falls short. */
+export class ConnectorUnsuitableError extends GeometryError {
+  override readonly name = 'ConnectorUnsuitableError';
+  readonly issues: readonly { readonly code: string }[];
+
+  constructor(issues: readonly { readonly code: string }[]) {
+    super(`The connector does not fit: ${issues.map((issue) => issue.code).join(', ')}.`);
+    this.issues = issues;
+  }
+}
+
+/** The built parts failed a three-dimensional check of the connector, such as a clear insertion path. */
+export class ConnectorVerificationError extends GeometryError {
+  override readonly name = 'ConnectorVerificationError';
+  readonly check: string;
+
+  constructor(check: string) {
+    super(`The connector failed the check "${check}".`);
+    this.check = check;
+  }
+}

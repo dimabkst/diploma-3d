@@ -75,7 +75,16 @@ export {
   physicalScaleSchema,
 } from './scale.ts';
 export {
+  CONNECTOR_TYPES,
+  type ConnectorType,
+  DEFAULT_DOVETAIL,
   DEFAULT_SECTION_POSITION_PERCENT,
+  DOVETAIL_CLEARANCE_LIMITS,
+  DOVETAIL_LENGTH_LIMITS,
+  DOVETAIL_SIZE_LIMITS,
+  type DovetailConnector,
+  dovetailConnectorSchema,
+  type ParallelSection,
   parallelSectionSchema,
   SECTION_POSITION_LIMITS,
   SECTION_TYPES,

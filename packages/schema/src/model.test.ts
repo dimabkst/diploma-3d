@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest';
 import {
   BASE_ANGLE_LIMITS,
   BASE_SHIFT_LIMITS,
+  DEFAULT_DOVETAIL,
   DEFAULT_LONGEST_DIMENSION_MM,
   DEFAULT_PARALLELOGRAM_BASE,
   DEFAULT_TRAPEZOID_BASE,
   DEFAULT_TRIANGLE_BASE,
+  DOVETAIL_CLEARANCE_LIMITS,
+  DOVETAIL_LENGTH_LIMITS,
+  DOVETAIL_SIZE_LIMITS,
   defaultModelSpecs,
   MAX_LONGEST_DIMENSION_MM,
   MIN_INCLINATION_DEG,
@@ -742,5 +746,43 @@ describe('plane sections', () => {
     expect(cone.success).toBe(false);
     expect(cone.error?.issues[0]?.path).toEqual(['section']);
     expect(modelSpecSchema.safeParse({ shape: { kind: 'cube' }, scale, section: at(50) }).success).toBe(false);
+  });
+});
+
+describe('dovetail connectors', () => {
+  const shape = { kind: 'cylinder', heightRatio: 2, offsetRatio: 0 } as const;
+  const scale = { longestDimensionMm: 80 } as const;
+  const withConnector = (connector: Record<string, unknown>) =>
+    modelSpecSchema.safeParse({
+      shape,
+      scale,
+      section: {
+        type: 'parallel-to-bases',
+        positionPercent: 50,
+        connector: { type: 'dovetail', ...DEFAULT_DOVETAIL, ...connector },
+      },
+    }).success;
+
+  it('starts at k = 1, 50 % and 0,2 mm, and accepts the ends of every range and values between the steps', () => {
+    expect(DEFAULT_DOVETAIL).toEqual({ sizeFactor: 1, lengthPercent: 50, clearanceMm: 0.2 });
+    expect(withConnector({})).toBe(true);
+    for (const [key, limits] of [
+      ['sizeFactor', DOVETAIL_SIZE_LIMITS],
+      ['lengthPercent', DOVETAIL_LENGTH_LIMITS],
+      ['clearanceMm', DOVETAIL_CLEARANCE_LIMITS],
+    ] as const) {
+      expect(withConnector({ [key]: limits.min })).toBe(true);
+      expect(withConnector({ [key]: limits.max })).toBe(true);
+      expect(withConnector({ [key]: (limits.min + limits.max) / 2 + 0.001 })).toBe(true);
+      expect(withConnector({ [key]: limits.min - 0.001 })).toBe(false);
+      expect(withConnector({ [key]: limits.max + 0.001 })).toBe(false);
+      expect(withConnector({ [key]: Number.NaN })).toBe(false);
+    }
+    expect([DOVETAIL_SIZE_LIMITS, DOVETAIL_LENGTH_LIMITS, DOVETAIL_CLEARANCE_LIMITS]).toEqual([
+      { min: 0.75, max: 1.5 },
+      { min: 25, max: 60 },
+      { min: 0.1, max: 0.4 },
+    ]);
+    expect(withConnector({ type: 'pin' })).toBe(false);
   });
 });
