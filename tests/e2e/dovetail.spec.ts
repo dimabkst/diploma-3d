@@ -62,17 +62,18 @@ test('cylinder: a sliding dovetail joins the parts, previews them slid apart and
   await shapeSelect(page).selectOption({ label: 'Циліндр' });
   await chooseDovetail(page);
 
-  // The settings and their ranges; entry, slider and buttons share them.
+  // The settings in millimetres at M = 80 mm and r = 40 mm, with their ranges; entry, slider and buttons share them.
   await expect(parameterSection(page, 'Кріплення')).toHaveAttribute('open', '');
   for (const [label, value, min, max] of [
-    ['Розмір кріплення', '1', '0.75', '1.5'],
-    ['Довжина виступу', '50', '25', '60'],
-    ['Зазор, мм', '0,2', '0.1', '0.4'],
+    ['Висота виступу, мм', '2', '1.5', '3'],
+    ['Довжина виступу, мм', '40', '20', '48'],
+    ['Зазор між поверхнями, мм', '0,2', '0.1', '0.4'],
   ] as const) {
     await expect(entry(page, label)).toHaveValue(value);
     await expect(slider(page, label)).toHaveAttribute('min', min);
     await expect(slider(page, label)).toHaveAttribute('max', max);
   }
+  await expect(page.getByText('Ширина виступу: біля основи 6 мм, угорі 10 мм.')).toBeVisible();
   // The assembled cylinder keeps its size: 80 × 80 × 80 mm, M = 80 mm.
   await expectPartsPreview(page, '80 × 80 × 80 мм');
 
@@ -92,28 +93,44 @@ test('cylinder: a sliding dovetail joins the parts, previews them slid apart and
   await expectPartsPreview(page, '80 × 80 × 80 мм');
   expect((await downloadParts(page)).bytes).toEqual(bytes);
 
-  // k between the steps is kept; k = 1,1 makes h = 2,2 mm.
-  await entry(page, 'Розмір кріплення').fill('1,1');
-  await expect(slider(page, 'Розмір кріплення')).toHaveAttribute('aria-valuetext', '1,1');
+  // A height between the steps is kept: 2,2 mm, with the widths linked to it.
+  const height = entry(page, 'Висота виступу, мм');
+  await height.fill('2,2');
+  await expect(slider(page, 'Висота виступу, мм')).toHaveAttribute('aria-valuetext', '2,2');
+  await expect(page.getByText('Ширина виступу: біля основи 6,6 мм, угорі 11 мм.')).toBeVisible();
   await expect(partsButton(page)).toBeEnabled({ timeout: 30_000 });
   expect((await downloadParts(page)).parts[0]?.size[2]).toBeCloseTo(42.2, 3);
+  // What is typed stays as typed while the entry has focus, and is shown as the stored value afterwards.
+  await height.fill('2,20');
+  await expect(height).toHaveValue('2,20');
+  await height.press('Tab');
+  await expect(height).toHaveValue('2,2');
 
   // Outside the range: refused as typed.
-  await entry(page, 'Зазор, мм').fill('0,45');
+  await entry(page, 'Зазор між поверхнями, мм').fill('0,45');
   await expect(page.getByText('Допустимі значення — від 0,1 мм до 0,4 мм.')).toBeVisible();
   await expect(partsButton(page)).toBeDisabled();
-  await entry(page, 'Зазор, мм').fill('0,2');
+  await entry(page, 'Зазор між поверхнями, мм').fill('0,2');
+  await height.fill('3,5');
+  await expect(page.getByText('Допустимі значення — від 1,5 мм до 3 мм.')).toBeVisible();
+  await expect(partsButton(page)).toBeDisabled();
+  await height.fill('2');
 
-  // A combination that cannot carry the connector is explained; the stale preview is marked and cannot be downloaded.
+  // The print size scales the connector with the model: at M = 60 mm the same setting is 1,5 mm high, in 1,125–2,25 mm.
   await page.getByLabel('Найбільший габарит', { exact: true }).fill('60');
-  await entry(page, 'Розмір кріплення').fill('0,75');
+  await expect(height).toHaveValue('1,5');
+  await expect(slider(page, 'Висота виступу, мм')).toHaveAttribute('min', '1.125');
+  await expect(slider(page, 'Висота виступу, мм')).toHaveAttribute('max', '2.25');
+  await expect(entry(page, 'Довжина виступу, мм')).toHaveValue('30');
+  // A combination that cannot carry the connector is explained; the stale preview is marked and cannot be downloaded.
+  await height.fill('1,125');
   await expect(
-    page.getByText('Виступ заввишки 1,12 мм, потрібно щонайменше 1,2 мм. Збільште розмір кріплення або найбільший габарит.'),
+    page.getByText('Виступ заввишки 1,12 мм, потрібно щонайменше 1,2 мм. Збільште висоту виступу або найбільший габарит.'),
   ).toBeVisible();
   await expect(previewViewport(page)).toHaveAttribute('data-preview-status', 'invalid');
   await expect(page.getByText('Модель не оновлено')).toBeVisible();
   await expect(partsButton(page)).toBeDisabled();
-  await entry(page, 'Розмір кріплення').fill('1');
+  await height.fill('1,5');
   await expectPartsPreview(page, '60 × 60 × 60 мм');
 
   // The reset removes the cut and its connector and keeps the print size.
@@ -123,8 +140,8 @@ test('cylinder: a sliding dovetail joins the parts, previews them slid apart and
   await expect(parameterSection(page, 'Кріплення')).toHaveCount(0);
   await expect(page.getByLabel('Найбільший габарит', { exact: true })).toHaveValue('60');
   await chooseDovetail(page);
-  await expect(entry(page, 'Розмір кріплення')).toHaveValue('1');
-  await expect(entry(page, 'Зазор, мм')).toHaveValue('0,2');
+  await expect(height).toHaveValue('1,5');
+  await expect(entry(page, 'Зазор між поверхнями, мм')).toHaveValue('0,2');
 
   expect(errors).toEqual([]);
 });

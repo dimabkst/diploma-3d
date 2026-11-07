@@ -13,6 +13,7 @@ let {
   error,
   describedBy,
   variant = 'slider',
+  onentryblur,
 }: {
   id: string;
   label: string;
@@ -32,6 +33,8 @@ let {
   describedBy?: string | undefined;
   /** `entry`: only the compact text entry, for a value typed rather than explored, such as a size in millimetres. */
   variant?: 'slider' | 'entry';
+  /** Called when the text entry loses focus, so that a page can drop a draft it shows instead of a converted value. */
+  onentryblur?: (() => void) | undefined;
 } = $props();
 
 const description = $derived(
@@ -105,6 +108,7 @@ function onsliderinput(event: Event & { currentTarget: HTMLInputElement }) {
         spellcheck="false"
         bind:value={text}
         onkeydown={onentrykeydown}
+        onblur={onentryblur}
         aria-invalid={error !== undefined || undefined}
         aria-describedby={description}
       />

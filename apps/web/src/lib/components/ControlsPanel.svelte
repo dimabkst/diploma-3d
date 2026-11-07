@@ -1,13 +1,16 @@
 <script lang="ts">
 import { tick } from 'svelte';
 import { formatSteppedDecimal } from '../decimal.ts';
+import { shownText, storedText } from '../model/connectorScale.ts';
 import {
   alignedTrapezoidShift,
+  isScaledConnectorKey,
   type ParameterChoices,
   type ParameterErrors,
   type ParameterKey,
   type ParameterTexts,
   type ParameterValues,
+  scaledConnectorSettings,
   type TrapezoidAlignment,
 } from '../model/parameters.ts';
 import type { TiltMode, TiltSolid } from '../model/tilt.ts';
@@ -54,6 +57,20 @@ let {
 // Per group, across shapes: a group keeps its open state and its fields keep their values while collapsed.
 let openSections = $state<Record<string, boolean>>({});
 
+/**
+ * What is being typed into a field shown in millimetres, while it differs from how the stored value is shown, such as
+ * "2,0" for 2 mm or a partial "2,". The stored text holds the converted value, so the model follows every keystroke;
+ * the draft only keeps the entry as typed until it loses focus.
+ */
+let drafts = $state<Partial<Record<ParameterKey, string>>>({});
+
+function enterMillimetres(key: ParameterKey, typed: string, unit: number) {
+  if (!isScaledConnectorKey(key)) return;
+  texts[key] = storedText(typed, unit, scaledConnectorSettings[key].limits);
+  if (shownText(texts[key], unit) === typed) delete drafts[key];
+  else drafts[key] = typed;
+}
+
 const hasError = (section: Section) => sectionNumberFields(section).some((field) => errors[field.key] !== undefined);
 
 /** Opens the group of the field, which may have been collapsed after the error appeared, and moves focus to it. */
@@ -97,15 +114,30 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
 </script>
 
 {#snippet numberField(field: NumericField)}
-  <NumberField
-    id={field.key}
-    label={field.label}
-    bind:text={texts[field.key]}
-    value={values[field.key]}
-    range={field.range}
-    suffix={field.suffix}
-    error={errors[field.key]}
-  />
+  {#if field.unit === undefined}
+    <NumberField
+      id={field.key}
+      label={field.label}
+      bind:text={texts[field.key]}
+      value={values[field.key]}
+      range={field.range}
+      suffix={field.suffix}
+      error={errors[field.key]}
+    />
+  {:else}
+    {@const unit = field.unit}
+    {@const value = values[field.key]}
+    <NumberField
+      id={field.key}
+      label={field.label}
+      bind:text={() => drafts[field.key] ?? shownText(texts[field.key], unit), (typed) => enterMillimetres(field.key, typed, unit)}
+      value={value === undefined ? undefined : Number((value * unit).toFixed(9))}
+      range={field.range}
+      suffix={field.suffix}
+      error={errors[field.key]}
+      onentryblur={() => delete drafts[field.key]}
+    />
+  {/if}
 {/snippet}
 
 <aside class="controls-panel" aria-label="Налаштування моделі">

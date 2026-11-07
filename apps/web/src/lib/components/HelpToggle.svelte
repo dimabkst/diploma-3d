@@ -56,10 +56,12 @@ let open = $state(false);
     line-height: 1;
   }
 
+  /* Blank lines in the text separate its paragraphs. */
   .help-text {
     margin: 0;
     color: var(--color-text-muted);
     font-size: var(--text-small);
     line-height: 1.5;
+    white-space: pre-line;
   }
 </style>

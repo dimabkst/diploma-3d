@@ -6,7 +6,14 @@ import type { Vec3 } from '../mesh.ts';
 import type { Track } from '../scope.ts';
 import type { Vec2 } from '../shapes/polygon.ts';
 import { circularSegments } from '../shapes/round.ts';
-import { connectorVolumeTolerance, cylinderSection, frameMatrix, framePoint, type SectionFrame } from './frame.ts';
+import {
+  CONNECTOR_MIN_WALL_MM,
+  connectorVolumeTolerance,
+  cylinderSection,
+  frameMatrix,
+  framePoint,
+  type SectionFrame,
+} from './frame.ts';
 
 /**
  * Initial experimental proportions for print trials, relative to the assembled model's longest dimension M: the primary
@@ -24,7 +31,12 @@ export const ROUND_CONNECTOR_DEPTH_ALLOWANCE_MM = 0.3;
  * axial play, and by how much the larger pin of a pair is wider than the smaller hole, so that the parts cannot be
  * joined turned by 180°.
  */
-export const ROUND_CONNECTOR_MINIMUMS_MM = { pinDiameter: 3, wall: 1.2, straightEngagement: 2, keying: 0.5 } as const;
+export const ROUND_CONNECTOR_MINIMUMS_MM = {
+  pinDiameter: 3,
+  wall: CONNECTOR_MIN_WALL_MM,
+  straightEngagement: 2,
+  keying: 0.5,
+} as const;
 
 /** How far an integral plug reaches into the lower part below the cut, so that the union is not coplanar. */
 export const PLUG_ROOT_OVERLAP_MM = 0.2;

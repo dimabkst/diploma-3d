@@ -52,6 +52,14 @@ import {
 } from '@diploma-3d/schema';
 import { formatDecimal, halfSumDecimal, parseDecimal } from '../decimal.ts';
 import {
+  type ConnectorScale,
+  connectorUnits,
+  cylinderConnectorScale,
+  formatPhysical,
+  physicalRange,
+  type ScaledConnectorKey,
+} from './connectorScale.ts';
+import {
   anglesFromOffsets,
   DIRECTION_LIMITS,
   type InclinationKey,
@@ -169,6 +177,11 @@ export type ParameterExact = Partial<Record<ParameterKey, number>>;
 export type ParameterOptions = {
   readonly exact?: ParameterExact | undefined;
   readonly tiltModes?: TiltModes | undefined;
+  /**
+   * The scale that phrases connector errors in millimetres while the current print size or cylinder is not valid;
+   * the current one is used whenever it is.
+   */
+  readonly connectorScale?: ConnectorScale | undefined;
 };
 
 export type ModelRequest = {
@@ -522,10 +535,14 @@ export function resolveModelRequest(
   options: ParameterOptions = {},
 ): ModelRequest {
   const resolved = resolveShape(kind, texts, choices, options);
-  const section = resolveSection(kind, texts, choices, options.exact);
+  const size = validatePrintSize(texts.printSizeMm);
+  const scale =
+    cylinderConnectorScale({ ...resolved.values, printSizeMm: 'value' in size ? size.value : undefined }) ??
+    options.connectorScale ??
+    INITIAL_CONNECTOR_SCALE;
+  const section = resolveSection(kind, texts, choices, options.exact, scale);
   const values = { ...resolved.values, ...section.values };
   const errors = { ...resolved.errors, ...section.errors };
-  const size = validatePrintSize(texts.printSizeMm);
   if ('error' in size) errors.printSizeMm = size.error;
   else values.printSizeMm = size.value;
   if (resolved.shape === undefined || section.section === undefined || 'error' in size) {
@@ -592,27 +609,29 @@ const partNames = { lower: 'нижній', upper: 'верхній' } as const;
 /** What falls short, by how much, and what to change, for plugs and dowels; in Ukrainian for the interface. */
 export function roundConnectorIssueMessage(issue: RoundConnectorIssue, type: 'plug' | 'dowel'): string {
   const shortfall = `${millimetres(issue.valueMm)}, потрібно щонайменше ${millimetres(issue.minimumMm)}`;
+  const diameter = type === 'plug' ? 'діаметр виступу' : 'діаметр штифта';
+  const length = type === 'plug' ? 'висоту виступу' : 'довжину штифта';
   switch (issue.code) {
     case 'pin-too-thin':
-      return `Найменший діаметр ${type === 'plug' ? 'виступу' : 'штифта'} — ${shortfall}. Збільште товщину кріплення або найбільший габарит.`;
+      return `Найменший ${diameter} — ${shortfall}. Збільште ${diameter} або найбільший габарит.`;
     case 'engagement-short':
       return (
-        `Після фасок${type === 'dowel' ? ' й осьового люфту' : ''} пряма ділянка в отворі — ${shortfall}. ` +
-        'Збільште глибину з’єднання або найбільший габарит.'
+        `Після фасок${type === 'dowel' ? ' й осьового зміщення' : ''} пряма ділянка в отворі — ${shortfall}. ` +
+        `Збільште ${length} або найбільший габарит.`
       );
     case 'keying-lost':
       return (
         `Більший ${type === 'plug' ? 'виступ' : 'штифт'} ширший за менший отвір на ${shortfall}, інакше частини можна ` +
-        'з’єднати, повернувши на 180°. Зменште зазор або збільште товщину кріплення.'
+        `з’єднати, повернувши на 180°. Зменште збільшення діаметра отворів або збільште ${diameter}.`
       );
     case 'hole-wall-thin':
-      return `Стінка біля отвору у ${partNames[issue.part]} частині — ${shortfall}. Зменште відстань від центра або товщину кріплення.`;
+      return `Стінка біля отвору у ${partNames[issue.part]} частині — ${shortfall}. Зменште ${diameter} або відстань від центра до осей.`;
     case 'holes-too-close':
-      return `Між отворами у ${partNames[issue.part]} частині лишається ${shortfall}. Збільште відстань від центра або зменште товщину кріплення.`;
+      return `Між отворами у ${partNames[issue.part]} частині лишається ${shortfall}. Збільште відстань від центра до осей або зменште ${diameter}.`;
     case 'hole-bottom-thin':
       return (
         `Під дном отвору у ${partNames[issue.part]} частині лишається ${shortfall}. ` +
-        `Зменште глибину з’єднання або ${issue.part === 'upper' ? 'опустіть' : 'підніміть'} переріз.`
+        `Зменште ${length} або ${issue.part === 'upper' ? 'опустіть' : 'підніміть'} переріз.`
       );
     case 'base-thin':
       return `Під виступом лишається ${shortfall} нижньої частини. Підніміть переріз.`;
@@ -642,22 +661,22 @@ const millimetres = (value: number) => `${formatDecimal(Math.max(0, Math.floor(v
 /** What falls short, by how much, and what to change; in Ukrainian for the interface. */
 export function dovetailIssueMessage(issue: DovetailIssue): string {
   if (issue.code === 'tongue-outside-section') {
-    return 'Виступ не вміщується в переріз. Зменште довжину виступу або розмір кріплення.';
+    return 'Виступ не вміщується в переріз. Зменште довжину або висоту виступу.';
   }
   const shortfall = `${millimetres(issue.valueMm)}, потрібно щонайменше ${millimetres(issue.minimumMm)}`;
   switch (issue.code) {
     case 'tongue-too-low':
-      return `Виступ заввишки ${shortfall}. Збільште розмір кріплення або найбільший габарит.`;
+      return `Виступ заввишки ${shortfall}. Збільште висоту виступу або найбільший габарит.`;
     case 'neck-too-narrow':
-      return `Шийка виступу завширшки ${shortfall}. Збільште розмір кріплення або найбільший габарит.`;
+      return `Ширина виступу біля основи — ${shortfall}. Збільште висоту виступу, з якою вона пов’язана, або найбільший габарит.`;
     case 'undercut-lost':
-      return `Зазор лишає утримувальний скіс ${shortfall} з кожного боку. Зменште зазор або збільште розмір кріплення.`;
+      return `Зазор лишає утримувальний скіс ${shortfall} з кожного боку. Зменште зазор або збільште висоту виступу.`;
     case 'side-walls-thin':
-      return `Стінки біля паза — ${shortfall}. Зменште розмір кріплення або довжину виступу.`;
+      return `Стінки біля паза — ${shortfall}. Зменште висоту або довжину виступу.`;
     case 'stop-thin':
-      return `Упор за пазом — ${shortfall}. Зменште довжину виступу або розмір кріплення.`;
+      return `Упор за пазом — ${shortfall}. Зменште довжину або висоту виступу.`;
     case 'backing-thin':
-      return `Над пазом лишається ${shortfall} верхньої частини. Опустіть переріз або зменште розмір кріплення.`;
+      return `Над пазом лишається ${shortfall} верхньої частини. Опустіть переріз або зменште висоту виступу.`;
     case 'base-thin':
       return `Під виступом лишається ${shortfall} нижньої частини. Підніміть переріз.`;
   }
@@ -684,6 +703,36 @@ type SectionKeys = {
     readonly dowelUpperClearance: 'cylinderDowelUpperClearanceMm';
   };
 };
+
+/** The scale of the default cylinder at the default size, for messages before any valid one exists. */
+const INITIAL_CONNECTOR_SCALE = cylinderConnectorScale({
+  printSizeMm: DEFAULT_LONGEST_DIMENSION_MM,
+  cylinderHeightRatio: defaultModelSpecs.cylinder.shape.heightRatio,
+  cylinderOffsetRatio: defaultModelSpecs.cylinder.shape.offsetRatio,
+}) as ConnectorScale;
+
+/** The accepted range and default of each connector setting shown in millimetres, in its stored units. */
+export const scaledConnectorSettings: Readonly<
+  Record<ScaledConnectorKey, { readonly limits: { readonly min: number; readonly max: number }; readonly initial: number }>
+> = {
+  cylinderDovetailSize: { limits: DOVETAIL_SIZE_LIMITS, initial: DEFAULT_DOVETAIL.sizeFactor },
+  cylinderDovetailLengthPercent: { limits: DOVETAIL_LENGTH_LIMITS, initial: DEFAULT_DOVETAIL.lengthPercent },
+  cylinderRoundDiameter: { limits: ROUND_CONNECTOR_DIAMETER_LIMITS, initial: DEFAULT_ROUND_CONNECTOR.diameterFactor },
+  cylinderRoundDepth: { limits: ROUND_CONNECTOR_DEPTH_LIMITS, initial: DEFAULT_ROUND_CONNECTOR.depthFactor },
+  cylinderRoundSpacingPercent: { limits: ROUND_CONNECTOR_SPACING_LIMITS, initial: DEFAULT_ROUND_CONNECTOR.spacingPercent },
+};
+
+export const isScaledConnectorKey = (key: ParameterKey): key is ScaledConnectorKey => Object.hasOwn(scaledConnectorSettings, key);
+
+/**
+ * The error of a connector setting shown in millimetres: an empty or malformed entry with a millimetre example, and a
+ * value outside the accepted range with that range in millimetres, as the field's slider shows it.
+ */
+function scaledError(key: ScaledConnectorKey, text: string, unit: number): string {
+  const { limits, initial } = scaledConnectorSettings[key];
+  const read = readNumber(text, formatPhysical(initial, unit));
+  return 'error' in read ? read.error : rangeMessage(physicalRange(limits, unit, 1), ' мм');
+}
 
 /** The fields of the plane section and its connector, for the shapes that offer one. */
 export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys>>> = {
@@ -773,6 +822,7 @@ function resolveSection(
   texts: ParameterTexts,
   choices: ParameterChoices,
   exact: ParameterExact | undefined,
+  scale: ConnectorScale,
 ): { values: ParameterValues; errors: ParameterErrors; section: Section | 'none' | undefined } {
   const keys = sectionKeys[kind];
   const type = activeSection(kind, choices);
@@ -781,6 +831,11 @@ function resolveSection(
   const count = choices[keys.round.count];
   const fields = activeConnectorKeys(keys, connectorType, count) as IndependentKey[];
   const { values, errors } = validateFields([keys.position, ...fields], texts, exact);
+  // The fields show millimetres: their errors name millimetres too.
+  const units = connectorUnits(scale, connectorType === 'dowel' ? 'dowel' : 'plug');
+  for (const key of fields) {
+    if (errors[key] !== undefined && isScaledConnectorKey(key)) errors[key] = scaledError(key, texts[key], units[key]);
+  }
   const positionPercent = values[keys.position];
   if (positionPercent === undefined || fields.some((key) => values[key] === undefined)) {
     return { values, errors, section: undefined };

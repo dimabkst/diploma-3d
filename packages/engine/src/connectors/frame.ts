@@ -73,6 +73,12 @@ export function frameMatrix({ u, v, n }: SectionFrame, centre: Vec3): Mat4 {
   return [...v, 0, ...u, 0, ...n, 0, ...centre, 1] as Mat4;
 }
 
+/**
+ * The thinnest load-bearing wall any connector may leave in a part, for first trials with a 0,4 mm nozzle: three line
+ * widths. An experimental threshold, not a strength guarantee.
+ */
+export const CONNECTOR_MIN_WALL_MM = 1.2;
+
 /** Below this volume, in mm³ for M = 80 mm and scaled with M³, an intersection is Boolean roundoff, not contact. */
 const VOLUME_TOLERANCE_AT_80_MM = 1e-3;
 

@@ -6,7 +6,7 @@ import type { Vec3 } from '../mesh.ts';
 import type { Track } from '../scope.ts';
 import type { Vec2 } from '../shapes/polygon.ts';
 import { roundDimensionsMm } from '../shapes/round.ts';
-import { connectorVolumeTolerance, cylinderSection, framePoint, type SectionFrame } from './frame.ts';
+import { CONNECTOR_MIN_WALL_MM, connectorVolumeTolerance, cylinderSection, framePoint, type SectionFrame } from './frame.ts';
 
 /**
  * Initial experimental proportions for print trials, relative to the longest dimension M of the assembled model and the
@@ -20,7 +20,7 @@ export const DOVETAIL_PROPORTIONS = { height: 0.025, rootWidth: 0.075 } as const
  * narrowest width (the neck at the cut), every load-bearing wall of the parts, and the undercut that keeps the head
  * behind the groove's neck on each side once the clearance is taken up.
  */
-export const DOVETAIL_MINIMUMS_MM = { tongueHeight: 1.2, neckWidth: 2.4, wall: 1.2, undercut: 0.4 } as const;
+export const DOVETAIL_MINIMUMS_MM = { tongueHeight: 1.2, neckWidth: 2.4, wall: CONNECTOR_MIN_WALL_MM, undercut: 0.4 } as const;
 
 /** How far the tongue reaches into the lower part below the cut, so that the union does not rest on coplanar faces. */
 export const DOVETAIL_ROOT_OVERLAP_MM = 0.2;

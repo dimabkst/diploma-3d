@@ -1,11 +1,9 @@
-import { type TrapezoidKind, trapezoidKind } from '@diploma-3d/engine';
+import { DOVETAIL_PROPORTIONS, ROUND_CONNECTOR_PROPORTIONS, type TrapezoidKind, trapezoidKind } from '@diploma-3d/engine';
 import {
   BASE_ANGLE_LIMITS,
   BASE_SHIFT_LIMITS,
   DIAMETRAL_CLEARANCE_LIMITS,
   DOVETAIL_CLEARANCE_LIMITS,
-  DOVETAIL_LENGTH_LIMITS,
-  DOVETAIL_SIZE_LIMITS,
   defaultModelSpecs,
   MAX_LONGEST_DIMENSION_MM,
   MIN_LONGEST_DIMENSION_MM,
@@ -15,14 +13,18 @@ import {
   PYRAMID_BASE_TYPES,
   type PyramidBaseType,
   RATIO_LIMITS,
-  ROUND_CONNECTOR_DEPTH_LIMITS,
-  ROUND_CONNECTOR_DIAMETER_LIMITS,
-  ROUND_CONNECTOR_SPACING_LIMITS,
   ROUND_HEIGHT_LIMITS,
   SECTION_POSITION_LIMITS,
   type ShapeKind,
 } from '@diploma-3d/schema';
 import { formatDecimal, type StepRange } from './decimal.ts';
+import {
+  type ConnectorScale,
+  connectorUnits,
+  cylinderConnectorScale,
+  physicalRange,
+  type ScaledConnectorKey,
+} from './model/connectorScale.ts';
 import {
   activeSection,
   type ChoiceKey,
@@ -32,6 +34,7 @@ import {
   type ParameterKey,
   type ParameterValues,
   type SectionChoice,
+  scaledConnectorSettings,
   sectionKeys,
   type ToggleKey,
 } from './model/parameters.ts';
@@ -70,6 +73,11 @@ export type NumericField = {
   readonly suffix: string;
   /** The allowed values, shared by the entry, the slider and the buttons, and the increment of their steps. */
   readonly range: StepRange;
+  /**
+   * For a setting stored as a multiplier or percentage but shown in millimetres: the millimetres per stored unit. The
+   * entry, slider and range are then in millimetres, and what is typed is converted back.
+   */
+  readonly unit?: number;
 };
 
 /** A parameter picked from fixed options, such as the base type or the regular polygon. */
@@ -333,6 +341,8 @@ const section = (
 export type PanelContext = {
   readonly tiltModes?: TiltModes | undefined;
   readonly values?: ParameterValues | undefined;
+  /** The scale that turns connector settings into millimetres; the connector group needs it. */
+  readonly connectorScale?: ConnectorScale | undefined;
 };
 
 type TiltConfig = {
@@ -519,54 +529,63 @@ const connectorNames: Readonly<Record<ConnectorChoice, string>> = {
   dowel: 'Знімні штифти',
 };
 
-// Multipliers move in quarters, a pair's spacing in 5 % of the radius, diametral clearances in 0,05 mm.
-const roundDiameterRange: StepRange = { ...ROUND_CONNECTOR_DIAMETER_LIMITS, increment: 0.25 };
-const roundDepthRange: StepRange = { ...ROUND_CONNECTOR_DEPTH_LIMITS, increment: 0.25 };
-const roundSpacingRange: StepRange = { ...ROUND_CONNECTOR_SPACING_LIMITS, increment: 5 };
+// Dimensions move in steps of 0,25 mm, clearances in 0,05 mm; typed values between the steps are kept.
+const DIMENSION_INCREMENT_MM = 0.25;
+const dovetailClearanceRange: StepRange = { ...DOVETAIL_CLEARANCE_LIMITS, increment: 0.05 };
 const diametralClearanceRange: StepRange = { ...DIAMETRAL_CLEARANCE_LIMITS, increment: 0.05 };
 
-const roundConnectorText =
-  'За габариту 80 мм і множників 1 діаметр — 5 мм (у парі другий — 4 мм), а в кожну частину кріплення заходить на ' +
-  '4 мм; отвори глибші на 0,3 мм. Пара має різні діаметри, тож частини не з’єднати, повернувши на 180°. Зазор за ' +
-  'діаметром — на скільки отвір ширший за виступ чи штифт; з кожного боку лишається половина. Це інша умовність, ніж ' +
-  'у ластівчиного хвоста. Значення — початкові для пробного друку.';
+const dovetailHelp: Help = {
+  label: 'Як працює кріплення?',
+  text:
+    'На нижній частині є виступ, у верхній — паз. Щоб скласти модель, насуньте верхню частину вздовж перерізу до ' +
+    'упора. Для розбирання посуньте її назад. Похилі боки під кутом 45° утримують половинки від роз’єднання ' +
+    'перпендикулярно до перерізу, але не блокують зворотне зсування.\n\n' +
+    'Висота визначає, наскільки виступ піднімається над перерізом. Довжина вимірюється вздовж напряму насування. ' +
+    'Зазор — заданий у моделі проміжок між відповідними поверхнями виступу й паза.',
+};
 
 const plugHelp: Help = {
   label: 'Як працює кріплення?',
-  text: `Циліндричний виступ на нижній частині входить у глухий отвір верхньої; частини з’єднують і розбирають уздовж осі. ${roundConnectorText}`,
+  text:
+    'Виступ друкується разом із нижньою половинкою та входить в отвір верхньої. Частини з’єднують і розбирають ' +
+    'рухом перпендикулярно до перерізу.\n\n' +
+    'Висота виступу визначає, наскільки він заходить у верхню частину. Отвір має додаткові 0,3 мм глибини, щоб його ' +
+    'дно не заважало зімкнути половинки.\n\n' +
+    'Збільшення діаметра отвору визначає, наскільки отвір ширший за виступ. Наприклад, для виступу діаметром 5 мм ' +
+    'значення 0,2 мм дає отвір діаметром 5,2 мм.',
 };
 
 const dowelHelp: Help = {
   label: 'Як працює кріплення?',
   text:
-    'Окремі штифти вставляють в отвори обох частин. Менший зазор у нижній частині має допомогти штифту лишатися в ній ' +
-    `під час розбирання — це покаже лише пробний друк. ${roundConnectorText}`,
+    'Штифти друкуються окремо та вставляються в отвори обох половинок. Їх можна вийняти або замінити.\n\n' +
+    'Поле довжини задає повну довжину штифта. Номінально в кожну половинку входить половина цієї довжини. Кожен ' +
+    'отвір має додаткові 0,3 мм глибини, тому штифт може трохи зміщуватися вздовж осі.\n\n' +
+    'Розміри отворів нижньої та верхньої частин налаштовуються окремо. Наприклад, для штифта діаметром 5 мм ' +
+    'збільшення діаметра отвору на 0,2 мм дає отвір діаметром 5,2 мм.',
 };
 
-// The size multiplier moves in quarters, the length in 5 %, the clearance in 0,05 mm; typed values between are kept.
-const dovetailSizeRange: StepRange = { ...DOVETAIL_SIZE_LIMITS, increment: 0.25 };
-const dovetailLengthRange: StepRange = { ...DOVETAIL_LENGTH_LIMITS, increment: 5 };
-const dovetailClearanceRange: StepRange = { ...DOVETAIL_CLEARANCE_LIMITS, increment: 0.05 };
+const SCALE_NOTE =
+  'Показано фактичні розміри для поточного масштабу моделі. Розміри кріплення змінюються разом із найбільшим габаритом.';
+const COUNT_NOTE =
+  'Одне кругле кріплення дозволяє повертати половинки. Два кріплення різного діаметра задають їхнє взаємне положення.';
 
-const dovetailHelp: Help = {
-  label: 'Як працює кріплення?',
-  text:
-    'На нижній частині — виступ, у верхній — паз, відкритий з одного кінця й закритий упором з іншого. Верхню частину ' +
-    'насувають уздовж перерізу до упору. Скоси під 45° не дають розняти частини перпендикулярно до перерізу, але ' +
-    'зсуву назад до входу ніщо не фіксує. Розмір k: за k = 1 і габариту 80 мм виступ має 2 мм заввишки, 6 мм біля ' +
-    'основи й 10 мм угорі. Довжина — частка діаметра перерізу вздовж напряму насування. Зазор — відстань між ' +
-    'кожною парою дотичних поверхонь, зокрема вздовж скосів, а не різниця повних ширин; після пробного друку його, ' +
-    'можливо, доведеться змінити.',
-};
+/** A millimetre value for the linked lines; "—" while the setting it follows is not valid. */
+const millimetres = (value: number | undefined): string =>
+  value === undefined ? '— мм' : `${formatDecimal(Math.round(value * 1000) / 1000)} мм`;
 
 /**
- * "Кріплення", after the section's own group: the connector's type and the settings of the chosen one. Shown while a
- * section is chosen; a connector is optional, so its state is summarised.
+ * "Кріплення", after the section's own group: the connector's type and the settings of the chosen one. Settings stored
+ * as multipliers or percentages are shown in millimetres at the current scale, with their linked dimensions on one
+ * line each: the dovetail's widths, a pair's second diameter, a dowel's insertion into each part. Shown while a section
+ * is chosen; a connector is optional, so its state is summarised.
  */
-function connectorSection(kind: 'cylinder', choices: ParameterChoices): ParameterSection[] {
+function connectorSection(kind: 'cylinder', choices: ParameterChoices, context: PanelContext): ParameterSection[] {
   const keys = sectionKeys[kind];
-  if (keys === undefined || activeSection(kind, choices) === undefined) return [];
+  const scale = context.connectorScale ?? cylinderConnectorScale(context.values ?? {});
+  if (keys === undefined || scale === undefined || activeSection(kind, choices) === undefined) return [];
   const chosen = choices[keys.connector];
+  const values = context.values ?? {};
   const selector: ChoiceField = {
     type: 'choice',
     key: keys.connector,
@@ -574,18 +593,28 @@ function connectorSection(kind: 'cylinder', choices: ParameterChoices): Paramete
     options: (['none', 'dovetail', 'plug', 'dowel'] as const).map((value) => ({ value, label: connectorNames[value] })),
   };
   const { dovetail, round } = keys;
-  const pair = choices[round.count] === 2;
-  const fields: Record<ConnectorChoice, ParameterField[]> = {
-    none: [],
-    dovetail: [
-      { type: 'number', key: dovetail.size, label: 'Розмір кріплення', suffix: '×', range: dovetailSizeRange },
-      { type: 'number', key: dovetail.length, label: 'Довжина виступу', suffix: '%', range: dovetailLengthRange },
-      { type: 'number', key: dovetail.clearance, label: 'Зазор, мм', suffix: '', range: dovetailClearanceRange },
-    ],
-    plug: [],
-    dowel: [],
+  const units = connectorUnits(scale, chosen === 'dowel' ? 'dowel' : 'plug');
+  /** A stored multiplier or percentage shown in millimetres, over its accepted range. */
+  const millimetreField = (key: ScaledConnectorKey, label: string): NumericField => ({
+    type: 'number',
+    key,
+    label,
+    suffix: '',
+    unit: units[key],
+    range: physicalRange(scaledConnectorSettings[key].limits, units[key], DIMENSION_INCREMENT_MM),
+  });
+  const shown = (key: ScaledConnectorKey) => {
+    const value = values[key];
+    return value === undefined ? undefined : value * units[key];
   };
-  const shared: ParameterField[] = [
+  const note = (key: string, text: string): NoteField => ({ type: 'note', key: `${kind}-${key}`, text });
+  const scaleNote = note('connector-scale', SCALE_NOTE);
+  const height = shown(dovetail.size);
+  const pair = choices[round.count] === 2;
+  const diameter = shown(round.diameter);
+  const diameterLabel = chosen === 'plug' ? 'Діаметр виступу, мм' : 'Діаметр штифта, мм';
+  const roundFields = (lengthField: NumericField, lengthNote: NoteField[]): ParameterField[] => [
+    scaleNote,
     {
       type: 'choice',
       key: round.count,
@@ -595,43 +624,63 @@ function connectorSection(kind: 'cylinder', choices: ParameterChoices): Paramete
         { value: 2, label: '2' },
       ],
     },
-    pair
-      ? {
-          type: 'number',
-          key: round.spacing,
-          label: 'Відстань від центра, % радіуса',
-          suffix: '%',
-          range: roundSpacingRange,
-        }
-      : {
-          type: 'note',
-          key: `${kind}-single-connector`,
-          text: 'Одне кругле кріплення в центрі не заважає частинам повертатися навколо його осі.',
-        },
-    { type: 'number', key: round.diameter, label: 'Товщина кріплення', suffix: '×', range: roundDiameterRange },
-    { type: 'number', key: round.depth, label: 'Глибина з’єднання', suffix: '×', range: roundDepthRange },
+    note('connector-count', COUNT_NOTE),
+    millimetreField(round.diameter, diameterLabel),
+    ...(pair
+      ? [
+          note(
+            'connector-second-diameter',
+            `Друге кріплення: діаметр ${millimetres(diameter === undefined ? undefined : ROUND_CONNECTOR_PROPORTIONS.secondaryDiameter * diameter)}.`,
+          ),
+          millimetreField(round.spacing, 'Від центра до осі кріплення, мм'),
+        ]
+      : []),
+    lengthField,
+    ...lengthNote,
   ];
-  fields.plug = [
-    ...shared,
-    { type: 'number', key: round.plugClearance, label: 'Зазор за діаметром, мм', suffix: '', range: diametralClearanceRange },
-  ];
-  fields.dowel = [
-    ...shared,
-    {
-      type: 'number',
-      key: round.dowelLowerClearance,
-      label: 'Зазор за діаметром у нижній частині, мм',
-      suffix: '',
-      range: diametralClearanceRange,
-    },
-    {
-      type: 'number',
-      key: round.dowelUpperClearance,
-      label: 'Зазор за діаметром у верхній частині, мм',
-      suffix: '',
-      range: diametralClearanceRange,
-    },
-  ];
+  const fields: Record<ConnectorChoice, ParameterField[]> = {
+    none: [],
+    dovetail: [
+      scaleNote,
+      millimetreField(dovetail.size, 'Висота виступу, мм'),
+      note(
+        'dovetail-widths',
+        `Ширина виступу: біля основи ${millimetres(height === undefined ? undefined : (height * DOVETAIL_PROPORTIONS.rootWidth) / DOVETAIL_PROPORTIONS.height)}, ` +
+          `угорі ${millimetres(height === undefined ? undefined : height * (2 + DOVETAIL_PROPORTIONS.rootWidth / DOVETAIL_PROPORTIONS.height))}.`,
+      ),
+      millimetreField(dovetail.length, 'Довжина виступу, мм'),
+      { type: 'number', key: dovetail.clearance, label: 'Зазор між поверхнями, мм', suffix: '', range: dovetailClearanceRange },
+    ],
+    plug: [
+      ...roundFields(millimetreField(round.depth, 'Висота виступу, мм'), []),
+      {
+        type: 'number',
+        key: round.plugClearance,
+        label: 'Збільшення діаметра отвору, мм',
+        suffix: '',
+        range: diametralClearanceRange,
+      },
+    ],
+    dowel: [
+      ...roundFields(millimetreField(round.depth, 'Повна довжина штифта, мм'), [
+        note('dowel-insertion', `У кожну половинку штифт входить на ${millimetres(shownHalf(shown(round.depth)))}.`),
+      ]),
+      {
+        type: 'number',
+        key: round.dowelLowerClearance,
+        label: 'Збільшення діаметра нижніх отворів, мм',
+        suffix: '',
+        range: diametralClearanceRange,
+      },
+      {
+        type: 'number',
+        key: round.dowelUpperClearance,
+        label: 'Збільшення діаметра верхніх отворів, мм',
+        suffix: '',
+        range: diametralClearanceRange,
+      },
+    ],
+  };
   const help: Record<ConnectorChoice, Help | undefined> = {
     none: undefined,
     dovetail: dovetailHelp,
@@ -645,6 +694,9 @@ function connectorSection(kind: 'cylinder', choices: ParameterChoices): Paramete
     }),
   ];
 }
+
+/** A dowel enters each part by half its whole length. */
+const shownHalf = (length: number | undefined) => (length === undefined ? undefined : length / 2);
 
 /**
  * "Переріз": optional, so the group starts collapsed with the chosen section in its summary. The position and the
@@ -796,7 +848,7 @@ export function shapePanel(kind: ShapeKind, choices: ParameterChoices, context: 
             },
             context,
           ),
-          ...(kind === 'cylinder' ? [planeSection(kind, choices), ...connectorSection(kind, choices)] : []),
+          ...(kind === 'cylinder' ? [planeSection(kind, choices), ...connectorSection(kind, choices, context)] : []),
         ],
       };
     }

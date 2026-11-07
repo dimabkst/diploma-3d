@@ -9,6 +9,7 @@ import PreviewPanel from './lib/components/PreviewPanel.svelte';
 import Select from './lib/components/Select.svelte';
 import { saveFile } from './lib/download.ts';
 import { buildModel } from './lib/model/buildModel.ts';
+import { type ConnectorScale, cylinderConnectorScale } from './lib/model/connectorScale.ts';
 import { describeModelError, type ModelState, visibleArtifacts } from './lib/model/modelState.ts';
 import {
   activeSection,
@@ -49,17 +50,33 @@ const parameterState = $derived<ParameterState>({
   exact: parameterExact,
   tiltModes,
 });
+// The last valid scale of the cylinder, so that its connector settings stay in millimetres while the print size or the
+// cylinder is being corrected.
+let lastConnectorScale = $state.raw<ConnectorScale | undefined>();
 const request = $derived(
   selectedKind === undefined
     ? undefined
-    : resolveModelRequest(selectedKind, parameterTexts, parameterChoices, { exact: parameterExact, tiltModes }),
+    : resolveModelRequest(selectedKind, parameterTexts, parameterChoices, {
+        exact: parameterExact,
+        tiltModes,
+        connectorScale: lastConnectorScale,
+      }),
 );
+const connectorScale = $derived(cylinderConnectorScale(request?.values ?? {}) ?? lastConnectorScale);
+$effect.pre(() => {
+  const current = cylinderConnectorScale(request?.values ?? {});
+  // Only a different scale is stored: the request reads it, so storing an equal copy would recompute it in a loop.
+  const last = untrack(() => lastConnectorScale);
+  if (current !== undefined && (current.longestDimensionMm !== last?.longestDimensionMm || current.radiusMm !== last?.radiusMm)) {
+    lastConnectorScale = current;
+  }
+});
 // Texts that denote the same specification ("1,5" and "1.50") share a key and do not trigger a rebuild.
 const requestKey = $derived(request?.key);
 const panel = $derived(
   selectedKind === undefined
     ? { type: 'fixed' as const, note: '' }
-    : shapePanel(selectedKind, parameterChoices, { tiltModes, values: request?.values }),
+    : shapePanel(selectedKind, parameterChoices, { tiltModes, values: request?.values, connectorScale }),
 );
 const invalidFields = $derived(
   [printSizeField, ...(panel.type === 'fixed' ? [] : panel.sections.flatMap(sectionNumberFields))]

@@ -63,20 +63,25 @@ test('cylinder: plugs and dowels sit in their own group under the section and ex
   const selector = await documentBox(entry(page, 'Тип кріплення'));
   expect(selector.y).toBeGreaterThan(explanation.y + explanation.height);
 
-  // One plug: d = 5 mm, e = 4 mm at M = 80 mm.
+  // One plug, in millimetres at M = 80 mm: d = 5 mm, 4 mm above the cut.
   await entry(page, 'Тип кріплення').selectOption({ label: 'Виступ і отвір' });
   await expect(entry(page, 'Кількість')).toHaveValue('1');
-  await expect(connector.getByText(/повертатися навколо його осі/)).toBeVisible();
-  await expect(entry(page, 'Відстань від центра, % радіуса')).toHaveCount(0);
-  for (const [label, min, max] of [
-    ['Товщина кріплення', '0.75', '1.5'],
-    ['Глибина з’єднання', '0.75', '1.5'],
-    ['Зазор за діаметром, мм', '0', '0.4'],
+  await expect(
+    connector.getByText(
+      'Одне кругле кріплення дозволяє повертати половинки. Два кріплення різного діаметра задають їхнє взаємне положення.',
+    ),
+  ).toBeVisible();
+  await expect(connector.getByText(/^Показано фактичні розміри для поточного масштабу моделі\./)).toBeVisible();
+  await expect(entry(page, 'Від центра до осі кріплення, мм')).toHaveCount(0);
+  for (const [label, value, min, max] of [
+    ['Діаметр виступу, мм', '5', '3.75', '7.5'],
+    ['Висота виступу, мм', '4', '3', '6'],
+    ['Збільшення діаметра отвору, мм', '0,2', '0', '0.4'],
   ] as const) {
+    await expect(entry(page, label)).toHaveValue(value);
     await expect(slider(page, label)).toHaveAttribute('min', min);
     await expect(slider(page, label)).toHaveAttribute('max', max);
   }
-  await expect(entry(page, 'Зазор за діаметром, мм')).toHaveValue('0,2');
   await expectPartsPreview(page);
   let file = await download(page);
   expect(file.names).toEqual(['cylinder-lower-part', 'cylinder-upper-part']);
@@ -90,21 +95,37 @@ test('cylinder: plugs and dowels sit in their own group under the section and ex
   expect(Math.abs(apart - (await viewerHeightMm(page)) - 40)).toBeLessThan(0.05);
   await separation(page).check();
 
-  // A pair adds its spacing.
+  // A pair adds its second diameter and the distance of its axes from the centre: 0,45 × 40 = 18 mm.
   await entry(page, 'Кількість').selectOption({ label: '2' });
-  await expect(entry(page, 'Відстань від центра, % радіуса')).toHaveValue('45');
-  await expect(slider(page, 'Відстань від центра, % радіуса')).toHaveAttribute('min', '25');
-  await expect(slider(page, 'Відстань від центра, % радіуса')).toHaveAttribute('max', '65');
+  await expect(connector.getByText('Друге кріплення: діаметр 4 мм.')).toBeVisible();
+  await expect(entry(page, 'Від центра до осі кріплення, мм')).toHaveValue('18');
+  await expect(slider(page, 'Від центра до осі кріплення, мм')).toHaveAttribute('min', '10');
+  await expect(slider(page, 'Від центра до осі кріплення, мм')).toHaveAttribute('max', '26');
   await expectPartsPreview(page);
   expect((await download(page)).names).toHaveLength(2);
 
-  // Dowels: separate objects, upright, 2e = 8 mm long, d and 0,8d wide; their own clearances.
+  // Dowels: separate objects, upright, 8 mm long, d and 0,8d wide; their own hole sizes.
   await entry(page, 'Тип кріплення').selectOption({ label: 'Знімні штифти' });
-  await expect(entry(page, 'Зазор за діаметром у нижній частині, мм')).toHaveValue('0,1');
-  await expect(entry(page, 'Зазор за діаметром у верхній частині, мм')).toHaveValue('0,2');
-  await expect(entry(page, 'Зазор за діаметром, мм')).toHaveCount(0);
+  await expect(entry(page, 'Діаметр штифта, мм')).toHaveValue('5');
+  await expect(entry(page, 'Повна довжина штифта, мм')).toHaveValue('8');
+  await expect(connector.getByText('У кожну половинку штифт входить на 4 мм.')).toBeVisible();
+  await expect(entry(page, 'Збільшення діаметра нижніх отворів, мм')).toHaveValue('0,1');
+  await expect(entry(page, 'Збільшення діаметра верхніх отворів, мм')).toHaveValue('0,2');
+  await expect(entry(page, 'Збільшення діаметра отвору, мм')).toHaveCount(0);
   await expectPartsPreview(page);
   file = await download(page);
+  // Visiting every field without changing it changes nothing: the file is the same, byte for byte.
+  const untouched = await (async () => {
+    const [saved] = await Promise.all([page.waitForEvent('download'), partsButton(page).click()]);
+    return readFile(await saved.path());
+  })();
+  for (const label of ['Діаметр штифта, мм', 'Від центра до осі кріплення, мм', 'Повна довжина штифта, мм']) {
+    await entry(page, label).focus();
+    await entry(page, label).press('Tab');
+  }
+  await expectPartsPreview(page);
+  const [revisited] = await Promise.all([page.waitForEvent('download'), partsButton(page).click()]);
+  expect(await readFile(await revisited.path())).toEqual(untouched);
   expect(file.names).toEqual(['cylinder-lower-part', 'cylinder-upper-part', 'cylinder-dowel-1', 'cylinder-dowel-2']);
   expect(file.objects[0]?.size[2]).toBeCloseTo(40, 3);
   expect(
@@ -113,6 +134,27 @@ test('cylinder: plugs and dowels sit in their own group under the section and ex
     [5, 8],
     [4, 8],
   ]);
+  // The length field is the whole dowel: 10 mm puts 5 mm into each part.
+  await entry(page, 'Повна довжина штифта, мм').fill('10');
+  await expect(connector.getByText('У кожну половинку штифт входить на 5 мм.')).toBeVisible();
+  await expectPartsPreview(page);
+  expect((await download(page)).objects[2]?.size[2]).toBeCloseTo(10, 3);
+  // A larger print size scales the connector with the model: at M = 120 mm the same settings are 7,5 mm and 15 mm.
+  await page.getByLabel('Найбільший габарит', { exact: true }).fill('120');
+  await expect(entry(page, 'Діаметр штифта, мм')).toHaveValue('7,5');
+  await expect(entry(page, 'Повна довжина штифта, мм')).toHaveValue('15');
+  await expect(entry(page, 'Збільшення діаметра верхніх отворів, мм')).toHaveValue('0,2');
+  await expect(dimensionsLine(page)).toHaveText('Габарити в зборі: 120 × 120 × 120 мм', { timeout: 30_000 });
+  await expect(partsButton(page)).toBeEnabled({ timeout: 30_000 });
+  const scaled = await download(page);
+  expect(
+    scaled.objects.slice(2).map((object) => [object.size[0], object.size[2]].map((value) => Number(value.toFixed(3)))),
+  ).toEqual([
+    [7.5, 15],
+    [6, 15],
+  ]);
+  await page.getByLabel('Найбільший габарит', { exact: true }).fill('80');
+  await entry(page, 'Повна довжина штифта, мм').fill('8');
   await entry(page, 'Кількість').selectOption({ label: '1' });
   await expectPartsPreview(page);
   expect((await download(page)).names).toEqual(['cylinder-lower-part', 'cylinder-upper-part', 'cylinder-dowel-1']);
@@ -121,11 +163,11 @@ test('cylinder: plugs and dowels sit in their own group under the section and ex
   await entry(page, 'Тип кріплення').selectOption({ label: 'Виступ і отвір' });
   await entry(page, 'Кількість').selectOption({ label: '2' });
   await page.getByLabel('Найбільший габарит', { exact: true }).fill('60');
-  await entry(page, 'Зазор за діаметром, мм').fill('0,4');
+  await entry(page, 'Збільшення діаметра отвору, мм').fill('0,4');
   await expect(page.getByText(/^Більший виступ ширший за менший отвір на 0,35 мм/)).toBeVisible();
   await expect(previewViewport(page)).toHaveAttribute('data-preview-status', 'invalid');
   await expect(partsButton(page)).toBeDisabled();
-  await entry(page, 'Зазор за діаметром, мм').fill('0,2');
+  await entry(page, 'Збільшення діаметра отвору, мм').fill('0,2');
   await expect(partsButton(page)).toBeEnabled({ timeout: 30_000 });
 
   // The reset returns to no connector and its defaults and keeps the print size.
@@ -136,7 +178,7 @@ test('cylinder: plugs and dowels sit in their own group under the section and ex
   await expect(entry(page, 'Тип кріплення')).toHaveValue('none');
   await entry(page, 'Тип кріплення').selectOption({ label: 'Знімні штифти' });
   await expect(entry(page, 'Кількість')).toHaveValue('1');
-  await expect(entry(page, 'Товщина кріплення')).toHaveValue('1');
+  await expect(entry(page, 'Діаметр штифта, мм')).toHaveValue('3,75');
 
   expect(errors).toEqual([]);
 });
