@@ -1,12 +1,20 @@
-import type { CylinderShape, DovetailConnector, PhysicalScale } from '@diploma-3d/schema';
+import { type CylinderShape, DOVETAIL_CLEARANCE_LIMITS, type DovetailConnector, type PhysicalScale } from '@diploma-3d/schema';
 import type { Vec3 as KernelVec3, Manifold } from 'manifold-3d';
 import { ConnectorVerificationError, GeometryError } from '../errors.ts';
 import type { GeometryKernel } from '../kernel.ts';
 import type { Vec3 } from '../mesh.ts';
 import type { Track } from '../scope.ts';
 import type { Vec2 } from '../shapes/polygon.ts';
-import { roundDimensionsMm } from '../shapes/round.ts';
-import { CONNECTOR_MIN_WALL_MM, connectorVolumeTolerance, cylinderSection, framePoint, type SectionFrame } from './frame.ts';
+import { type ConnectorFeasibility, connectorFeasibility } from './bounds.ts';
+import {
+  CONNECTOR_MIN_WALL_MM,
+  type CylinderSection,
+  connectorVolumeTolerance,
+  cylinderSection,
+  framePoint,
+  type SectionFrame,
+  satisfies,
+} from './frame.ts';
 
 /**
  * Initial experimental proportions for print trials, relative to the longest dimension M of the assembled model and the
@@ -17,10 +25,18 @@ export const DOVETAIL_PROPORTIONS = { height: 0.025, rootWidth: 0.075 } as const
 
 /**
  * Conservative thresholds for first trials with a 0,4 mm nozzle, not a strength guarantee: the tongue's height, its
- * narrowest width (the neck at the cut), every load-bearing wall of the parts, and the undercut that keeps the head
- * behind the groove's neck on each side once the clearance is taken up.
+ * narrowest width (the neck at the cut), every load-bearing wall of the parts, the undercut that keeps the head behind
+ * the groove's neck on each side once the clearance is taken up, and the straight working length of the tongue after
+ * its lead-in chamfer. The last has no established project value; it takes the wall's 1,2 mm as an experimental
+ * minimum feature.
  */
-export const DOVETAIL_MINIMUMS_MM = { tongueHeight: 1.2, neckWidth: 2.4, wall: CONNECTOR_MIN_WALL_MM, undercut: 0.4 } as const;
+export const DOVETAIL_MINIMUMS_MM = {
+  tongueHeight: 1.2,
+  neckWidth: 2.4,
+  wall: CONNECTOR_MIN_WALL_MM,
+  undercut: 0.4,
+  straightLength: CONNECTOR_MIN_WALL_MM,
+} as const;
 
 /** How far the tongue reaches into the lower part below the cut, so that the union does not rest on coplanar faces. */
 export const DOVETAIL_ROOT_OVERLAP_MM = 0.2;
@@ -34,16 +50,19 @@ export const DOVETAIL_EXIT_MARGIN_MM = 1;
 /** The section's frame; u is the sliding direction. */
 export type DovetailFrame = SectionFrame;
 
-/** A combination that cannot carry the connection, with the value that fails its minimum. */
-export type DovetailIssue =
-  | { readonly code: 'tongue-too-low'; readonly valueMm: number; readonly minimumMm: number }
-  | { readonly code: 'neck-too-narrow'; readonly valueMm: number; readonly minimumMm: number }
-  | { readonly code: 'undercut-lost'; readonly valueMm: number; readonly minimumMm: number }
-  | { readonly code: 'tongue-outside-section' }
-  | { readonly code: 'side-walls-thin'; readonly valueMm: number; readonly minimumMm: number }
-  | { readonly code: 'stop-thin'; readonly valueMm: number; readonly minimumMm: number }
-  | { readonly code: 'backing-thin'; readonly valueMm: number; readonly minimumMm: number }
-  | { readonly code: 'base-thin'; readonly valueMm: number; readonly minimumMm: number };
+/** A constraint of the connection with its measured value; an issue when that value falls short of its minimum. */
+export interface DovetailIssue {
+  readonly code:
+    | 'tongue-too-low'
+    | 'neck-too-narrow'
+    | 'undercut-lost'
+    | 'tongue-too-short'
+    | 'groove-wall-thin'
+    | 'backing-thin'
+    | 'base-thin';
+  readonly valueMm: number;
+  readonly minimumMm: number;
+}
 
 export interface DovetailPlan {
   readonly type: 'dovetail';
@@ -79,8 +98,12 @@ const hullOf = (kernel: GeometryKernel, points: readonly Vec3[]): Manifold =>
 
 /** h, b and B in millimetres for the multiplier k and the assembled model's longest dimension M. */
 export function dovetailProfileMm(sizeFactor: number, longestDimensionMm: number) {
-  const height = DOVETAIL_PROPORTIONS.height * longestDimensionMm * sizeFactor;
-  const rootWidth = DOVETAIL_PROPORTIONS.rootWidth * longestDimensionMm * sizeFactor;
+  return dovetailProfileOfHeight(DOVETAIL_PROPORTIONS.height * longestDimensionMm * sizeFactor);
+}
+
+/** b = 3h and B = b + 2h for the tongue's height h. */
+export function dovetailProfileOfHeight(height: number) {
+  const rootWidth = (DOVETAIL_PROPORTIONS.rootWidth / DOVETAIL_PROPORTIONS.height) * height;
   return { height, rootWidth, headWidth: rootWidth + 2 * height };
 }
 
@@ -126,10 +149,75 @@ export function isStrictlyConvex(points: readonly Vec2[]): boolean {
   });
 }
 
-/** The v coordinate of the polygon's right edge at height n, between its right-hand vertices 1 and 2. */
-function rightEdgeAt(profile: readonly Vec2[], n: number): number {
-  const [[v1, n1], [v2, n2]] = [profile[1] as Vec2, profile[2] as Vec2];
-  return v1 + ((v2 - v1) * (n - n1)) / (n2 - n1);
+/** The physical dimensions that the constraints read, in millimetres. */
+export interface DovetailDimensions {
+  /** h, normal to the cut; b and B follow from it. */
+  readonly height: number;
+  /** The tongue's length along u, centred on the section. */
+  readonly length: number;
+  /** c, between each pair of mating surfaces. */
+  readonly clearance: number;
+}
+
+/**
+ * The groove's extent, from the implemented profiles: the tongue offset by c normal to each edge. The 45° flanks move
+ * by c·√2 across, so the groove is b/2 + c·√2 wide on each side at the cut, and its top corners, at n = h + c, lie
+ * b/2 + h + c·(1 + √2) from the centre plane; the tests compare both with the offset polygon.
+ */
+function grooveExtent({ height, clearance }: DovetailDimensions) {
+  const { rootWidth, headWidth } = dovetailProfileOfHeight(height);
+  return {
+    neckHalfWidth: rootWidth / 2 + clearance * Math.SQRT2,
+    halfWidth: headWidth / 2 + clearance * (1 + Math.SQRT2),
+    top: height + clearance,
+  };
+}
+
+/**
+ * Every construction constraint of the dovetail, satisfied or not, always the same ones in the same order, so that the
+ * bounds of each dimension can be solved from them (see `dovetailFeasibility`).
+ *
+ * - The tongue is at least 1,2 mm high and 2,4 mm wide at its neck.
+ * - The undercut B/2 − (b/2 + c·√2) = h − c·√2 keeps at least 0,4 mm on each side once the clearance is taken up.
+ * - After its lead-in chamfer the tongue keeps a straight working length L − 0,25·h of at least 1,2 mm.
+ * - Around the groove's closed end at u = L/2 + c, its top corners stay at least 1,2 mm inside the polygon's inscribed
+ *   circle, measured radially from the section's centre moved by an oblique cylinder's lean at the groove's top. These
+ *   corners are the groove's farthest points beyond the entrance, so the walls beside the engaged groove and the stop
+ *   behind it are at least as thick; the open channel towards the entrance is intentional. For a right cylinder this is
+ *   L ≤ 2·(√((R − w)² − A²) − c), with A the groove's half width at its top and R the inscribed radius.
+ * - Over the groove the upper part keeps 1,2 mm, under the tongue's root overlap the lower part too.
+ *
+ * Each value is monotone in h, L and c, which the bounds rely on.
+ */
+export function dovetailChecks(section: CylinderSection, dimensions: DovetailDimensions): DovetailIssue[] {
+  const { inradius, leanAcross, lowerThickness, upperThickness } = section;
+  const { height, length, clearance } = dimensions;
+  const { rootWidth, headWidth } = dovetailProfileOfHeight(height);
+  const groove = grooveExtent(dimensions);
+  const { tongueHeight, neckWidth, wall, undercut, straightLength } = DOVETAIL_MINIMUMS_MM;
+  const corner = Math.hypot(length / 2 + clearance, groove.halfWidth + leanAcross * groove.top);
+  return [
+    { code: 'tongue-too-low', valueMm: height, minimumMm: tongueHeight },
+    { code: 'neck-too-narrow', valueMm: rootWidth, minimumMm: neckWidth },
+    { code: 'undercut-lost', valueMm: headWidth / 2 - groove.neckHalfWidth, minimumMm: undercut },
+    { code: 'tongue-too-short', valueMm: length - DOVETAIL_LEAD_IN_RELATIVE * height, minimumMm: straightLength },
+    { code: 'groove-wall-thin', valueMm: inradius - corner, minimumMm: wall },
+    { code: 'backing-thin', valueMm: upperThickness - groove.top, minimumMm: wall },
+    { code: 'base-thin', valueMm: lowerThickness - DOVETAIL_ROOT_OVERLAP_MM, minimumMm: wall },
+  ];
+}
+
+/** The settings in millimetres: h from M, and L as its percentage of the diameter 2r along u. */
+export function dovetailDimensions(
+  connector: DovetailConnector,
+  longestDimensionMm: number,
+  radiusMm: number,
+): DovetailDimensions {
+  return {
+    height: dovetailProfileMm(connector.sizeFactor, longestDimensionMm).height,
+    length: (connector.lengthPercent / 100) * 2 * radiusMm,
+    clearance: connector.clearanceMm,
+  };
 }
 
 /**
@@ -140,12 +228,7 @@ function rightEdgeAt(profile: readonly Vec2[], n: number): number {
  * The sliding direction u is perpendicular to the lean, +Y for every cylinder, so that the lean only moves each section
  * across the groove and the tongue's length runs along a full diameter. The groove opens towards −u and is closed by a
  * stop at +u: the upper part goes on by sliding along −u until the stop meets the tongue, which then leaves the
- * clearance c between them in the assembled position.
- *
- * Walls are measured on the polygon's inscribed circle of radius r·cos(π/N), over the heights the groove occupies, with
- * each horizontal section of the oblique cylinder moved by its lean. The entrance and the open channel before it are
- * intentional openings; only the walls beside the engaged groove, the stop, the material above the groove and under
- * the tongue carry load.
+ * clearance c between them in the assembled position. See `dovetailChecks` for the constraints.
  */
 export function planDovetail(
   shape: CylinderShape,
@@ -153,36 +236,12 @@ export function planDovetail(
   positionPercent: number,
   connector: DovetailConnector,
 ): DovetailPlan {
-  const { radius: r } = roundDimensionsMm(shape, scale);
-  const { frame, inradius, leanAcross, lowerThickness, upperThickness } = cylinderSection(shape, scale, positionPercent);
-
-  const { height, rootWidth, headWidth } = dovetailProfileMm(connector.sizeFactor, scale.longestDimensionMm);
-  const clearance = connector.clearanceMm;
-  const tongueLength = (connector.lengthPercent / 100) * 2 * r;
+  const section = cylinderSection(shape, scale, positionPercent);
+  const { frame, radius: r } = section;
+  const dimensions = dovetailDimensions(connector, scale.longestDimensionMm, r);
+  const { height, length: tongueLength, clearance } = dimensions;
+  const { rootWidth, headWidth } = dovetailProfileOfHeight(height);
   const tongueProfile = tongueProfileOf(height, rootWidth, DOVETAIL_ROOT_OVERLAP_MM);
-  const grooveProfile = offsetConvexPolygon(tongueProfile, [clearance, clearance, clearance, clearance]);
-  const grooveHalfWidth = Math.max(...grooveProfile.map(([gv]) => Math.abs(gv)));
-  const grooveTop = Math.max(...grooveProfile.map(([, gn]) => gn));
-  const engagedEnd = tongueLength / 2 + clearance;
-  const undercut = headWidth / 2 - rightEdgeAt(grooveProfile, 0);
-
-  const { tongueHeight, neckWidth, wall, undercut: minimumUndercut } = DOVETAIL_MINIMUMS_MM;
-  const issues: DovetailIssue[] = [];
-  const atLeast = (code: Exclude<DovetailIssue['code'], 'tongue-outside-section'>, valueMm: number, minimumMm: number) => {
-    if (!(valueMm >= minimumMm)) issues.push({ code, valueMm, minimumMm });
-  };
-  atLeast('tongue-too-low', height, tongueHeight);
-  atLeast('neck-too-narrow', rootWidth, neckWidth);
-  atLeast('undercut-lost', undercut, minimumUndercut);
-  const headReach = headWidth / 2 + leanAcross * height;
-  if ((tongueLength / 2) ** 2 + headReach ** 2 > inradius ** 2) issues.push({ code: 'tongue-outside-section' });
-  const chord = (distance: number) => Math.sqrt(Math.max(0, inradius ** 2 - distance ** 2));
-  const across = grooveHalfWidth + leanAcross * grooveTop;
-  atLeast('side-walls-thin', chord(engagedEnd) - across, wall);
-  atLeast('stop-thin', chord(across) - engagedEnd, wall);
-  atLeast('backing-thin', upperThickness - grooveTop, wall);
-  atLeast('base-thin', lowerThickness - DOVETAIL_ROOT_OVERLAP_MM, wall);
-
   return {
     type: 'dovetail',
     frame,
@@ -193,13 +252,53 @@ export function planDovetail(
     clearance,
     leadIn: DOVETAIL_LEAD_IN_RELATIVE * height,
     tongueProfile,
-    grooveProfile,
+    grooveProfile: offsetConvexPolygon(tongueProfile, [clearance, clearance, clearance, clearance]),
     // The upper part reaches r from the section's centre along u, which is perpendicular to the lean.
-    exitDistance: r + engagedEnd + DOVETAIL_EXIT_MARGIN_MM,
+    exitDistance: r + tongueLength / 2 + clearance + DOVETAIL_EXIT_MARGIN_MM,
     normalPlay: clearance * Math.SQRT2,
-    undercut,
-    issues,
+    undercut: headWidth / 2 - grooveExtent(dimensions).neckHalfWidth,
+    issues: dovetailChecks(section, dimensions).filter((check) => !satisfies(check)),
   };
+}
+
+/** The dovetail's dimensions in millimetres, each solved for with the others fixed. */
+export type DovetailParameter = 'height' | 'length' | 'clearance';
+
+/**
+ * Which values of each dimension the current cylinder, cut and other dimensions allow, from the same checks that
+ * `planDovetail` applies. The search envelopes follow from the model and the minimum tongue height: a height from half
+ * that minimum, where the profile is still a convex polygon, and a length up to the section's diameter 2r; the
+ * clearance stays within its calibration window, a policy for print trials rather than a geometric limit.
+ */
+export function dovetailFeasibility(
+  shape: CylinderShape,
+  scale: PhysicalScale,
+  positionPercent: number,
+  connector: DovetailConnector,
+): ConnectorFeasibility<DovetailParameter, DovetailIssue> {
+  const section = cylinderSection(shape, scale, positionPercent);
+  const dimensions = dovetailDimensions(connector, scale.longestDimensionMm, section.radius);
+  const lowest = DOVETAIL_MINIMUMS_MM.tongueHeight / 2;
+  return connectorFeasibility((current) => dovetailChecks(section, current), dimensions, [
+    {
+      key: 'height',
+      envelope: { min: lowest, max: Math.max(2 * section.radius, 2 * lowest) },
+      value: dimensions.height,
+      with: (current, height) => ({ ...current, height }),
+    },
+    {
+      key: 'length',
+      envelope: { min: 0, max: 2 * section.radius },
+      value: dimensions.length,
+      with: (current, length) => ({ ...current, length }),
+    },
+    {
+      key: 'clearance',
+      envelope: DOVETAIL_CLEARANCE_LIMITS,
+      value: dimensions.clearance,
+      with: (current, clearance) => ({ ...current, clearance }),
+    },
+  ]);
 }
 
 const ring = (frame: DovetailFrame, profile: readonly Vec2[], along: number): Vec3[] =>

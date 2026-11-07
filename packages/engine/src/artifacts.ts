@@ -4,7 +4,7 @@ import { arrangeInRow, rotateHalfTurn } from './export/layout.ts';
 import type { ThreeMfObject } from './export/three-mf.ts';
 import { createThreeMf } from './export/three-mf.ts';
 import type { GeometryKernel } from './kernel.ts';
-import type { Vec3 } from './mesh.ts';
+import { type Vec3, vertexAt, vertexCount } from './mesh.ts';
 import { type GeneratedModel, generateModel } from './model.ts';
 
 export interface ModelArtifacts {
@@ -28,7 +28,8 @@ export const SECTION_PREVIEW_GAP_RELATIVE = 0.15;
 /**
  * The same for plugs and dowels, which come apart along the normal: from the default viewing direction, about 28°
  * above the cut, the upper part must rise about half the cut's diameter to uncover nearly all of the lower part's cut
- * face, with the plugs or seated dowels on it, also those on the far side.
+ * face, with the plugs or seated dowels on it, also those on the far side. A minimum: a longer connector raises the
+ * upper part further, see `previewSeparation`.
  */
 export const CONNECTOR_PREVIEW_GAP_RELATIVE = 0.5;
 
@@ -43,9 +44,33 @@ export async function buildModelArtifacts(kernel: GeometryKernel, spec: ModelSpe
   const printFile = { fileName: `${model.name}.3mf`, bytes: createThreeMf(objects, { title: model.name }) };
   const previewGlb = await createPreviewGlb(previewObjects(model, 0));
   if (model.section === undefined) return { model, previewGlb, printFile };
-  const round = model.section.connector !== undefined && model.section.connector.type !== 'dovetail';
-  const gap = (round ? CONNECTOR_PREVIEW_GAP_RELATIVE : SECTION_PREVIEW_GAP_RELATIVE) * Math.max(...model.size);
-  return { model, previewGlb, separatedPreviewGlb: await createPreviewGlb(previewObjects(model, gap)), printFile };
+  const separatedPreviewGlb = await createPreviewGlb(previewObjects(model, previewSeparation(model)));
+  return { model, previewGlb, separatedPreviewGlb, printFile };
+}
+
+/**
+ * How far the separated preview moves the upper part, from the generated parts: SECTION_PREVIEW_GAP_RELATIVE·M for
+ * flat cut faces and for a dovetail, which first slides off its tongue; for plugs and dowels at least
+ * CONNECTOR_PREVIEW_GAP_RELATIVE·M, and more when what stands on the lower part, a plug or the seated dowels, reaches
+ * higher above the cut than that less the flat cut's gap, so that the upper part clears it by that gap. Only display
+ * nodes move, so neither the meshes nor the print file depend on it.
+ */
+export function previewSeparation({ solids, section, size }: GeneratedModel): number {
+  const longest = Math.max(...size);
+  const connector = section?.connector;
+  if (section === undefined || connector === undefined || connector.type === 'dovetail') {
+    return SECTION_PREVIEW_GAP_RELATIVE * longest;
+  }
+  const { normal, offset } = section.plane;
+  let reach = 0;
+  for (const { mesh, part } of solids) {
+    if (part === 'upper') continue;
+    for (let vertex = 0; vertex < vertexCount(mesh); vertex += 1) {
+      const [x, y, z] = vertexAt(mesh, vertex);
+      reach = Math.max(reach, normal[0] * x + normal[1] * y + normal[2] * z - offset);
+    }
+  }
+  return Math.max(CONNECTOR_PREVIEW_GAP_RELATIVE * longest, reach + SECTION_PREVIEW_GAP_RELATIVE * longest);
 }
 
 /**

@@ -195,15 +195,15 @@ describe('planDovetail', () => {
       10,
       dovetail({ sizeFactor: 1.5, clearanceMm: 0.1, lengthPercent: 25 }),
       40,
-      ['side-walls-thin'],
+      ['groove-wall-thin'],
     ],
     [
-      'with thin walls and stop where the lean moves the section',
+      'with thin walls around the closed end where the lean moves the section',
       cylinder(1, 1.866),
       50,
       dovetail({ sizeFactor: 1.5, clearanceMm: 0.4 }),
       40,
-      ['side-walls-thin', 'stop-thin'],
+      ['groove-wall-thin'],
     ],
     [
       'that leaves the section of a flat oblique cylinder',
@@ -211,7 +211,15 @@ describe('planDovetail', () => {
       50,
       dovetail({ sizeFactor: 1.5, clearanceMm: 0.1 }),
       40,
-      ['tongue-outside-section', 'side-walls-thin', 'stop-thin', 'backing-thin'],
+      ['groove-wall-thin', 'backing-thin'],
+    ],
+    [
+      'too short for a straight working length after the lead-in',
+      cylinder(2),
+      50,
+      dovetail({ lengthPercent: 2 }),
+      80,
+      ['tongue-too-short'],
     ],
     [
       'with the undercut taken by the clearance',
@@ -224,14 +232,12 @@ describe('planDovetail', () => {
   ] as const)('rejects a dovetail %s', (_, shape, position, connector, longest, codes) => {
     const { issues } = planDovetail(shape, { longestDimensionMm: longest }, position, connector);
     expect(issues.map((issue) => issue.code)).toEqual(codes);
-    for (const issue of issues) {
-      if ('minimumMm' in issue) expect(issue.valueMm).toBeLessThan(issue.minimumMm);
-    }
+    for (const issue of issues) expect(issue.valueMm).toBeLessThan(issue.minimumMm);
   });
 
   it('accepts the default dovetail on the default cylinder and keeps every margin above its minimum', () => {
     expect(planDovetail(cylinder(2), { longestDimensionMm: 80 }, 50, dovetail()).issues).toEqual([]);
-    expect(DOVETAIL_MINIMUMS_MM).toEqual({ tongueHeight: 1.2, neckWidth: 2.4, wall: 1.2, undercut: 0.4 });
+    expect(DOVETAIL_MINIMUMS_MM).toEqual({ tongueHeight: 1.2, neckWidth: 2.4, wall: 1.2, undercut: 0.4, straightLength: 1.2 });
   });
 
   it('refuses an unsuitable dovetail before building anything, without shrinking or moving it', () => {

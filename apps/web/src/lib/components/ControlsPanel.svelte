@@ -10,7 +10,6 @@ import {
   type ParameterKey,
   type ParameterTexts,
   type ParameterValues,
-  scaledConnectorSettings,
   type TrapezoidAlignment,
 } from '../model/parameters.ts';
 import type { TiltMode, TiltSolid } from '../model/tilt.ts';
@@ -66,7 +65,7 @@ let drafts = $state<Partial<Record<ParameterKey, string>>>({});
 
 function enterMillimetres(key: ParameterKey, typed: string, unit: number) {
   if (!isScaledConnectorKey(key)) return;
-  texts[key] = storedText(typed, unit, scaledConnectorSettings[key].limits);
+  texts[key] = storedText(typed, unit);
   if (shownText(texts[key], unit) === typed) delete drafts[key];
   else drafts[key] = typed;
 }

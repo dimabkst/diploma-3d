@@ -29,12 +29,12 @@ import {
   activeSection,
   type ChoiceKey,
   type ConnectorChoice,
+  type ConnectorRanges,
   canSwitchTiltMode,
   type ParameterChoices,
   type ParameterKey,
   type ParameterValues,
   type SectionChoice,
-  scaledConnectorSettings,
   sectionKeys,
   type ToggleKey,
 } from './model/parameters.ts';
@@ -71,8 +71,11 @@ export type NumericField = {
   readonly label: string;
   /** The unit after the entry, such as "× a" or "°"; empty when the label names it. */
   readonly suffix: string;
-  /** The allowed values, shared by the entry, the slider and the buttons, and the increment of their steps. */
-  readonly range: StepRange;
+  /**
+   * The allowed values, shared by the entry, the slider and the buttons, and the increment of their steps; undefined
+   * while no value is allowed, or while a connector's other settings are not valid numbers yet.
+   */
+  readonly range: StepRange | undefined;
   /**
    * For a setting stored as a multiplier or percentage but shown in millimetres: the millimetres per stored unit. The
    * entry, slider and range are then in millimetres, and what is typed is converted back.
@@ -343,6 +346,8 @@ export type PanelContext = {
   readonly values?: ParameterValues | undefined;
   /** The scale that turns connector settings into millimetres; the connector group needs it. */
   readonly connectorScale?: ConnectorScale | undefined;
+  /** The feasible millimetres of the connector's fields, see `ConnectorRanges`. */
+  readonly connectorRanges?: ConnectorRanges | undefined;
 };
 
 type TiltConfig = {
@@ -534,6 +539,11 @@ const DIMENSION_INCREMENT_MM = 0.25;
 const dovetailClearanceRange: StepRange = { ...DOVETAIL_CLEARANCE_LIMITS, increment: 0.05 };
 const diametralClearanceRange: StepRange = { ...DIAMETRAL_CLEARANCE_LIMITS, increment: 0.05 };
 
+const BOUNDS_HELP =
+  'Межі повзунків залежать від моделі, положення перерізу та інших розмірів кріплення: вони зберігають мінімальні ' +
+  'товщини стінок і довжини робочих ділянок. Ці межі означають лише, що кріплення можна побудувати; міцність і ' +
+  'зручність посадки перевіряє пробний друк.';
+
 const dovetailHelp: Help = {
   label: 'Як працює кріплення?',
   text:
@@ -541,7 +551,8 @@ const dovetailHelp: Help = {
     'упора. Для розбирання посуньте її назад. Похилі боки під кутом 45° утримують половинки від роз’єднання ' +
     'перпендикулярно до перерізу, але не блокують зворотне зсування.\n\n' +
     'Висота визначає, наскільки виступ піднімається над перерізом. Довжина вимірюється вздовж напряму насування. ' +
-    'Зазор — заданий у моделі проміжок між відповідними поверхнями виступу й паза.',
+    'Зазор — заданий у моделі проміжок між відповідними поверхнями виступу й паза.\n\n' +
+    BOUNDS_HELP,
 };
 
 const plugHelp: Help = {
@@ -552,7 +563,8 @@ const plugHelp: Help = {
     'Висота виступу визначає, наскільки він заходить у верхню частину. Отвір має додаткові 0,3 мм глибини, щоб його ' +
     'дно не заважало зімкнути половинки.\n\n' +
     'Збільшення діаметра отвору визначає, наскільки отвір ширший за виступ. Наприклад, для виступу діаметром 5 мм ' +
-    'значення 0,2 мм дає отвір діаметром 5,2 мм.',
+    'значення 0,2 мм дає отвір діаметром 5,2 мм.\n\n' +
+    BOUNDS_HELP,
 };
 
 const dowelHelp: Help = {
@@ -562,7 +574,8 @@ const dowelHelp: Help = {
     'Поле довжини задає повну довжину штифта. Номінально в кожну половинку входить половина цієї довжини. Кожен ' +
     'отвір має додаткові 0,3 мм глибини, тому штифт може трохи зміщуватися вздовж осі.\n\n' +
     'Розміри отворів нижньої та верхньої частин налаштовуються окремо. Наприклад, для штифта діаметром 5 мм ' +
-    'збільшення діаметра отвору на 0,2 мм дає отвір діаметром 5,2 мм.',
+    'збільшення діаметра отвору на 0,2 мм дає отвір діаметром 5,2 мм.\n\n' +
+    BOUNDS_HELP,
 };
 
 const SCALE_NOTE =
@@ -594,14 +607,26 @@ function connectorSection(kind: 'cylinder', choices: ParameterChoices, context: 
   };
   const { dovetail, round } = keys;
   const units = connectorUnits(scale, chosen === 'dowel' ? 'dowel' : 'plug');
-  /** A stored multiplier or percentage shown in millimetres, over its accepted range. */
+  /** The feasible range that the request computed; the calibration window, or nothing, until it can. */
+  const rangeOf = (key: ParameterKey, increment: number, fallback?: StepRange): StepRange | undefined => {
+    const interval = context.connectorRanges?.[key];
+    return interval === undefined ? fallback : physicalRange(interval, increment);
+  };
+  /** A stored multiplier or percentage shown in millimetres, over its feasible range. */
   const millimetreField = (key: ScaledConnectorKey, label: string): NumericField => ({
     type: 'number',
     key,
     label,
     suffix: '',
     unit: units[key],
-    range: physicalRange(scaledConnectorSettings[key].limits, units[key], DIMENSION_INCREMENT_MM),
+    range: rangeOf(key, DIMENSION_INCREMENT_MM),
+  });
+  const clearanceField = (key: ParameterKey, label: string, window: StepRange): NumericField => ({
+    type: 'number',
+    key,
+    label,
+    suffix: '',
+    range: rangeOf(key, window.increment, window),
   });
   const shown = (key: ScaledConnectorKey) => {
     const value = values[key];
@@ -649,36 +674,18 @@ function connectorSection(kind: 'cylinder', choices: ParameterChoices, context: 
           `угорі ${millimetres(height === undefined ? undefined : height * (2 + DOVETAIL_PROPORTIONS.rootWidth / DOVETAIL_PROPORTIONS.height))}.`,
       ),
       millimetreField(dovetail.length, 'Довжина виступу, мм'),
-      { type: 'number', key: dovetail.clearance, label: 'Зазор між поверхнями, мм', suffix: '', range: dovetailClearanceRange },
+      clearanceField(dovetail.clearance, 'Зазор між поверхнями, мм', dovetailClearanceRange),
     ],
     plug: [
       ...roundFields(millimetreField(round.depth, 'Висота виступу, мм'), []),
-      {
-        type: 'number',
-        key: round.plugClearance,
-        label: 'Збільшення діаметра отвору, мм',
-        suffix: '',
-        range: diametralClearanceRange,
-      },
+      clearanceField(round.plugClearance, 'Збільшення діаметра отвору, мм', diametralClearanceRange),
     ],
     dowel: [
       ...roundFields(millimetreField(round.depth, 'Повна довжина штифта, мм'), [
         note('dowel-insertion', `У кожну половинку штифт входить на ${millimetres(shownHalf(shown(round.depth)))}.`),
       ]),
-      {
-        type: 'number',
-        key: round.dowelLowerClearance,
-        label: 'Збільшення діаметра нижніх отворів, мм',
-        suffix: '',
-        range: diametralClearanceRange,
-      },
-      {
-        type: 'number',
-        key: round.dowelUpperClearance,
-        label: 'Збільшення діаметра верхніх отворів, мм',
-        suffix: '',
-        range: diametralClearanceRange,
-      },
+      clearanceField(round.dowelLowerClearance, 'Збільшення діаметра нижніх отворів, мм', diametralClearanceRange),
+      clearanceField(round.dowelUpperClearance, 'Збільшення діаметра верхніх отворів, мм', diametralClearanceRange),
     ],
   };
   const help: Record<ConnectorChoice, Help | undefined> = {

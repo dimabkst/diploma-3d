@@ -62,11 +62,12 @@ test('cylinder: a sliding dovetail joins the parts, previews them slid apart and
   await shapeSelect(page).selectOption({ label: 'Циліндр' });
   await chooseDovetail(page);
 
-  // The settings in millimetres at M = 80 mm and r = 40 mm, with their ranges; entry, slider and buttons share them.
+  // The settings in millimetres at M = 80 mm and r = 40 mm, with the ranges the cylinder allows for the other settings;
+  // entry, slider and buttons share them.
   await expect(parameterSection(page, 'Кріплення')).toHaveAttribute('open', '');
   for (const [label, value, min, max] of [
-    ['Висота виступу, мм', '2', '1.5', '3'],
-    ['Довжина виступу, мм', '40', '20', '48'],
+    ['Висота виступу, мм', '2', '1.2', '13.035'],
+    ['Довжина виступу, мм', '40', '1.7', '76.323'],
     ['Зазор між поверхнями, мм', '0,2', '0.1', '0.4'],
   ] as const) {
     await expect(entry(page, label)).toHaveValue(value);
@@ -105,27 +106,38 @@ test('cylinder: a sliding dovetail joins the parts, previews them slid apart and
   await expect(height).toHaveValue('2,20');
   await height.press('Tab');
   await expect(height).toHaveValue('2,2');
+  // Beyond the former 3 mm limit: a 5 mm tongue builds, and a longer one narrows the height's range.
+  await height.fill('5');
+  await expect(partsButton(page)).toBeEnabled({ timeout: 30_000 });
+  expect((await downloadParts(page)).parts[0]?.size[2]).toBeCloseTo(45, 3);
+  await entry(page, 'Довжина виступу, мм').fill('70');
+  await expect(slider(page, 'Висота виступу, мм')).toHaveAttribute('max', '6.289');
+  await entry(page, 'Довжина виступу, мм').fill('40');
+  await height.fill('2,2');
 
   // Outside the range: refused as typed.
   await entry(page, 'Зазор між поверхнями, мм').fill('0,45');
   await expect(page.getByText('Допустимі значення — від 0,1 мм до 0,4 мм.')).toBeVisible();
   await expect(partsButton(page)).toBeDisabled();
   await entry(page, 'Зазор між поверхнями, мм').fill('0,2');
-  await height.fill('3,5');
-  await expect(page.getByText('Допустимі значення — від 1,5 мм до 3 мм.')).toBeVisible();
+  await height.fill('14');
+  await expect(page.getByText(/^Стінка біля закритого кінця паза — .* Зараз допустимо від 1,2 мм до 13,035 мм\.$/)).toBeVisible();
   await expect(partsButton(page)).toBeDisabled();
   await height.fill('2');
 
-  // The print size scales the connector with the model: at M = 60 mm the same setting is 1,5 mm high, in 1,125–2,25 mm.
+  // The print size scales the connector with the model: at M = 60 mm the same setting is 1,5 mm high, and the cylinder
+  // allows 1,2–9,574 mm.
   await page.getByLabel('Найбільший габарит', { exact: true }).fill('60');
   await expect(height).toHaveValue('1,5');
-  await expect(slider(page, 'Висота виступу, мм')).toHaveAttribute('min', '1.125');
-  await expect(slider(page, 'Висота виступу, мм')).toHaveAttribute('max', '2.25');
+  await expect(slider(page, 'Висота виступу, мм')).toHaveAttribute('min', '1.2');
+  await expect(slider(page, 'Висота виступу, мм')).toHaveAttribute('max', '9.574');
   await expect(entry(page, 'Довжина виступу, мм')).toHaveValue('30');
   // A combination that cannot carry the connector is explained; the stale preview is marked and cannot be downloaded.
   await height.fill('1,125');
   await expect(
-    page.getByText('Виступ заввишки 1,12 мм, потрібно щонайменше 1,2 мм. Збільште висоту виступу або найбільший габарит.'),
+    page.getByText(
+      'Виступ заввишки 1,12 мм, потрібно щонайменше 1,2 мм. Збільште висоту виступу. Зараз допустимо від 1,2 мм до 9,574 мм.',
+    ),
   ).toBeVisible();
   await expect(previewViewport(page)).toHaveAttribute('data-preview-status', 'invalid');
   await expect(page.getByText('Модель не оновлено')).toBeVisible();
@@ -163,7 +175,11 @@ test('oblique cylinder: the dovetail follows the displaced section; a thin upper
   await entry(page, 'Зміщення верхньої основи').fill('0');
   await entry(page, 'Висота h').fill('0,5');
   await entry(page, 'Від нижньої основи').fill('90');
-  await expect(page.getByText(/^Над пазом лишається 0 мм, потрібно щонайменше 1,2 мм верхньої частини\./)).toBeVisible();
+  // Both the height and the clearance explain it; no height fits, so its slider offers none.
+  await expect(page.getByText(/^Над пазом лишається 0 мм, потрібно щонайменше 1,2 мм верхньої частини\./)).toHaveCount(2);
+  await expect(slider(page, 'Висота виступу, мм')).toBeDisabled();
+  await expect(slider(page, 'Висота виступу, мм')).toHaveAttribute('aria-valuetext', 'немає допустимих значень');
+  await expect(entry(page, 'Висота виступу, мм')).toHaveValue('2');
   await expect(partsButton(page)).toBeDisabled();
   await entry(page, 'Від нижньої основи').fill('50');
   await expectPartsPreview(page, '80 × 80 × 20 мм');

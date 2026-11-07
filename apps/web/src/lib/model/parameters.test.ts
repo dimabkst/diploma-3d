@@ -16,7 +16,6 @@ import {
   partsSeparated,
   resetShapeParameters,
   resolveModelRequest,
-  scaledConnectorSettings,
   shapeParameterKeys,
   switchTiltMode,
   validateAngle,
@@ -1159,24 +1158,21 @@ describe('one range per control', () => {
     const initial = resolveModelRequest(kind, initialParameterTexts(), choices, options);
     // The defaults of every figure are valid in both modes.
     expect(initial.errors).toEqual({});
-    const panel = shapePanel(kind, choices, { tiltModes, values: initial.values });
+    const panel = shapePanel(kind, choices, { tiltModes, values: initial.values, connectorRanges: initial.connectorRanges });
     if (panel.type === 'fixed') throw new Error('A configurable figure has fields.');
     for (const field of panel.sections.flatMap(sectionNumberFields)) {
+      if (field.range === undefined) throw new Error(`${field.key} has no range at the defaults.`);
       const { min, max } = field.range;
       // A field shown in millimetres stores what its entry converts the millimetres to.
       const stored = (value: number) => {
         const text = formatSteppedDecimal(value);
         const { key, unit } = field;
-        return unit === undefined || !isScaledConnectorKey(key)
-          ? text
-          : storedText(text, unit, scaledConnectorSettings[key].limits);
+        return unit === undefined || !isScaledConnectorKey(key) ? text : storedText(text, unit);
       };
-      // For connector settings only the field's own range counts here: a connector may still not fit the solid at an
-      // allowed value, which the field then explains in its own words.
-      const rangeErrorAt = (value: number) => {
-        const error = resolveModelRequest(kind, texts({ [field.key]: stored(value) }), choices, options).errors[field.key];
-        return field.unit === undefined ? error !== undefined : (error?.startsWith('Допустимі значення') ?? false);
-      };
+      // A connector setting's range is what the solid, the cut and the other settings allow; the same check explains
+      // a value beyond it.
+      const rangeErrorAt = (value: number) =>
+        resolveModelRequest(kind, texts({ [field.key]: stored(value) }), choices, options).errors[field.key] !== undefined;
       expect(rangeErrorAt(min), `${field.key} at ${min}`).toBe(false);
       expect(rangeErrorAt(max), `${field.key} at ${max}`).toBe(false);
       // The direction wraps around; every other field rejects values beyond its ends.
@@ -1337,7 +1333,8 @@ describe('a dovetail joining the cylinder’s parts', () => {
   const request = (overrides: Partial<ParameterTexts>, choices: typeof triangle = joined) =>
     resolveModelRequest('cylinder', texts(overrides), choices);
   const groupsOf = (choices: typeof triangle) => {
-    const panel = shapePanel('cylinder', choices, { values: request({}, choices).values });
+    const { values, connectorRanges } = request({}, choices);
+    const panel = shapePanel('cylinder', choices, { values, connectorRanges });
     return panel.type === 'parameters' ? panel.sections : [];
   };
 
@@ -1374,7 +1371,8 @@ describe('a dovetail joining the cylinder’s parts', () => {
       positionPercent: 50,
       connector: { type: 'dovetail', sizeFactor: 1, lengthPercent: 50, clearanceMm: 0.2 },
     });
-    // At M = 80 mm and r = 40 mm: h = 0,025·80·k from 1,5 to 3 mm, L = 2r·p/100 from 20 to 48 mm.
+    // At M = 80 mm and r = 40 mm, h = 2 mm and L = 40 mm: h from the 1,2 mm minimum to where the groove's closed end
+    // keeps 1,2 mm of wall; L from the straight 1,2 mm after the 0,5 mm lead-in to the same wall.
     const settings = groupsOf(joined).find((group) => group.title === 'Кріплення');
     expect(settings?.fields.map((field) => [field.type, field.key])).toEqual([
       ['choice', 'cylinderConnector'],
@@ -1385,7 +1383,8 @@ describe('a dovetail joining the cylinder’s parts', () => {
       ['number', 'cylinderDovetailClearanceMm'],
     ]);
     expect(settings?.help?.text).toMatch(/^На нижній частині є виступ, у верхній — паз\./);
-    expect(settings?.help?.text).toMatch(/проміжок між відповідними поверхнями виступу й паза\.$/);
+    expect(settings?.help?.text).toMatch(/проміжок між відповідними поверхнями виступу й паза\.\n\nМежі повзунків/);
+    expect(settings?.help?.text).toMatch(/міцність і зручність посадки перевіряє пробний друк\.$/);
     expect(
       sectionNumberFields(settings as NonNullable<typeof settings>).map(({ key, label, suffix, range, unit }) => [
         key,
@@ -1395,8 +1394,8 @@ describe('a dovetail joining the cylinder’s parts', () => {
         unit,
       ]),
     ).toEqual([
-      ['cylinderDovetailSize', 'Висота виступу, мм', '', { min: 1.5, max: 3, increment: 0.25 }, 2],
-      ['cylinderDovetailLengthPercent', 'Довжина виступу, мм', '', { min: 20, max: 48, increment: 0.25 }, 0.8],
+      ['cylinderDovetailSize', 'Висота виступу, мм', '', { min: 1.2, max: 13.035, increment: 0.25 }, 2],
+      ['cylinderDovetailLengthPercent', 'Довжина виступу, мм', '', { min: 1.7, max: 76.323, increment: 0.25 }, 0.8],
       ['cylinderDovetailClearanceMm', 'Зазор між поверхнями, мм', '', { min: 0.1, max: 0.4, increment: 0.05 }, undefined],
     ]);
     const notes = settings?.fields.filter((field) => field.type === 'note').map((field) => field.type === 'note' && field.text);
@@ -1406,25 +1405,45 @@ describe('a dovetail joining the cylinder’s parts', () => {
     ]);
   });
 
-  it('keeps typed values between the steps and rejects values beyond the ranges without clamping', () => {
+  it('keeps typed values between the steps, accepts what the cylinder allows and explains the rest without clamping', () => {
     expect(request({ cylinderDovetailClearanceMm: '0,23', cylinderDovetailSize: '1,1' }).spec?.section?.connector).toEqual({
       type: 'dovetail',
       sizeFactor: 1.1,
       lengthPercent: 50,
       clearanceMm: 0.23,
     });
-    // Stored values outside the ranges are explained in the millimetres that the fields show.
+    // Beyond the former limits of 3 mm and 48 mm: 5 mm high and 70 mm long.
+    expect(request({ cylinderDovetailSize: '2,5', cylinderDovetailLengthPercent: '87,5' }).spec?.section?.connector).toEqual({
+      type: 'dovetail',
+      sizeFactor: 2.5,
+      lengthPercent: 87.5,
+      clearanceMm: 0.2,
+    });
+    // Values outside the feasible ranges are explained in the millimetres that the fields show, with those ranges.
     for (const [key, text, message] of [
-      ['cylinderDovetailSize', '0,7', 'Допустимі значення — від 1,5 мм до 3 мм.'],
-      ['cylinderDovetailLengthPercent', '61', 'Допустимі значення — від 20 мм до 48 мм.'],
+      [
+        'cylinderDovetailSize',
+        '0,5',
+        'Виступ заввишки 1 мм, потрібно щонайменше 1,2 мм. Збільште висоту виступу. Зараз допустимо від 1,2 мм до 13,035 мм.',
+      ],
+      [
+        'cylinderDovetailLengthPercent',
+        '1',
+        'Пряма ділянка виступу після фаски — 0,3 мм, потрібно щонайменше 1,2 мм. Збільште довжину виступу. ' +
+          'Зараз допустимо від 1,7 мм до 76,323 мм.',
+      ],
       ['cylinderDovetailClearanceMm', '0,05', 'Допустимі значення — від 0,1 мм до 0,4 мм.'],
       ['cylinderDovetailSize', '', 'Введіть значення.'],
       ['cylinderDovetailSize', 'два', 'Введіть число, наприклад 2.'],
     ] as const) {
       const result = request({ [key]: text });
-      expect(result.errors).toEqual({ [key]: message });
+      expect(result.errors[key]).toBe(message);
       expect(result.spec).toBeUndefined();
     }
+    // The straight length couples L and h: with L = 0,8 mm no height helps, and its field says so.
+    expect(request({ cylinderDovetailLengthPercent: '1' }).errors.cylinderDovetailSize).toMatch(
+      /^Пряма ділянка виступу після фаски — 0,3 мм.* Зараз жодне значення цього поля не підходить: змініть інші параметри\.$/,
+    );
   });
 
   it('explains a combination that cannot carry the dovetail at the field to change, and builds nothing', () => {
@@ -1433,15 +1452,19 @@ describe('a dovetail joining the cylinder’s parts', () => {
     expect(low.spec).toBeUndefined();
     expect(low.errors).toEqual({
       cylinderDovetailSize:
-        'Виступ заввишки 1,12 мм, потрібно щонайменше 1,2 мм. Збільште висоту виступу або найбільший габарит.',
+        'Виступ заввишки 1,12 мм, потрібно щонайменше 1,2 мм. Збільште висоту виступу. Зараз допустимо від 1,2 мм до 9,574 мм.',
     });
-    // h/r = 0,5 at 90 %: the upper part is 2 mm thick over a 2,2 mm groove.
+    // h/r = 0,5 at 90 %: the upper part is 2 mm thick over a 2,2 mm groove. No height of at least 1,2 mm leaves 1,2 mm
+    // above it, and no clearance in the window does at this height: both fields say so, the problem first.
     const thin = request({ cylinderHeightRatio: '0,5', cylinderSectionPercent: '90' });
+    const backing =
+      'Над пазом лишається 0 мм, потрібно щонайменше 1,2 мм верхньої частини. Опустіть переріз або зменште висоту виступу.';
     expect(thin.errors).toEqual({
-      cylinderSectionPercent:
-        'Над пазом лишається 0 мм, потрібно щонайменше 1,2 мм верхньої частини. Опустіть переріз або зменште висоту виступу.',
+      cylinderDovetailSize: `${backing} Зараз жодне значення не підходить: потрібно щонайменше 1,2 мм, але не більше 0,6 мм.`,
+      cylinderDovetailClearanceMm: `${backing} Зараз жодне значення цього поля не підходить: змініть інші параметри.`,
     });
     expect(thin.values.cylinderSectionPercent).toBe(90);
+    expect(thin.connectorRanges).toMatchObject({ cylinderDovetailSize: null, cylinderDovetailClearanceMm: null });
     // The same values without the connector are a valid smooth cut.
     expect(
       request({ cylinderHeightRatio: '0,5', cylinderSectionPercent: '90' }, { ...joined, cylinderConnector: 'none' }).spec,
@@ -1507,7 +1530,8 @@ describe('plugs and dowels joining the cylinder’s parts', () => {
   const request = (overrides: Partial<ParameterTexts>, choices: typeof triangle) =>
     resolveModelRequest('cylinder', texts(overrides), choices);
   const connectorGroup = (choices: typeof triangle) => {
-    const panel = shapePanel('cylinder', choices, { values: request({}, choices).values });
+    const { values, connectorRanges } = request({}, choices);
+    const panel = shapePanel('cylinder', choices, { values, connectorRanges });
     return panel.type === 'parameters' ? panel.sections.find((group) => group.title === 'Кріплення') : undefined;
   };
   const fieldsOf = (choices: typeof triangle) => connectorGroup(choices)?.fields.map((field) => [field.type, field.key]);
@@ -1558,14 +1582,15 @@ describe('plugs and dowels joining the cylinder’s parts', () => {
     expect(group?.status).toEqual({ text: 'знімні штифти', highlighted: true });
     expect(group?.help?.text).toMatch(/^Штифти друкуються окремо/);
     expect(group?.help?.text).toMatch(/Номінально в кожну половинку входить половина цієї довжини\./);
-    // At M = 80 mm and r = 40 mm: d = 0,0625·80·k from 3,75 to 7,5 mm, a dowel 2·0,05·80·k from 6 to 12 mm long, a
-    // pair's axes from 10 to 26 mm from the centre.
+    // At M = 80 mm and r = 40 mm, with d = 5 mm, e = 4 mm and s = 18 mm: a pair's d from 0,8·d ≥ 3 mm to where the
+    // holes keep their walls; s from (3 + 2,42 + 1,2)/2 mm between the entrances to the wall at the side; a dowel from
+    // 2·3,1 mm, the straight 2 mm after both 0,4 mm chamfers and 0,3 mm of play, to 2·(40 − 1,2 − 0,3) mm.
     expect(
       sectionNumberFields(group as NonNullable<typeof group>).map(({ label, suffix, range }) => [label, suffix, range]),
     ).toEqual([
-      ['Діаметр штифта, мм', '', { min: 3.75, max: 7.5, increment: 0.25 }],
-      ['Від центра до осі кріплення, мм', '', { min: 10, max: 26, increment: 0.25 }],
-      ['Повна довжина штифта, мм', '', { min: 6, max: 12, increment: 0.25 }],
+      ['Діаметр штифта, мм', '', { min: 3.75, max: 36.666, increment: 0.25 }],
+      ['Від центра до осі кріплення, мм', '', { min: 3.31, max: 35.751, increment: 0.25 }],
+      ['Повна довжина штифта, мм', '', { min: 6.2, max: 77, increment: 0.25 }],
       ['Збільшення діаметра нижніх отворів, мм', '', { min: 0, max: 0.4, increment: 0.05 }],
       ['Збільшення діаметра верхніх отворів, мм', '', { min: 0, max: 0.4, increment: 0.05 }],
     ]);
@@ -1577,36 +1602,64 @@ describe('plugs and dowels joining the cylinder’s parts', () => {
       'Друге кріплення: діаметр 4 мм.',
       'У кожну половинку штифт входить на 4 мм.',
     ]);
-    // A plug's field is its height above the cut, e = 4 mm, from 3 to 6 mm; it enters the upper part only.
+    // A plug's field is its height above the cut, e = 4 mm, from 2,8 to 38,5 mm; it enters the upper part only.
     const plug = connectorGroup(choose('plug'));
     expect(sectionNumberFields(plug as NonNullable<typeof plug>).map(({ label, range }) => [label, range])).toEqual([
-      ['Діаметр виступу, мм', { min: 3.75, max: 7.5, increment: 0.25 }],
-      ['Висота виступу, мм', { min: 3, max: 6, increment: 0.25 }],
+      ['Діаметр виступу, мм', { min: 3, max: 75.703, increment: 0.25 }],
+      ['Висота виступу, мм', { min: 2.8, max: 38.5, increment: 0.25 }],
       ['Збільшення діаметра отвору, мм', { min: 0, max: 0.4, increment: 0.05 }],
     ]);
     expect(plug?.help?.text).toMatch(/^Виступ друкується разом із нижньою половинкою та входить в отвір верхньої\./);
-    expect(plug?.help?.text).toMatch(/значення 0,2 мм дає отвір діаметром 5,2 мм\.$/);
+    expect(plug?.help?.text).toMatch(/значення 0,2 мм дає отвір діаметром 5,2 мм\.\n\nМежі повзунків/);
     for (const help of [plug?.help?.text, group?.help?.text, groupsOfDovetail()]) {
       expect(help).not.toMatch(/×|множник|ластівчин|k\b/i);
     }
   });
 
-  it('gives a pair its spacing, keeps typed values between steps and rejects values beyond the ranges', () => {
+  it('gives a pair its spacing, keeps typed values between steps and explains values beyond the feasible ranges', () => {
     expect(request({ cylinderRoundSpacingPercent: '47,5' }, choose('plug', 2)).spec?.section?.connector).toMatchObject({
       count: 2,
       spacingPercent: 47.5,
     });
+    // Beyond the former limits: an 8 mm plug, 16 mm dowels 10 mm wide, a pair 32 mm from the centre.
+    expect(request({ cylinderRoundDepth: '2' }, choose('plug')).spec?.section?.connector).toMatchObject({ depthFactor: 2 });
+    expect(
+      request({ cylinderRoundDepth: '2', cylinderRoundDiameter: '2', cylinderRoundSpacingPercent: '80' }, choose('dowel', 2)).spec
+        ?.section?.connector,
+    ).toMatchObject({ count: 2, diameterFactor: 2, depthFactor: 2, spacingPercent: 80 });
     for (const [key, text, message] of [
-      ['cylinderRoundDiameter', '1,6', 'Допустимі значення — від 3,75 мм до 7,5 мм.'],
-      ['cylinderRoundDepth', '0,7', 'Допустимі значення — від 6 мм до 12 мм.'],
-      ['cylinderRoundSpacingPercent', '70', 'Допустимі значення — від 10 мм до 26 мм.'],
+      [
+        'cylinderRoundDiameter',
+        '0,7',
+        'Найменший діаметр штифта — 2,8 мм, потрібно щонайменше 3 мм. Збільште діаметр штифта. ' +
+          'Зараз допустимо від 3,75 мм до 36,666 мм.',
+      ],
+      [
+        'cylinderRoundDepth',
+        '0,7',
+        'Після фасок й осьового зміщення пряма ділянка в отворі — 1,7 мм, потрібно щонайменше 2 мм. ' +
+          'Збільште довжину штифта або зменште діаметр штифта. Зараз допустимо від 6,2 мм до 77 мм.',
+      ],
+      [
+        'cylinderRoundSpacingPercent',
+        '95',
+        'Стінка біля отвору у верхній частині — 0 мм, потрібно щонайменше 1,2 мм. Зменште діаметр штифта або відстань ' +
+          'від центра до осей. Стінка біля отвору у нижній частині — 0 мм, потрібно щонайменше 1,2 мм. Зменште діаметр ' +
+          'штифта або відстань від центра до осей. Зараз допустимо від 3,31 мм до 35,751 мм.',
+      ],
       ['cylinderDowelLowerClearanceMm', '-0,05', 'Допустимі значення — від 0 мм до 0,4 мм.'],
       ['cylinderDowelUpperClearanceMm', '0,45', 'Допустимі значення — від 0 мм до 0,4 мм.'],
     ] as const) {
       const result = request({ [key]: text }, choose('dowel', 2));
-      expect(result.errors).toEqual({ [key]: message });
+      expect(result.errors[key]).toBe(message);
+      expect(result.connectorRanges === undefined).toBe(key.endsWith('ClearanceMm'));
       expect(result.spec).toBeUndefined();
     }
+    // A 5,6 mm dowel leaves 1,7 mm of straight engagement; no pair diameter of at least 3,75 mm repairs that, so the
+    // diameter's field names the conflict too.
+    expect(request({ cylinderRoundDepth: '0,7' }, choose('dowel', 2)).errors.cylinderRoundDiameter).toMatch(
+      /Зараз жодне значення не підходить: потрібно щонайменше 3,75 мм, але не більше 3,125 мм\.$/,
+    );
     // A single connector ignores a draft of the hidden spacing.
     expect(request({ cylinderRoundSpacingPercent: '9' }, choose('plug')).errors).toEqual({});
   });
@@ -1617,8 +1670,13 @@ describe('plugs and dowels joining the cylinder’s parts', () => {
     expect(keyed.spec).toBeUndefined();
     expect(keyed.errors.cylinderPlugClearanceMm).toBe(
       'Більший виступ ширший за менший отвір на 0,35 мм, потрібно щонайменше 0,5 мм, інакше частини можна з’єднати, ' +
-        'повернувши на 180°. Зменште збільшення діаметра отворів або збільште діаметр виступу.',
+        'повернувши на 180°. Зменште збільшення діаметра отворів або збільште діаметр виступу. ' +
+        'Зараз допустимо від 0 мм до 0,25 мм.',
     );
+    // The diameter repairs it as well: d − (0,8·d + 0,4) ≥ 0,5 mm from d = 4,5 mm.
+    expect(keyed.errors.cylinderRoundDiameter).toMatch(/Зараз допустимо від 4,5 мм до /);
+    // Recovery: a smaller clearance makes the same pair valid again.
+    expect(request({ printSizeMm: '60', cylinderPlugClearanceMm: '0,25' }, choose('plug', 2)).spec).toBeDefined();
     // At 90 % of a flat cylinder the upper part is 2 mm thick over a 4,3 mm hole.
     const thin = request({ cylinderHeightRatio: '0,5', cylinderSectionPercent: '90' }, choose('dowel'));
     expect(thin.errors.cylinderRoundDepth).toMatch(

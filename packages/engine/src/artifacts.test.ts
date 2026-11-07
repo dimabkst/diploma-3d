@@ -1,7 +1,12 @@
 import { defaultModelSpecs, type ModelSpecInput } from '@diploma-3d/schema';
 import { type Accessor, WebIO } from '@gltf-transform/core';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { buildModelArtifacts, CONNECTOR_PREVIEW_GAP_RELATIVE, SECTION_PREVIEW_GAP_RELATIVE } from './artifacts.ts';
+import {
+  buildModelArtifacts,
+  CONNECTOR_PREVIEW_GAP_RELATIVE,
+  previewSeparation,
+  SECTION_PREVIEW_GAP_RELATIVE,
+} from './artifacts.ts';
 import { InvalidModelSpecError } from './errors.ts';
 import { toGltfPosition } from './export/glb.ts';
 import { arrangeInRow } from './export/layout.ts';
@@ -1030,5 +1035,21 @@ describe('for a cylinder joined by plugs or dowels', () => {
       .map((primitive) => primitive.getMaterial()?.getName());
     expect(dowelMaterials?.[0]).toBe('cut');
     expect(printFile.bytes).toEqual((await buildModelArtifacts(kernel, dowels(2))).printFile.bytes);
+  });
+  it.each([
+    // A 30 mm plug on a 40 mm lower part: 30 mm above the cut, plus the flat cut's 0,15 × 80 = 12 mm gap.
+    ['a 30 mm plug', { type: 'plug', count: 1, depthFactor: 7.5, holeClearanceMm: 0.2 }, 30 + 12],
+    // A 60 mm dowel seated in the lower part reaches 30 mm above the cut.
+    ['a 60 mm dowel', { type: 'dowel', count: 1, depthFactor: 7.5, lowerClearanceMm: 0.1, upperClearanceMm: 0.2 }, 30 + 12],
+    // The default 4 mm plug keeps the 0,5 × 80 = 40 mm minimum.
+    ['the default plug', { type: 'plug', count: 1, holeClearanceMm: 0.2 }, 40],
+  ])('raises the upper part far enough to clear %s, measured on the generated parts', async (_, connector, distance) => {
+    const spec = round(connector);
+    const { model, separatedPreviewGlb, printFile } = await buildModelArtifacts(kernel, spec);
+    expect(previewSeparation(model)).toBeCloseTo(distance, 4);
+    const nodes = (await new WebIO().readBinary(separatedPreviewGlb as Uint8Array)).getRoot().listNodes();
+    expect(nodes[1]?.getTranslation()[1]).toBeCloseTo(distance / 1000, 6);
+    // Display only: the print file is the one built for the same specification, whatever the separation.
+    expect(printFile.bytes).toEqual((await buildModelArtifacts(kernel, spec)).printFile.bytes);
   });
 });

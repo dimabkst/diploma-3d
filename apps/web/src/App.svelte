@@ -12,7 +12,9 @@ import { buildModel } from './lib/model/buildModel.ts';
 import { type ConnectorScale, cylinderConnectorScale } from './lib/model/connectorScale.ts';
 import { describeModelError, type ModelState, visibleArtifacts } from './lib/model/modelState.ts';
 import {
+  activeConnector,
   activeSection,
+  type ConnectorRanges,
   canResetShapeParameters,
   initialParameterChoices,
   initialParameterTexts,
@@ -71,12 +73,27 @@ $effect.pre(() => {
     lastConnectorScale = current;
   }
 });
+// The last feasible ranges of the chosen connector, so that its sliders keep their ranges while one of its fields is
+// being typed; ranges of another connector or count are never shown.
+let lastConnectorRanges = $state.raw<{ readonly context: string; readonly ranges: ConnectorRanges } | undefined>();
+const connectorContext = $derived(
+  selectedKind === undefined
+    ? ''
+    : `${selectedKind}:${activeConnector(selectedKind, parameterChoices) ?? 'none'}:${parameterChoices.cylinderRoundCount}`,
+);
+$effect.pre(() => {
+  const ranges = request?.connectorRanges;
+  if (ranges !== undefined) lastConnectorRanges = { context: connectorContext, ranges };
+});
+const connectorRanges = $derived(
+  request?.connectorRanges ?? (lastConnectorRanges?.context === connectorContext ? lastConnectorRanges.ranges : undefined),
+);
 // Texts that denote the same specification ("1,5" and "1.50") share a key and do not trigger a rebuild.
 const requestKey = $derived(request?.key);
 const panel = $derived(
   selectedKind === undefined
     ? { type: 'fixed' as const, note: '' }
-    : shapePanel(selectedKind, parameterChoices, { tiltModes, values: request?.values, connectorScale }),
+    : shapePanel(selectedKind, parameterChoices, { tiltModes, values: request?.values, connectorScale, connectorRanges }),
 );
 const invalidFields = $derived(
   [printSizeField, ...(panel.type === 'fixed' ? [] : panel.sections.flatMap(sectionNumberFields))]

@@ -2,8 +2,16 @@ export {
   buildModelArtifacts,
   CONNECTOR_PREVIEW_GAP_RELATIVE,
   type ModelArtifacts,
+  previewSeparation,
   SECTION_PREVIEW_GAP_RELATIVE,
 } from './artifacts.ts';
+export {
+  type ConnectorFeasibility,
+  hasFeasibleValues,
+  type Interval,
+  type ParameterBounds,
+  type ParameterFeasibility,
+} from './connectors/bounds.ts';
 export {
   buildDovetail,
   DOVETAIL_EXIT_MARGIN_MM,
@@ -11,11 +19,17 @@ export {
   DOVETAIL_MINIMUMS_MM,
   DOVETAIL_PROPORTIONS,
   DOVETAIL_ROOT_OVERLAP_MM,
+  type DovetailDimensions,
   type DovetailFrame,
   type DovetailIssue,
+  type DovetailParameter,
   type DovetailParts,
   type DovetailPlan,
+  dovetailChecks,
+  dovetailDimensions,
+  dovetailFeasibility,
   dovetailProfileMm,
+  dovetailProfileOfHeight,
   isStrictlyConvex,
   offsetConvexPolygon,
   planDovetail,
@@ -23,12 +37,16 @@ export {
   verifyDovetail,
 } from './connectors/dovetail.ts';
 export {
+  CONNECTOR_MIN_WALL_MM,
+  CONSTRAINT_ROUNDOFF_MM,
   type CylinderSection,
   connectorVolumeTolerance,
   cylinderSection,
   frameMatrix,
   framePoint,
+  type Measurement,
   type SectionFrame,
+  satisfies,
 } from './connectors/frame.ts';
 export {
   buildRoundConnectors,
@@ -38,11 +56,16 @@ export {
   ROUND_CONNECTOR_DEPTH_ALLOWANCE_MM,
   ROUND_CONNECTOR_MINIMUMS_MM,
   ROUND_CONNECTOR_PROPORTIONS,
+  type RoundConnectorDimensions,
   type RoundConnectorIssue,
+  type RoundConnectorParameter,
   type RoundConnectorParts,
   type RoundConnectorPlan,
   type RoundConnectorSite,
+  roundConnectorChecks,
+  roundConnectorDimensions,
   roundConnectorDimensionsMm,
+  roundConnectorFeasibility,
   verifyRoundConnectors,
 } from './connectors/round.ts';
 export {

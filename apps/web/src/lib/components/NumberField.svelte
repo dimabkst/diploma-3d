@@ -24,9 +24,10 @@ let {
   /**
    * The allowed values: the bounds of the slider, the buttons and the arrow keys, which move to multiples of `increment`,
    * and of a valid typed value, which may lie between those multiples. A range narrowed by other parameters is passed
-   * as it is; nothing widens it to fit a value.
+   * as it is; nothing widens it to fit a value. Undefined while no value is allowed: the slider and buttons are then
+   * disabled and only the entry can be edited.
    */
-  range: StepRange;
+  range: StepRange | undefined;
   suffix?: string | undefined;
   error?: string | undefined;
   /** Further descriptions of both the entry and the slider, after the error. */
@@ -41,8 +42,8 @@ const description = $derived(
   [error === undefined ? undefined : `${id}-error`, describedBy].filter((part) => part !== undefined).join(' ') || undefined,
 );
 // Stepping starts only from a valid value; empty, partial or out-of-range text is never replaced by an invented one.
-const lower = $derived(value === undefined ? undefined : stepDecimal(value, -1, range));
-const higher = $derived(value === undefined ? undefined : stepDecimal(value, 1, range));
+const lower = $derived(value === undefined || range === undefined ? undefined : stepDecimal(value, -1, range));
+const higher = $derived(value === undefined || range === undefined ? undefined : stepDecimal(value, 1, range));
 
 // While the text is being corrected, the disabled slider stays where the last valid value put it.
 let lastValid = $state<number>();
@@ -50,7 +51,11 @@ $effect.pre(() => {
   if (value !== undefined) lastValid = value;
 });
 // Shown within the range: a value that a narrowed range no longer allows is invalid, and the slider waits at its end.
-const sliderValue = $derived(Math.min(range.max, Math.max(range.min, value ?? lastValid ?? range.min)));
+// Without a range the disabled slider rests at the start of a neutral track.
+const track = $derived(range ?? { min: 0, max: 1, increment: 1 });
+const sliderValue = $derived(
+  range === undefined ? track.min : Math.min(range.max, Math.max(range.min, value ?? lastValid ?? range.min)),
+);
 
 function select(next: number | undefined) {
   if (next !== undefined) text = formatSteppedDecimal(next);
@@ -73,8 +78,8 @@ const sliderKeys: Readonly<Record<string, () => number | undefined>> = {
   ArrowRight: () => higher,
   ArrowDown: () => lower,
   ArrowLeft: () => lower,
-  Home: () => range.min,
-  End: () => range.max,
+  Home: () => range?.min,
+  End: () => range?.max,
 };
 
 // The slider uses step="any" so that a typed value between the multiples, such as 2,05, is shown exactly instead of
@@ -88,6 +93,7 @@ function onsliderkeydown(event: KeyboardEvent) {
 }
 
 function onsliderinput(event: Event & { currentTarget: HTMLInputElement }) {
+  if (range === undefined) return;
   const next = snapDecimal(Number(event.currentTarget.value), range);
   // Show the quantised position at once, also when it equals the current value and no update will follow.
   event.currentTarget.value = String(next);
@@ -129,14 +135,14 @@ function onsliderinput(event: Event & { currentTarget: HTMLInputElement }) {
     <input
       class="slider"
       type="range"
-      min={range.min}
-      max={range.max}
+      min={track.min}
+      max={track.max}
       step="any"
       value={sliderValue}
-      style:--fill={range.max > range.min ? (sliderValue - range.min) / (range.max - range.min) : 1}
-      disabled={value === undefined}
+      style:--fill={range === undefined ? 0 : track.max > track.min ? (sliderValue - track.min) / (track.max - track.min) : 1}
+      disabled={value === undefined || range === undefined}
       aria-label={`${label}: повзунок`}
-      aria-valuetext={formatSteppedDecimal(sliderValue)}
+      aria-valuetext={range === undefined ? 'немає допустимих значень' : formatSteppedDecimal(sliderValue)}
       aria-describedby={description}
       oninput={onsliderinput}
       onkeydown={onsliderkeydown}
@@ -151,8 +157,12 @@ function onsliderinput(event: Event & { currentTarget: HTMLInputElement }) {
       <svg class="step-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10M8 3v10" /></svg>
     </Button>
     <span class="limits" aria-hidden="true">
-      <span>{formatDecimal(range.min)}</span>
-      <span>{formatDecimal(range.max)}</span>
+      {#if range !== undefined}
+        <span>{formatDecimal(range.min)}</span>
+        <span>{formatDecimal(range.max)}</span>
+      {:else}
+        <span>—</span>
+      {/if}
     </span>
   </div>
   {/if}

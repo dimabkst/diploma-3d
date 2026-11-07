@@ -13,10 +13,9 @@ export const DEFAULT_SECTION_POSITION_PERCENT = 50;
 /** The cutting plane's distance from the lower base, in percent of the perpendicular height h between the bases. */
 export const sectionPositionSchema = z.number().min(SECTION_POSITION_LIMITS.min).max(SECTION_POSITION_LIMITS.max);
 
-// Experimental ranges for the first print trials of the dovetail: its size multiplier k, the tongue's length in percent
-// of the section's span along the sliding direction, and the clearance between mating surfaces in millimetres.
-export const DOVETAIL_SIZE_LIMITS = { min: 0.75, max: 1.5 } as const;
-export const DOVETAIL_LENGTH_LIMITS = { min: 25, max: 60 } as const;
+// The calibration window for print trials of the dovetail's clearance between mating surfaces, in millimetres: a policy,
+// not a geometric limit. The tongue's size and length have no fixed limits; the cylinder, the cut and the connector's
+// construction constraints bound them, and the engine checks them before building.
 export const DOVETAIL_CLEARANCE_LIMITS = { min: 0.1, max: 0.4 } as const;
 
 export const DEFAULT_DOVETAIL = { sizeFactor: 1, lengthPercent: 50, clearanceMm: 0.2 } as const;
@@ -28,20 +27,21 @@ export const DEFAULT_DOVETAIL = { sizeFactor: 1, lengthPercent: 50, clearanceMm:
  */
 export const dovetailConnectorSchema = z.strictObject({
   type: z.literal('dovetail'),
-  sizeFactor: z.number().min(DOVETAIL_SIZE_LIMITS.min).max(DOVETAIL_SIZE_LIMITS.max),
-  lengthPercent: z.number().min(DOVETAIL_LENGTH_LIMITS.min).max(DOVETAIL_LENGTH_LIMITS.max),
+  /** k in h = 0,025·M·k. */
+  sizeFactor: z.number().positive(),
+  /** The tongue's length in percent of the section's diameter along the sliding direction. */
+  lengthPercent: z.number().positive(),
   /** The gap between each pair of mating surfaces, measured normal to them; not a difference of total widths. */
   clearanceMm: z.number().min(DOVETAIL_CLEARANCE_LIMITS.min).max(DOVETAIL_CLEARANCE_LIMITS.max),
 });
 
 export type DovetailConnector = z.infer<typeof dovetailConnectorSchema>;
 
-// Experimental ranges for round connectors: the multipliers of the diameter d = 0,0625·M and of the insertion length
-// e = 0,05·M, the distance of a pair from the centre in percent of the radius, and diametral fit clearances in mm.
+// Round connectors: one or a keyed pair, and the calibration window for print trials of their diametral fit clearances
+// in millimetres, a policy rather than a geometric limit. The multipliers of the diameter d = 0,0625·M and of the
+// insertion length e = 0,05·M and a pair's distance from the centre in percent of the radius have no fixed limits; the
+// cylinder, the cut and the construction constraints bound them, and the engine checks them before building.
 export const ROUND_CONNECTOR_COUNTS = [1, 2] as const;
-export const ROUND_CONNECTOR_DIAMETER_LIMITS = { min: 0.75, max: 1.5 } as const;
-export const ROUND_CONNECTOR_DEPTH_LIMITS = { min: 0.75, max: 1.5 } as const;
-export const ROUND_CONNECTOR_SPACING_LIMITS = { min: 25, max: 65 } as const;
 export const DIAMETRAL_CLEARANCE_LIMITS = { min: 0, max: 0.4 } as const;
 
 export const DEFAULT_ROUND_CONNECTOR = { count: 1, diameterFactor: 1, depthFactor: 1, spacingPercent: 45 } as const;
@@ -57,9 +57,9 @@ const diametralClearanceSchema = z.number().min(DIAMETRAL_CLEARANCE_LIMITS.min).
  */
 const roundConnectorFields = {
   count: z.union([z.literal(1), z.literal(2)]),
-  diameterFactor: z.number().min(ROUND_CONNECTOR_DIAMETER_LIMITS.min).max(ROUND_CONNECTOR_DIAMETER_LIMITS.max),
-  depthFactor: z.number().min(ROUND_CONNECTOR_DEPTH_LIMITS.min).max(ROUND_CONNECTOR_DEPTH_LIMITS.max),
-  spacingPercent: z.number().min(ROUND_CONNECTOR_SPACING_LIMITS.min).max(ROUND_CONNECTOR_SPACING_LIMITS.max).optional(),
+  diameterFactor: z.number().positive(),
+  depthFactor: z.number().positive(),
+  spacingPercent: z.number().positive().optional(),
 };
 
 const spacingOfPairsOnly = (connector: { count: 1 | 2; spacingPercent?: number | undefined }) =>

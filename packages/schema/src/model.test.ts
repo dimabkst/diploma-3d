@@ -12,8 +12,6 @@ import {
   DEFAULT_TRIANGLE_BASE,
   DIAMETRAL_CLEARANCE_LIMITS,
   DOVETAIL_CLEARANCE_LIMITS,
-  DOVETAIL_LENGTH_LIMITS,
-  DOVETAIL_SIZE_LIMITS,
   defaultModelSpecs,
   MAX_LONGEST_DIMENSION_MM,
   MIN_INCLINATION_DEG,
@@ -26,9 +24,6 @@ import {
   PYRAMID_BASE_TYPES,
   RATIO_LIMITS,
   REGULAR_POLYHEDRON_KINDS,
-  ROUND_CONNECTOR_DEPTH_LIMITS,
-  ROUND_CONNECTOR_DIAMETER_LIMITS,
-  ROUND_CONNECTOR_SPACING_LIMITS,
   ROUND_HEIGHT_LIMITS,
   ROUND_OFFSET_LIMITS,
   SECTIONS_BY_SHAPE,
@@ -770,25 +765,23 @@ describe('dovetail connectors', () => {
       },
     }).success;
 
-  it('starts at k = 1, 50 % and 0,2 mm, and accepts the ends of every range and values between the steps', () => {
+  it('starts at k = 1, 50 % and 0,2 mm; limits only the clearance, to its calibration window 0,1–0,4 mm', () => {
     expect(DEFAULT_DOVETAIL).toEqual({ sizeFactor: 1, lengthPercent: 50, clearanceMm: 0.2 });
     expect(withConnector({})).toBe(true);
-    for (const [key, limits] of [
-      ['sizeFactor', DOVETAIL_SIZE_LIMITS],
-      ['lengthPercent', DOVETAIL_LENGTH_LIMITS],
-      ['clearanceMm', DOVETAIL_CLEARANCE_LIMITS],
-    ] as const) {
-      expect(withConnector({ [key]: limits.min })).toBe(true);
-      expect(withConnector({ [key]: limits.max })).toBe(true);
-      expect(withConnector({ [key]: (limits.min + limits.max) / 2 + 0.001 })).toBe(true);
-      expect(withConnector({ [key]: limits.min - 0.001 })).toBe(false);
-      expect(withConnector({ [key]: limits.max + 0.001 })).toBe(false);
-      expect(withConnector({ [key]: Number.NaN })).toBe(false);
+    // The size and length have no fixed limits: the engine checks them against the cylinder and the cut.
+    for (const key of ['sizeFactor', 'lengthPercent'] as const) {
+      expect([0.01, 0.75, 1.6, 95, 1000].map((value) => withConnector({ [key]: value }))).toEqual([true, true, true, true, true]);
+      for (const value of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) expect(withConnector({ [key]: value })).toBe(false);
     }
-    expect([DOVETAIL_SIZE_LIMITS, DOVETAIL_LENGTH_LIMITS, DOVETAIL_CLEARANCE_LIMITS]).toEqual([
-      { min: 0.75, max: 1.5 },
-      { min: 25, max: 60 },
-      { min: 0.1, max: 0.4 },
+    const { min, max } = DOVETAIL_CLEARANCE_LIMITS;
+    expect(DOVETAIL_CLEARANCE_LIMITS).toEqual({ min: 0.1, max: 0.4 });
+    expect([min, max, 0.25, min - 0.001, max + 0.001, Number.NaN].map((clearanceMm) => withConnector({ clearanceMm }))).toEqual([
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
     ]);
     expect(withConnector({ type: 'pin' })).toBe(false);
   });
@@ -812,21 +805,24 @@ describe('plug and dowel connectors', () => {
     expect(parse(dowel)).toBe(true);
   });
 
-  it('gives a pair, and only a pair, its spacing from 25 % to 65 % of the radius', () => {
+  it('gives a pair, and only a pair, a positive spacing in percent of the radius', () => {
     expect(parse({ ...plug, count: 2, spacingPercent: 45 })).toBe(true);
     expect(parse({ ...plug, count: 2 })).toBe(false);
     expect(parse({ ...plug, spacingPercent: 45 })).toBe(false);
     expect(parse({ ...dowel, count: 3 })).toBe(false);
-    for (const spacingPercent of [ROUND_CONNECTOR_SPACING_LIMITS.min, ROUND_CONNECTOR_SPACING_LIMITS.max]) {
-      expect(parse({ ...dowel, count: 2, spacingPercent })).toBe(true);
-    }
-    expect(parse({ ...dowel, count: 2, spacingPercent: 24.9 })).toBe(false);
-    expect(parse({ ...dowel, count: 2, spacingPercent: 65.1 })).toBe(false);
+    for (const spacingPercent of [5, 24.9, 65.1, 90]) expect(parse({ ...dowel, count: 2, spacingPercent })).toBe(true);
+    for (const spacingPercent of [0, -10, Number.NaN]) expect(parse({ ...dowel, count: 2, spacingPercent })).toBe(false);
   });
 
-  it('bounds the multipliers to 0,75–1,5 and the clearances to 0–0,4 mm, and keeps each type’s own clearances', () => {
+  it('takes any positive multipliers, bounds the clearances to 0–0,4 mm, and keeps each type’s own clearances', () => {
     for (const key of ['diameterFactor', 'depthFactor'] as const) {
-      expect([0.75, 1.5, 0.74, 1.51].map((value) => parse({ ...plug, [key]: value }))).toEqual([true, true, false, false]);
+      expect([0.5, 0.75, 1.5, 4].map((value) => parse({ ...plug, [key]: value }))).toEqual([true, true, true, true]);
+      expect([0, -0.5, Number.NaN, Number.POSITIVE_INFINITY].map((value) => parse({ ...plug, [key]: value }))).toEqual([
+        false,
+        false,
+        false,
+        false,
+      ]);
     }
     expect([0, 0.4, -0.01, 0.41, Number.NaN].map((value) => parse({ ...plug, holeClearanceMm: value }))).toEqual([
       true,
@@ -838,10 +834,6 @@ describe('plug and dowel connectors', () => {
     expect(parse({ ...plug, lowerClearanceMm: 0.1 })).toBe(false);
     expect(parse({ ...dowel, holeClearanceMm: 0.2 })).toBe(false);
     expect(parse({ ...dowel, clearanceMm: 0.2 })).toBe(false);
-    expect([ROUND_CONNECTOR_DIAMETER_LIMITS, ROUND_CONNECTOR_DEPTH_LIMITS, DIAMETRAL_CLEARANCE_LIMITS]).toEqual([
-      { min: 0.75, max: 1.5 },
-      { min: 0.75, max: 1.5 },
-      { min: 0, max: 0.4 },
-    ]);
+    expect(DIAMETRAL_CLEARANCE_LIMITS).toEqual({ min: 0, max: 0.4 });
   });
 });

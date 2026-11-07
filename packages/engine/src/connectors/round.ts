@@ -1,4 +1,4 @@
-import type { CylinderShape, PhysicalScale, RoundConnector } from '@diploma-3d/schema';
+import { type CylinderShape, DIAMETRAL_CLEARANCE_LIMITS, type PhysicalScale, type RoundConnector } from '@diploma-3d/schema';
 import type { Vec2 as KernelVec2, Manifold, Mat4 } from 'manifold-3d';
 import { ConnectorVerificationError } from '../errors.ts';
 import type { GeometryKernel } from '../kernel.ts';
@@ -6,13 +6,16 @@ import type { Vec3 } from '../mesh.ts';
 import type { Track } from '../scope.ts';
 import type { Vec2 } from '../shapes/polygon.ts';
 import { circularSegments } from '../shapes/round.ts';
+import { type ConnectorFeasibility, connectorFeasibility, type ParameterSpec } from './bounds.ts';
 import {
   CONNECTOR_MIN_WALL_MM,
+  type CylinderSection,
   connectorVolumeTolerance,
   cylinderSection,
   frameMatrix,
   framePoint,
   type SectionFrame,
+  satisfies,
 } from './frame.ts';
 
 /**
@@ -58,7 +61,7 @@ export interface RoundConnectorSite {
 
 type Part = 'lower' | 'upper';
 
-/** A combination that cannot carry the connectors, with the value that fails its minimum. */
+/** A constraint of the connectors with its measured value; an issue when that value falls short of its minimum. */
 export type RoundConnectorIssue =
   | { readonly code: 'pin-too-thin'; readonly valueMm: number; readonly minimumMm: number }
   | { readonly code: 'engagement-short'; readonly valueMm: number; readonly minimumMm: number }
@@ -92,11 +95,126 @@ export function roundConnectorDimensionsMm(diameterFactor: number, depthFactor: 
   };
 }
 
+/** The physical dimensions that the constraints read, in millimetres. */
+export interface RoundConnectorDimensions {
+  readonly type: 'plug' | 'dowel';
+  readonly count: 1 | 2;
+  /** d, the primary pin; a pair's second pin is 0,8·d. */
+  readonly diameter: number;
+  /** e: how far a plug protrudes, or a dowel enters each part. */
+  readonly insertion: number;
+  /** s: a pair's distance from the section's centre along u; zero for one connector. */
+  readonly spacing: number;
+  /** The diametral clearance of the holes in each part; plugs have holes in the upper part only. */
+  readonly clearance: { readonly lower?: number; readonly upper: number };
+}
+
+/** The settings in millimetres: d and e from M, and a pair's spacing as its percentage of the radius r. */
+export function roundConnectorDimensions(
+  connector: RoundConnector,
+  longestDimensionMm: number,
+  radiusMm: number,
+): RoundConnectorDimensions {
+  const { diameter, insertion } = roundConnectorDimensionsMm(connector.diameterFactor, connector.depthFactor, longestDimensionMm);
+  return {
+    type: connector.type,
+    count: connector.count,
+    diameter,
+    insertion,
+    spacing: ((connector.spacingPercent ?? 0) / 100) * radiusMm,
+    clearance:
+      connector.type === 'plug'
+        ? { upper: connector.holeClearanceMm }
+        : { lower: connector.lowerClearanceMm, upper: connector.upperClearanceMm },
+  };
+}
+
+/** The 45° chamfer of a pin end and of its hole's entrance; both ends of a site share it. */
+const chamferOf = (pinDiameter: number, insertion: number) =>
+  Math.min(ROUND_CONNECTOR_CHAMFER.diameter * pinDiameter, ROUND_CONNECTOR_CHAMFER.insertion * insertion);
+
+/** The pins along u, primary first: at the centre, or at +s with d and at −s with 0,8·d. */
+function siteLayout({ count, diameter, insertion, spacing }: RoundConnectorDimensions) {
+  const site = (along: number, pinDiameter: number) => ({ along, pinDiameter, chamfer: chamferOf(pinDiameter, insertion) });
+  return count === 1
+    ? [site(0, diameter)]
+    : [site(spacing, diameter), site(-spacing, ROUND_CONNECTOR_PROPORTIONS.secondaryDiameter * diameter)];
+}
+
+/**
+ * Every construction constraint of the plugs or dowels, satisfied or not, always the same ones in the same order for a
+ * type and count, so that the bounds of each dimension can be solved from them (see `roundConnectorFeasibility`).
+ *
+ * - The thinnest pin, 0,8·d of a pair, is at least 3 mm.
+ * - The straight engagement e − play − 2·chamfer of every site is at least 2 mm: the pin's end and the hole's entrance
+ *   each take one chamfer, and a dowel may slide by the 0,3 mm depth allowance towards the opposite hole's bottom; an
+ *   integral plug sits fully home.
+ * - A pair keys the parts: d − (0,8·d + the larger diametral clearance) ≥ 0,5 mm, on the straight hole, so that the
+ *   larger pin enters neither smaller hole.
+ * - In each receiving part, the wall beside every hole is at least 1,2 mm where the hole is widest (the chamfered
+ *   entrance at the cut), where its straight wall starts and at its bottom e + 0,3 mm deep. The wall is measured to the
+ *   polygon's inscribed circle, at each depth from the section's centre moved by an oblique cylinder's lean; the
+ *   distance from the moved centre is convex in the depth, so these three depths bound the whole hole.
+ * - Between a pair's entrances, and under each hole's bottom, at least 1,2 mm remain; under a plug the lower part keeps
+ *   1,2 mm below its root overlap.
+ *
+ * Each value is monotone in d, e, s and each clearance, which the bounds rely on: a larger d widens holes and
+ * chamfers, a larger e deepens holes and may lengthen chamfers, a larger s moves holes apart and outwards.
+ */
+export function roundConnectorChecks(section: CylinderSection, dimensions: RoundConnectorDimensions): RoundConnectorIssue[] {
+  const { inradius, leanAcross } = section;
+  const { type, insertion, clearance } = dimensions;
+  const sites = siteLayout(dimensions);
+  const holeDepth = insertion + ROUND_CONNECTOR_DEPTH_ALLOWANCE_MM;
+  const play = type === 'dowel' ? ROUND_CONNECTOR_DEPTH_ALLOWANCE_MM : 0;
+  const { pinDiameter, wall, straightEngagement, keying } = ROUND_CONNECTOR_MINIMUMS_MM;
+  const checks: RoundConnectorIssue[] = [
+    { code: 'pin-too-thin', valueMm: Math.min(...sites.map((site) => site.pinDiameter)), minimumMm: pinDiameter },
+    {
+      code: 'engagement-short',
+      valueMm: Math.min(...sites.map(({ chamfer }) => insertion - play - 2 * chamfer)),
+      minimumMm: straightEngagement,
+    },
+  ];
+  if (sites.length === 2) {
+    const [primary, secondary] = sites as [(typeof sites)[number], (typeof sites)[number]];
+    const widest = Math.max(clearance.upper, clearance.lower ?? 0);
+    checks.push({ code: 'keying-lost', valueMm: primary.pinDiameter - (secondary.pinDiameter + widest), minimumMm: keying });
+  }
+  const parts: [Part, number, number][] = [['upper', clearance.upper, section.upperThickness]];
+  if (clearance.lower !== undefined) parts.push(['lower', clearance.lower, section.lowerThickness]);
+  for (const [part, holeClearance, thickness] of parts) {
+    const holes = sites.map(({ along, pinDiameter: pin, chamfer }) => {
+      const straight = (pin + holeClearance) / 2;
+      return { along, chamfer, straight, opening: straight + chamfer };
+    });
+    const sideWall = Math.min(
+      ...holes.flatMap(({ along, chamfer, straight, opening }) =>
+        [
+          [0, opening],
+          [chamfer, straight],
+          [holeDepth, straight],
+        ].map(([depth, radius]) => inradius - Math.hypot(along, leanAcross * (depth as number)) - (radius as number)),
+      ),
+    );
+    checks.push({ code: 'hole-wall-thin', part, valueMm: sideWall, minimumMm: wall });
+    if (holes.length === 2) {
+      const [first, second] = holes as [(typeof holes)[number], (typeof holes)[number]];
+      const between = Math.abs(first.along - second.along) - first.opening - second.opening;
+      checks.push({ code: 'holes-too-close', part, valueMm: between, minimumMm: wall });
+    }
+    checks.push({ code: 'hole-bottom-thin', part, valueMm: thickness - holeDepth, minimumMm: wall });
+  }
+  if (type === 'plug') {
+    checks.push({ code: 'base-thin', valueMm: section.lowerThickness - PLUG_ROOT_OVERLAP_MM, minimumMm: wall });
+  }
+  return checks;
+}
+
 /**
  * The plugs or dowels of a cylinder cut parallel to its bases, in millimetres of the built solid, and the issues that
  * rule them out; pure, so that the interface can explain a combination before anything is built. Every axis is the
- * cut's normal n. Walls are measured on the polygon's inscribed circle at the heights each hole spans, with the
- * sections of an oblique cylinder moved by its lean, and include the widened hole entrances.
+ * cut's normal n. See `roundConnectorChecks` for the constraints.
  */
 export function planRoundConnectors(
   shape: CylinderShape,
@@ -105,83 +223,80 @@ export function planRoundConnectors(
   connector: RoundConnector,
 ): RoundConnectorPlan {
   const section = cylinderSection(shape, scale, positionPercent);
-  const { frame, radius, inradius, leanAcross } = section;
-  const { diameter, insertion } = roundConnectorDimensionsMm(
-    connector.diameterFactor,
-    connector.depthFactor,
-    scale.longestDimensionMm,
-  );
-  const chamferOf = (pinDiameter: number) =>
-    Math.min(ROUND_CONNECTOR_CHAMFER.diameter * pinDiameter, ROUND_CONNECTOR_CHAMFER.insertion * insertion);
-  const site = (along: number, pinDiameter: number): RoundConnectorSite => ({
-    centre: framePoint(frame, [along, 0, 0]),
-    along,
-    pinDiameter,
-    chamfer: chamferOf(pinDiameter),
-  });
-  const offset = ((connector.spacingPercent ?? 0) / 100) * radius;
-  const sites =
-    connector.count === 1
-      ? [site(0, diameter)]
-      : [site(offset, diameter), site(-offset, ROUND_CONNECTOR_PROPORTIONS.secondaryDiameter * diameter)];
-  const clearance =
-    connector.type === 'plug'
-      ? { upper: connector.holeClearanceMm }
-      : { lower: connector.lowerClearanceMm, upper: connector.upperClearanceMm };
-  const holeDepth = insertion + ROUND_CONNECTOR_DEPTH_ALLOWANCE_MM;
-  // A dowel may slide by the allowance towards either hole's bottom; an integral plug sits fully home.
+  const dimensions = roundConnectorDimensions(connector, scale.longestDimensionMm, section.radius);
+  const { frame } = section;
+  const { insertion, clearance } = dimensions;
+  const sites = siteLayout(dimensions).map((site) => ({ ...site, centre: framePoint(frame, [site.along, 0, 0]) }));
   const play = connector.type === 'dowel' ? ROUND_CONNECTOR_DEPTH_ALLOWANCE_MM : 0;
-  const straightEngagement = Math.min(...sites.map(({ chamfer }) => insertion - play - 2 * chamfer));
+  return {
+    type: connector.type,
+    frame,
+    sites,
+    insertion,
+    holeDepth: insertion + ROUND_CONNECTOR_DEPTH_ALLOWANCE_MM,
+    clearance,
+    straightEngagement: Math.min(...sites.map(({ chamfer }) => insertion - play - 2 * chamfer)),
+    issues: roundConnectorChecks(section, dimensions).filter((check) => !satisfies(check)),
+  };
+}
 
-  const { pinDiameter, wall, straightEngagement: minimumEngagement, keying } = ROUND_CONNECTOR_MINIMUMS_MM;
-  const issues: RoundConnectorIssue[] = [];
-  // Values computed from the decimal settings may fall short of an equal limit by roundoff only.
-  const short = (value: number, minimum: number) => !(value >= minimum - 1e-9);
-  const thinnest = Math.min(...sites.map((entry) => entry.pinDiameter));
-  if (short(thinnest, pinDiameter)) issues.push({ code: 'pin-too-thin', valueMm: thinnest, minimumMm: pinDiameter });
-  if (short(straightEngagement, minimumEngagement)) {
-    issues.push({ code: 'engagement-short', valueMm: straightEngagement, minimumMm: minimumEngagement });
-  }
-  if (sites.length === 2) {
-    const [primary, secondary] = sites as [RoundConnectorSite, RoundConnectorSite];
-    // The larger pin must not enter the smaller hole of any part.
-    const widest = Math.max(clearance.upper, clearance.lower ?? 0);
-    const interference = primary.pinDiameter - (secondary.pinDiameter + widest);
-    if (short(interference, keying)) issues.push({ code: 'keying-lost', valueMm: interference, minimumMm: keying });
-  }
-  const parts: [Part, number, number][] = [['upper', clearance.upper, section.upperThickness]];
-  if (clearance.lower !== undefined) parts.push(['lower', clearance.lower, section.lowerThickness]);
-  for (const [part, holeClearance, thickness] of parts) {
-    const radii = sites.map(({ pinDiameter: pin, chamfer }) => {
-      const straight = (pin + holeClearance) / 2;
-      return { straight, opening: straight + chamfer, chamfer };
+/** The round connectors' dimensions in millimetres, each solved for with the others fixed. */
+export type RoundConnectorParameter = 'diameter' | 'insertion' | 'spacing' | 'lowerClearance' | 'upperClearance';
+
+/**
+ * Which values of each dimension the current cylinder, cut and other dimensions allow, from the same checks that
+ * `planRoundConnectors` applies. The search envelopes follow from the model: a diameter within the section's
+ * diameter, an insertion within the cylinder's height and a spacing within its radius; clearances stay within their
+ * calibration window, a policy for print trials rather than a geometric limit. A pair has a spacing, dowels a lower
+ * clearance.
+ */
+export function roundConnectorFeasibility(
+  shape: CylinderShape,
+  scale: PhysicalScale,
+  positionPercent: number,
+  connector: RoundConnector,
+): ConnectorFeasibility<RoundConnectorParameter, RoundConnectorIssue> {
+  const section = cylinderSection(shape, scale, positionPercent);
+  const dimensions = roundConnectorDimensions(connector, scale.longestDimensionMm, section.radius);
+  const { radius, lowerThickness, upperThickness } = section;
+  const height = lowerThickness + upperThickness;
+  const parameters: ParameterSpec<RoundConnectorParameter, RoundConnectorDimensions>[] = [
+    {
+      key: 'diameter',
+      envelope: { min: 0, max: 2 * radius },
+      value: dimensions.diameter,
+      with: (current, diameter) => ({ ...current, diameter }),
+    },
+    {
+      key: 'insertion',
+      envelope: { min: 0, max: height },
+      value: dimensions.insertion,
+      with: (current, insertion) => ({ ...current, insertion }),
+    },
+    {
+      key: 'upperClearance',
+      envelope: DIAMETRAL_CLEARANCE_LIMITS,
+      value: dimensions.clearance.upper,
+      with: (current, upper) => ({ ...current, clearance: { ...current.clearance, upper } }),
+    },
+  ];
+  if (dimensions.count === 2) {
+    parameters.push({
+      key: 'spacing',
+      envelope: { min: 0, max: radius },
+      value: dimensions.spacing,
+      with: (current, spacing) => ({ ...current, spacing }),
     });
-    // Where the hole is widest, at the cut, where its straight wall starts, and at its bottom, with the lean's shift.
-    const sideWall = Math.min(
-      ...sites.flatMap(({ along }, index) => {
-        const { straight, opening, chamfer } = radii[index] as (typeof radii)[number];
-        return [
-          [0, opening],
-          [chamfer, straight],
-          [holeDepth, straight],
-        ].map(([depth, holeRadius]) => inradius - Math.hypot(along, leanAcross * (depth as number)) - (holeRadius as number));
-      }),
-    );
-    if (short(sideWall, wall)) issues.push({ code: 'hole-wall-thin', part, valueMm: sideWall, minimumMm: wall });
-    if (sites.length === 2) {
-      const [first, second] = sites as [RoundConnectorSite, RoundConnectorSite];
-      const between = Math.abs(first.along - second.along) - (radii[0]?.opening ?? 0) - (radii[1]?.opening ?? 0);
-      if (short(between, wall)) issues.push({ code: 'holes-too-close', part, valueMm: between, minimumMm: wall });
-    }
-    if (short(thickness - holeDepth, wall)) {
-      issues.push({ code: 'hole-bottom-thin', part, valueMm: thickness - holeDepth, minimumMm: wall });
-    }
   }
-  if (connector.type === 'plug' && short(section.lowerThickness - PLUG_ROOT_OVERLAP_MM, wall)) {
-    issues.push({ code: 'base-thin', valueMm: section.lowerThickness - PLUG_ROOT_OVERLAP_MM, minimumMm: wall });
+  if (dimensions.clearance.lower !== undefined) {
+    parameters.push({
+      key: 'lowerClearance',
+      envelope: DIAMETRAL_CLEARANCE_LIMITS,
+      value: dimensions.clearance.lower,
+      with: (current, lower) => ({ ...current, clearance: { ...current.clearance, lower } }),
+    });
   }
-
-  return { type: connector.type, frame, sites, insertion, holeDepth, clearance, straightEngagement, issues };
+  return connectorFeasibility((current) => roundConnectorChecks(section, current), dimensions, parameters);
 }
 
 /**

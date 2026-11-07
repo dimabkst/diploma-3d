@@ -79,6 +79,21 @@ export function frameMatrix({ u, v, n }: SectionFrame, centre: Vec3): Mat4 {
  */
 export const CONNECTOR_MIN_WALL_MM = 1.2;
 
+/**
+ * A numerical tolerance, not a manufacturing allowance: a measured value within this many millimetres below its
+ * minimum differs from it by floating-point roundoff of the decimal settings only, and satisfies it.
+ */
+export const CONSTRAINT_ROUNDOFF_MM = 1e-9;
+
+/** A construction constraint at given dimensions: a measured value and the least value it may take, in millimetres. */
+export interface Measurement {
+  readonly valueMm: number;
+  readonly minimumMm: number;
+}
+
+/** Whether the measured value reaches its minimum; NaN never does. */
+export const satisfies = ({ valueMm, minimumMm }: Measurement): boolean => valueMm >= minimumMm - CONSTRAINT_ROUNDOFF_MM;
+
 /** Below this volume, in mm³ for M = 80 mm and scaled with M³, an intersection is Boolean roundoff, not contact. */
 const VOLUME_TOLERANCE_AT_80_MM = 1e-3;
 

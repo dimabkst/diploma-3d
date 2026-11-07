@@ -49,46 +49,46 @@ export function cylinderConnectorScale(values: {
 // Display and slider precision: a thousandth of a millimetre.
 const DIGITS = 3;
 const FACTOR = 10 ** DIGITS;
+// Absorbs the binary roundoff of a bound that is a decimal in exact arithmetic, such as 38,5 computed as
+// 38,49999999999999; a ten-billionth of a millimetre, well inside the plans' roundoff tolerance.
+const ROUNDOFF_THOUSANDTHS = 1e-7;
 
 /**
- * The stored limits in millimetres, rounded inwards to thousandths, so that every slider and button position converts
- * back to an allowed value; typed values between the rounded and the exact limit are still allowed.
+ * Feasible millimetres for a slider: rounded inwards to thousandths, so that every slider and button position, and a
+ * typed copy of a shown end, is a feasible value. An interval too narrow to hold a thousandth keeps its exact ends
+ * rather than reversing them; undefined when no value is feasible.
  */
 export function physicalRange(
-  limits: { readonly min: number; readonly max: number },
-  unit: number,
+  interval: { readonly min: number; readonly max: number } | null,
   increment: number,
-): StepRange {
-  return {
-    min: Math.ceil(limits.min * unit * FACTOR - 1e-6) / FACTOR,
-    max: Math.floor(limits.max * unit * FACTOR + 1e-6) / FACTOR,
-    increment,
-  };
+): StepRange | undefined {
+  if (interval === null || !(interval.min <= interval.max)) return undefined;
+  // + 0 turns a rounded −0 into 0, which would otherwise read "-0".
+  const min = Math.ceil(interval.min * FACTOR - ROUNDOFF_THOUSANDTHS) / FACTOR + 0;
+  const max = Math.floor(interval.max * FACTOR + ROUNDOFF_THOUSANDTHS) / FACTOR + 0;
+  return min <= max ? { min, max, increment } : { min: interval.min, max: interval.max, increment };
 }
 
-/** A stored value in millimetres, for display: rounded to thousandths only here. */
-export const formatPhysical = (value: number, unit: number): string => formatDecimal(Math.round(value * unit * FACTOR) / FACTOR);
+/** Millimetres for display: rounded to thousandths only here. */
+export const formatMillimetres = (value: number): string => formatDecimal(Math.round(value * FACTOR) / FACTOR);
+
+/** A stored value in millimetres, for display. */
+export const formatPhysical = (value: number, unit: number): string => formatMillimetres(value * unit);
 
 /**
  * The stored value for a length typed in millimetres. Twelve significant digits remove the binary roundoff of the
- * division, so that 3,3 mm at 1,5 mm per unit stores 2,2 rather than 2,1999999999999997; a value within roundoff of a
- * limit becomes the limit.
+ * division, so that 3,3 mm at 1,5 mm per unit stores 2,2 rather than 2,1999999999999997; the remaining error, below a
+ * nanometre, is within the plans' roundoff tolerance.
  */
-export function storedValue(physical: number, unit: number, limits: { readonly min: number; readonly max: number }): number {
-  const value = Number((physical / unit).toPrecision(12));
-  for (const limit of [limits.min, limits.max]) {
-    if (Math.abs(value - limit) <= 1e-9 * Math.max(1, Math.abs(limit))) return limit;
-  }
-  return value;
-}
+export const storedValue = (physical: number, unit: number): number => Number((physical / unit).toPrecision(12));
 
 /**
  * The stored text for what was typed in millimetres: the exact stored value for a number, or the text itself for a
- * draft that is not one yet, such as "" or "2,", which validation then reports.
+ * draft that is not one yet, such as "" or "-", which validation then reports.
  */
-export function storedText(typed: string, unit: number, limits: { readonly min: number; readonly max: number }): string {
+export function storedText(typed: string, unit: number): string {
   const physical = parseDecimal(typed);
-  return physical === undefined || !Number.isFinite(physical) ? typed : formatSteppedDecimal(storedValue(physical, unit, limits));
+  return physical === undefined || !Number.isFinite(physical) ? typed : formatSteppedDecimal(storedValue(physical, unit));
 }
 
 /** The millimetres shown for a stored text: converted when it is a number, as typed otherwise. */
