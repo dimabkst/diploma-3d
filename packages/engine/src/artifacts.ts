@@ -1,11 +1,11 @@
 import type { ModelSpecInput } from '@diploma-3d/schema';
 import { createPreviewGlb, type PreviewObject } from './export/glb.ts';
-import { arrangeInRow, rotateHalfTurn } from './export/layout.ts';
+import { arrangeInRow, rotateHalfTurn, rotateOntoZ } from './export/layout.ts';
 import type { ThreeMfObject } from './export/three-mf.ts';
 import { createThreeMf } from './export/three-mf.ts';
 import type { GeometryKernel } from './kernel.ts';
 import { type Vec3, vertexAt, vertexCount } from './mesh.ts';
-import { type GeneratedModel, generateModel } from './model.ts';
+import { type GeneratedModel, generateModel, type Solid } from './model.ts';
 
 export interface ModelArtifacts {
   readonly model: GeneratedModel;
@@ -13,7 +13,7 @@ export interface ModelArtifacts {
   readonly previewGlb: Uint8Array<ArrayBuffer>;
   /**
    * For a section only: the parts moved apart, so that the cut faces show; along the plane's normal for flat faces,
-   * along the sliding direction, off the tongue, for a dovetail.
+   * plugs and dowels, along the sliding direction, off the tongue, for a dovetail.
    */
   readonly separatedPreviewGlb?: Uint8Array<ArrayBuffer>;
   readonly printFile: { readonly fileName: string; readonly bytes: Uint8Array<ArrayBuffer> };
@@ -48,12 +48,15 @@ export async function buildModelArtifacts(kernel: GeometryKernel, spec: ModelSpe
   return { model, previewGlb, separatedPreviewGlb, printFile };
 }
 
+/** The part on the positive side of a section's plane: the one with the holes or the groove. */
+const onPositiveSide = ({ part }: Solid) => part === 'upper' || part === 'part-2';
+
 /**
- * How far the separated preview moves the upper part, from the generated parts: SECTION_PREVIEW_GAP_RELATIVE·M for
- * flat cut faces and for a dovetail, which first slides off its tongue; for plugs and dowels at least
- * CONNECTOR_PREVIEW_GAP_RELATIVE·M, and more when what stands on the lower part, a plug or the seated dowels, reaches
- * higher above the cut than that less the flat cut's gap, so that the upper part clears it by that gap. Only display
- * nodes move, so neither the meshes nor the print file depend on it.
+ * How far the separated preview moves a part, from the generated parts: SECTION_PREVIEW_GAP_RELATIVE·M for flat cut
+ * faces and for a dovetail, which first slides off its tongue; for plugs and dowels at least
+ * CONNECTOR_PREVIEW_GAP_RELATIVE·M, and more when what stands on the plane's negative side, a plug or the seated dowels,
+ * reaches further beyond the cut than that less the flat cut's gap, so that the other part clears it by that gap. Only
+ * display nodes move, so neither the meshes nor the print file depend on it.
  */
 export function previewSeparation({ solids, section, size }: GeneratedModel): number {
   const longest = Math.max(...size);
@@ -63,8 +66,9 @@ export function previewSeparation({ solids, section, size }: GeneratedModel): nu
   }
   const { normal, offset } = section.plane;
   let reach = 0;
-  for (const { mesh, part } of solids) {
-    if (part === 'upper') continue;
+  for (const solid of solids) {
+    if (onPositiveSide(solid)) continue;
+    const { mesh } = solid;
     for (let vertex = 0; vertex < vertexCount(mesh); vertex += 1) {
       const [x, y, z] = vertexAt(mesh, vertex);
       reach = Math.max(reach, normal[0] * x + normal[1] * y + normal[2] * z - offset);
@@ -74,33 +78,42 @@ export function previewSeparation({ solids, section, size }: GeneratedModel): nu
 }
 
 /**
- * The solids for the preview. With `gap` > 0 the upper part of a section moves away: by `gap` along the plane's normal
- * from flat cut faces, or, from a dovetail, along the sliding direction until it is off the tongue and `gap` further,
- * because the engaged parts cannot be pulled apart along the normal.
+ * The solids for the preview. With `gap` > 0 the part on the plane's positive side moves away by `gap` along the plane's
+ * normal, from flat cut faces, plugs and dowels, which stay seated in the other part. A dovetail cannot come apart along
+ * the normal once engaged, so its parts slide off the tongue and `gap` further. In a parallel cut the upper part moves
+ * along +u. In a vertical cut part 2, with the groove, stays where it is and part 1, with the tongue, rises along −u,
+ * which is the way it comes off; the groove opens upwards.
  */
 function previewObjects({ solids, section }: GeneratedModel, gap: number): PreviewObject[] {
-  if (section === undefined) return [...solids];
-  // Plugs and dowels come apart along the normal; the dowels stay seated in the lower part.
-  const [direction, distance] =
-    section.connector?.type === 'dovetail'
-      ? [section.connector.frame.u, section.connector.exitDistance + gap]
-      : [section.plane.normal, gap];
-  const offset: Vec3 = [direction[0] * distance, direction[1] * distance, direction[2] * distance];
-  return solids.map((solid) => ({ ...solid, ...(solid.part === 'upper' && gap > 0 ? { displayOffset: offset } : {}) }));
+  if (section === undefined || gap === 0) return [...solids];
+  const { connector, plane, type } = section;
+  const sliding = connector?.type === 'dovetail' ? connector : undefined;
+  const direction = sliding === undefined ? plane.normal : type === 'vertical' ? scaled(sliding.frame.u, -1) : sliding.frame.u;
+  const offset = scaled(direction, (sliding?.exitDistance ?? 0) + gap);
+  const moves = (solid: Solid) =>
+    sliding !== undefined && type === 'vertical' ? solid.part === 'part-1' : onPositiveSide(solid);
+  return solids.map((solid) => (moves(solid) ? { ...solid, displayOffset: offset } : solid));
 }
 
+const scaled = (a: Vec3, factor: number): Vec3 => [a[0] * factor, a[1] * factor, a[2] * factor];
+
 /**
- * The print file's objects, side by side on the build plate. With a connector both connector faces print upwards: the
- * lower part stands on its lower base, and the upper part is turned half a turn about u onto its upper base, which
- * also keeps a dovetail groove's flanks at 45° overhangs. Removable dowels stand upright on an end face, as they are
- * built along the normal. Flat cut faces keep the parts as they are.
+ * The print file's objects, side by side on the build plate. Flat cut faces keep the parts as they are. With a parallel
+ * cut's connector both connector faces print upwards: the lower part stands on its lower base, and the upper part is
+ * turned half a turn about u onto its upper base, which also keeps a dovetail groove's flanks at 45° overhangs. A
+ * vertical cut's parts stay upright on what remains of their bases, by translation only; their connector faces stand
+ * upright too, so a connector along them may need another orientation in the slicer. Removable dowels stand upright on
+ * an end face.
  */
 function printObjects({ solids, section }: GeneratedModel): readonly ThreeMfObject[] {
   if (solids.length === 1) return solids;
-  const axis = section?.connector?.frame.u;
+  const connector = section?.connector;
+  if (connector === undefined) return arrangeInRow(solids);
+  const { u, n } = connector.frame;
   return arrangeInRow(
-    axis === undefined
-      ? solids
-      : solids.map((solid) => (solid.part === 'upper' ? { ...solid, mesh: rotateHalfTurn(solid.mesh, axis) } : solid)),
+    solids.map((solid) => {
+      if (solid.part === 'dowel') return { ...solid, mesh: rotateOntoZ(solid.mesh, n) };
+      return solid.part === 'upper' ? { ...solid, mesh: rotateHalfTurn(solid.mesh, u) } : solid;
+    }),
   );
 }

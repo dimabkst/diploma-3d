@@ -65,12 +65,30 @@ function bisect(holds: (value: number) => boolean, satisfied: number, unsatisfie
   return good;
 }
 
+// Narrows a bracket by a third per step: enough to locate the best value to well below any printable length.
+const SEARCH_STEPS = 80;
+
+/** A value of the envelope that reaches the minimum, for a concave margin that fails at both ends; undefined if none does. */
+function interiorSolution(margin: (value: number) => number, { min, max }: Interval): number | undefined {
+  let [low, high] = [min, max];
+  for (let step = 0; step < SEARCH_STEPS; step += 1) {
+    const [first, second] = [low + (high - low) / 3, high - (high - low) / 3];
+    if (margin(first) >= 0) return first;
+    if (margin(second) >= 0) return second;
+    // NaN never compares as greater, so an undefined margin narrows towards the other end.
+    if (margin(first) > margin(second)) high = second;
+    else low = first;
+  }
+  return undefined;
+}
+
 /**
  * Solves every constraint for one dimension x and intersects the results, the other dimensions fixed. The checks must
- * list the same constraints in the same order for every x, and each must be monotone in x, as the connectors' checks
- * are (see their tests). A monotone constraint then holds on a half-line of the envelope, on all of it or on none: its
- * values at the envelope's ends tell which, and a bisection that keeps the satisfied end finds a threshold, which is
- * itself satisfied. A constraint with the same value at both ends is constant and does not depend on x.
+ * list the same constraints in the same order for every x, and each must be concave in x, as a monotone or piecewise
+ * linear wall is (see the connectors' tests). A concave constraint holds on one interval of the envelope, or nowhere:
+ * its values at the ends tell whether that interval reaches them, a search finds it when it reaches neither, and a
+ * bisection that keeps the satisfied end finds each threshold, which is itself satisfied. A constraint with the same
+ * value at both ends and between them is constant and does not depend on x.
  *
  * Thresholds inside the envelope satisfy each minimum exactly, without the roundoff tolerance that the plans allow, so
  * that a bound converted to the stored settings and back still passes the plans.
@@ -82,24 +100,31 @@ function solveParameter<Issue extends Measurement>(
 ): { feasibility: ParameterFeasibility<Issue>; dependent: readonly boolean[] } {
   const atMin = evaluate(envelope.min);
   const atMax = evaluate(envelope.max);
+  const atMiddle = evaluate((envelope.min + envelope.max) / 2);
   let { min, max } = envelope;
   let blocked = false;
   const issues: Issue[] = [];
+  const same = (a: Issue, b: Issue) => Object.is(a.valueMm, b.valueMm) && Object.is(a.minimumMm, b.minimumMm);
   const dependent = atMin.map((low, index) => {
     const high = atMax[index] as Issue;
-    if (Object.is(low.valueMm, high.valueMm) && Object.is(low.minimumMm, high.minimumMm)) return false;
+    if (same(low, high) && same(low, atMiddle[index] as Issue)) return false;
     const now = current[index] as Issue;
     if (!satisfies(now)) issues.push(now);
     // The envelope's ends are exact values, such as a calibration window's: the plans' tolerance applies to them.
     const [lowHolds, highHolds] = [satisfies(low), satisfies(high)];
     if (lowHolds && highHolds) return true;
-    if (!lowHolds && !highHolds) {
+    const holds = (value: number) => reaches(evaluate(value)[index] as Issue);
+    const margin = (value: number) => {
+      const { valueMm, minimumMm } = evaluate(value)[index] as Issue;
+      return valueMm - minimumMm;
+    };
+    const inside = lowHolds ? envelope.min : highHolds ? envelope.max : interiorSolution(margin, envelope);
+    if (inside === undefined) {
       blocked = true;
       return true;
     }
-    const holds = (value: number) => reaches(evaluate(value)[index] as Issue);
-    if (lowHolds) max = Math.min(max, bisect(holds, envelope.min, envelope.max));
-    else min = Math.max(min, bisect(holds, envelope.max, envelope.min));
+    if (!lowHolds) min = Math.max(min, bisect(holds, inside, envelope.min));
+    if (!highHolds) max = Math.min(max, bisect(holds, inside, envelope.max));
     return true;
   });
   return { feasibility: { bounds: { min, max, blocked }, issues }, dependent };

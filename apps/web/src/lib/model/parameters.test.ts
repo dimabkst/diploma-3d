@@ -1,5 +1,6 @@
+import { roundDimensionsMm, sectionOffsetMm } from '@diploma-3d/engine';
 import { describe, expect, it } from 'vitest';
-import { formatSteppedDecimal } from '../decimal.ts';
+import { formatSteppedDecimal, snapDecimal, stepDecimal } from '../decimal.ts';
 import { sectionNumberFields, shapePanel } from '../shapes.ts';
 import { storedText } from './connectorScale.ts';
 import {
@@ -171,6 +172,7 @@ describe('resolveModelRequest', () => {
       coneOffsetRatio: '0',
       coneInclinationDeg: '90',
       cylinderSectionPercent: '50',
+      cylinderSectionOffsetPercent: '0',
       cylinderDovetailSize: '1',
       cylinderDovetailLengthPercent: '50',
       cylinderDovetailClearanceMm: '0,2',
@@ -1158,7 +1160,7 @@ describe('one range per control', () => {
     const initial = resolveModelRequest(kind, initialParameterTexts(), choices, options);
     // The defaults of every figure are valid in both modes.
     expect(initial.errors).toEqual({});
-    const panel = shapePanel(kind, choices, { tiltModes, values: initial.values, connectorRanges: initial.connectorRanges });
+    const panel = shapePanel(kind, choices, { tiltModes, values: initial.values, sectionRanges: initial.sectionRanges });
     if (panel.type === 'fixed') throw new Error('A configurable figure has fields.');
     for (const field of panel.sections.flatMap(sectionNumberFields)) {
       if (field.range === undefined) throw new Error(`${field.key} has no range at the defaults.`);
@@ -1209,7 +1211,8 @@ describe('a cylinder section parallel to the bases', () => {
     const request = resolveModelRequest('cylinder', texts({}), triangle);
     expect(request.spec).not.toHaveProperty('section');
     expect(activeSection('cylinder', triangle)).toBeUndefined();
-    expect(partsSeparated('cylinder', triangle)).toBe(false);
+    // The switch itself is on, but a model without a section has no separated preview to show.
+    expect(partsSeparated('cylinder', triangle)).toBe(true);
     const group = panelOf(triangle);
     expect(group).toMatchObject({ initiallyOpen: false, status: { text: 'немає', highlighted: false } });
     expect(group.fields.map((field) => field.type)).toEqual(['choice']);
@@ -1333,8 +1336,8 @@ describe('a dovetail joining the cylinder’s parts', () => {
   const request = (overrides: Partial<ParameterTexts>, choices: typeof triangle = joined) =>
     resolveModelRequest('cylinder', texts(overrides), choices);
   const groupsOf = (choices: typeof triangle) => {
-    const { values, connectorRanges } = request({}, choices);
-    const panel = shapePanel('cylinder', choices, { values, connectorRanges });
+    const { values, sectionRanges } = request({}, choices);
+    const panel = shapePanel('cylinder', choices, { values, sectionRanges });
     return panel.type === 'parameters' ? panel.sections : [];
   };
 
@@ -1464,7 +1467,7 @@ describe('a dovetail joining the cylinder’s parts', () => {
       cylinderDovetailClearanceMm: `${backing} Зараз жодне значення цього поля не підходить: змініть інші параметри.`,
     });
     expect(thin.values.cylinderSectionPercent).toBe(90);
-    expect(thin.connectorRanges).toMatchObject({ cylinderDovetailSize: null, cylinderDovetailClearanceMm: null });
+    expect(thin.sectionRanges).toMatchObject({ cylinderDovetailSize: null, cylinderDovetailClearanceMm: null });
     // The same values without the connector are a valid smooth cut.
     expect(
       request({ cylinderHeightRatio: '0,5', cylinderSectionPercent: '90' }, { ...joined, cylinderConnector: 'none' }).spec,
@@ -1530,8 +1533,8 @@ describe('plugs and dowels joining the cylinder’s parts', () => {
   const request = (overrides: Partial<ParameterTexts>, choices: typeof triangle) =>
     resolveModelRequest('cylinder', texts(overrides), choices);
   const connectorGroup = (choices: typeof triangle) => {
-    const { values, connectorRanges } = request({}, choices);
-    const panel = shapePanel('cylinder', choices, { values, connectorRanges });
+    const { values, sectionRanges } = request({}, choices);
+    const panel = shapePanel('cylinder', choices, { values, sectionRanges });
     return panel.type === 'parameters' ? panel.sections.find((group) => group.title === 'Кріплення') : undefined;
   };
   const fieldsOf = (choices: typeof triangle) => connectorGroup(choices)?.fields.map((field) => [field.type, field.key]);
@@ -1652,7 +1655,7 @@ describe('plugs and dowels joining the cylinder’s parts', () => {
     ] as const) {
       const result = request({ [key]: text }, choose('dowel', 2));
       expect(result.errors[key]).toBe(message);
-      expect(result.connectorRanges === undefined).toBe(key.endsWith('ClearanceMm'));
+      expect(result.sectionRanges === undefined).toBe(key.endsWith('ClearanceMm'));
       expect(result.spec).toBeUndefined();
     }
     // A 5,6 mm dowel leaves 1,7 mm of straight engagement; no pair diameter of at least 3,75 mm repairs that, so the
@@ -1727,5 +1730,281 @@ describe('plugs and dowels joining the cylinder’s parts', () => {
     expect(
       canResetShapeParameters('cylinder', { texts: hidden, choices: { ...choose('plug', 2), cylinderSection: 'none' } }),
     ).toBe(false);
+  });
+});
+
+describe('a vertical section of the cylinder', () => {
+  const sectioned = { ...triangle, cylinderSection: 'vertical' } as const;
+  const choose = (cylinderConnector: 'dovetail' | 'plug' | 'dowel', cylinderRoundCount: 1 | 2 = 1) =>
+    ({ ...sectioned, cylinderConnector, cylinderRoundCount }) as const;
+  const request = (overrides: Partial<ParameterTexts>, choices: typeof triangle = sectioned) =>
+    resolveModelRequest('cylinder', texts(overrides), choices);
+  const groupsOf = (choices: typeof triangle, overrides: Partial<ParameterTexts> = {}) => {
+    const { values, sectionRanges } = request(overrides, choices);
+    const panel = shapePanel('cylinder', choices, { values, sectionRanges });
+    return panel.type === 'parameters' ? panel.sections : [];
+  };
+  const group = (choices: typeof triangle, title: string, overrides: Partial<ParameterTexts> = {}) => {
+    const found = groupsOf(choices, overrides).find((part) => part.title === title);
+    if (found === undefined) throw new Error(`No group ${title}`);
+    return found;
+  };
+  const rangesOf = (choices: typeof triangle, overrides: Partial<ParameterTexts> = {}) =>
+    Object.fromEntries(
+      sectionNumberFields(group(choices, 'Кріплення', overrides)).map(({ label, range }) => [
+        label,
+        range && [range.min, range.max],
+      ]),
+    );
+
+  it('starts axial, with the distance from the axis in percent of r instead of the position along the height', () => {
+    const result = request({});
+    expect(result.errors).toEqual({});
+    expect(result.spec?.section).toEqual({ type: 'vertical', offsetPercent: 0 });
+    const cut = group(sectioned, 'Переріз');
+    expect(cut.status).toEqual({ text: 'вертикальний', highlighted: true });
+    expect(cut.fields.map((field) => [field.type, field.key])).toEqual([
+      ['choice', 'cylinderSection'],
+      ['number', 'cylinderSectionOffsetPercent'],
+      ['toggle', 'cylinderPartsSeparated'],
+    ]);
+    // The thinner part keeps 10 % of the extent across the plane: ±0,8·r, in steps of 5 like the position along h.
+    const field = sectionNumberFields(cut)[0];
+    expect(field).toMatchObject({
+      label: 'Зміщення від осі',
+      suffix: '% r',
+      range: { min: -80, max: 80, increment: 5 },
+    });
+    expect(field?.unit).toBeUndefined();
+    expect(cut.fields[0]).toMatchObject({
+      options: [
+        { value: 'none', label: 'Без перерізу' },
+        { value: 'parallel-to-bases', label: 'Паралельно основам' },
+        { value: 'vertical', label: 'Вертикальний' },
+      ],
+    });
+  });
+
+  it('explains itself, and keeps the connectors below that explanation in their own group', () => {
+    const titles = groupsOf(sectioned).map(({ title }) => title);
+    expect(titles.indexOf('Кріплення')).toBe(titles.indexOf('Переріз') + 1);
+    const { help } = group(sectioned, 'Переріз');
+    expect(help?.label).toBe('Як задано переріз?');
+    expect(help?.text).toMatch(/осьовий переріз/);
+    expect(help?.text).toMatch(/прямокутник/);
+    expect(help?.text).toMatch(/паралелограм/);
+    expect(help?.text).toMatch(/ширина перерізу змінюється/);
+    expect(help?.text).toContain(
+      '0% — осьовий переріз. Значення 50% зміщує площину на половину радіуса основи. Знак визначає бік зміщення.',
+    );
+    expect(group(sectioned, 'Кріплення').fields[0]).toMatchObject({
+      key: 'cylinderConnector',
+      options: [{ value: 'none' }, { value: 'dovetail' }, { value: 'plug' }, { value: 'dowel' }],
+    });
+  });
+
+  it('does not call the parts lower and upper, and explains the dovetail’s motion', () => {
+    for (const choices of [choose('dovetail'), choose('plug'), choose('dowel', 2)]) {
+      const connector = group(choices, 'Кріплення');
+      expect(connector.help?.text).not.toMatch(/верхню частину|нижній частині|верхній частині|нижньою половинкою|насуньте/i);
+      for (const field of sectionNumberFields(connector)) expect(field.label).not.toMatch(/(^|\s)(нижн|верхн)/i);
+    }
+    expect(group(choose('dovetail'), 'Кріплення').help?.text).toContain(
+      'Паз відкритий угорі та закінчується упором унизу. Щоб скласти модель, опустіть половинку з виступом уздовж паза до упора. ' +
+        'Для розбирання утримуйте половинку з пазом і підніміть половинку з виступом. У такому положенні її вага притискає ' +
+        'виступ до нижнього упора.',
+    );
+    expect(rangesOf(choose('dowel'))).toHaveProperty(['Збільшення діаметра отворів частини 1, мм']);
+    expect(rangesOf(choose('dowel'))).toHaveProperty(['Збільшення діаметра отворів частини 2, мм']);
+    expect(group(choose('plug'), 'Кріплення').help?.text).toMatch(/підтримок або іншої орієнтації в слайсері/);
+    // The horizontal cut keeps its own words.
+    const parallel = { ...choose('dowel'), cylinderSection: 'parallel-to-bases' } as const;
+    expect(rangesOf(parallel)).toHaveProperty(['Збільшення діаметра нижніх отворів, мм']);
+  });
+
+  it('keeps the signed distance as typed, scales it with the radius and refuses a plane beyond its limit, without clamping', () => {
+    expect(request({ cylinderSectionOffsetPercent: '-62,5' }).spec?.section).toEqual({ type: 'vertical', offsetPercent: -62.5 });
+    const scaled = request({ cylinderSectionOffsetPercent: '50', printSizeMm: '120' });
+    expect(scaled.spec?.section).toEqual({ type: 'vertical', offsetPercent: 50 });
+    // The percentage and its limits are those of the proportions; only the millimetres scale.
+    expect(scaled.sectionRanges?.cylinderSectionOffsetPercent?.max).toBeCloseTo(80, 9);
+    for (const text of ['81', '-81', '100', '150']) {
+      const refused = request({ cylinderSectionOffsetPercent: text });
+      expect(refused.errors).toEqual({
+        cylinderSectionOffsetPercent:
+          'Допустимі значення — від -80 % до 80 %: обидві частини мають лишатися придатними до друку.',
+      });
+      expect(refused.spec).toBeUndefined();
+    }
+    for (const [text, message] of [
+      ['', 'Введіть значення.'],
+      ['нуль', 'Введіть число, наприклад 25.'],
+    ] as const) {
+      expect(request({ cylinderSectionOffsetPercent: text }).errors).toEqual({ cylinderSectionOffsetPercent: message });
+    }
+  });
+
+  it('reads only the active cut’s field, and keeps both between switches', () => {
+    expect(request({ cylinderSectionPercent: '5' }).errors).toEqual({});
+    const parallel = { ...triangle, cylinderSection: 'parallel-to-bases' } as const;
+    expect(request({ cylinderSectionOffsetPercent: '500' }, parallel).errors).toEqual({});
+    const edited = { cylinderSectionPercent: '30', cylinderSectionOffsetPercent: '25' };
+    expect(request(edited).spec?.section).toEqual({ type: 'vertical', offsetPercent: 25 });
+    expect(request(edited, parallel).spec?.section).toEqual({ type: 'parallel-to-bases', positionPercent: 30 });
+    // Rebuilds for the distance, but not for the hidden position or the separation.
+    const base = request({}).key;
+    expect(request({ cylinderSectionOffsetPercent: '25' }).key).not.toBe(base);
+    expect(request({ cylinderSectionPercent: '30' }).key).toBe(base);
+    expect(request({}, { ...sectioned, cylinderPartsSeparated: false }).key).toBe(base);
+  });
+
+  it('resets to no section, on the axis, keeping the print size', () => {
+    const edited: ParameterState = {
+      texts: texts({ cylinderSectionOffsetPercent: '25', printSizeMm: '120' }),
+      choices: choose('plug', 2),
+    };
+    expect(canResetShapeParameters('cylinder', edited)).toBe(true);
+    const reset = resetShapeParameters('cylinder', edited);
+    expect(reset.texts).toEqual(texts({ printSizeMm: '120' }));
+    expect(reset.choices).toMatchObject({ cylinderSection: 'none', cylinderConnector: 'none' });
+    // A hidden distance offers no reset of its own.
+    expect(canResetShapeParameters('cylinder', { texts: texts({ cylinderSectionOffsetPercent: '25' }), choices: triangle })).toBe(
+      false,
+    );
+    expect(
+      canResetShapeParameters('cylinder', {
+        texts: texts({ cylinderSectionOffsetPercent: '25' }),
+        choices: { ...triangle, cylinderSection: 'parallel-to-bases' },
+      }),
+    ).toBe(true);
+  });
+
+  it('bounds the connectors by this cut: depth towards the curved surface, length and spacing along the height', () => {
+    // r = 40 mm, H = 80 mm: e up to √(38,75² − 2,6²) − 0,3 mm towards the surface; 2 mm of straight engagement from 2,8 mm.
+    const plug = rangesOf(choose('plug'));
+    expect(plug['Висота виступу, мм']?.[0]).toBe(2.8);
+    expect(plug['Висота виступу, мм']?.[1]).toBeCloseTo(38.4, 0);
+    // A dowel's field is the whole length.
+    expect(rangesOf(choose('dowel'))['Повна довжина штифта, мм']?.[0]).toBe(6.2);
+    // A flat cylinder: H = 20 mm limits the length and the diameter, while the depth stays large.
+    const flat = { cylinderHeightRatio: '0,5' };
+    const flatPlug = rangesOf(choose('plug'), flat);
+    expect(flatPlug['Висота виступу, мм']?.[1]).toBeGreaterThan(38);
+    expect(flatPlug['Діаметр виступу, мм']?.[1]).toBeCloseTo(15.8, 1);
+    const flatDovetail = rangesOf(choose('dovetail'), flat);
+    expect(flatDovetail['Довжина виступу, мм']?.[1]).toBeCloseTo(17.2, 1);
+    // The defaults follow the span: half the height, and 45 % of half of it.
+    expect(request(flat, choose('dovetail')).errors).toEqual({});
+    expect(request(flat, choose('plug', 2)).errors).toEqual({});
+  });
+
+  it('gives the plane’s distance in percent of r: signed, unchanged by the print size, and physically the same plane', () => {
+    const planeOf = (overrides: Partial<ParameterTexts>) => {
+      const { spec } = request(overrides);
+      if (spec?.section?.type !== 'vertical' || spec.shape.kind !== 'cylinder') throw new Error('Expected a vertical section.');
+      return sectionOffsetMm(spec.section.offsetPercent, roundDimensionsMm(spec.shape, spec.scale).radius);
+    };
+    // M = 80 mm, r = 40 mm.
+    expect(planeOf({ cylinderSectionOffsetPercent: '0' })).toBe(0);
+    expect(planeOf({ cylinderSectionOffsetPercent: '25' })).toBeCloseTo(10, 12);
+    expect(planeOf({ cylinderSectionOffsetPercent: '-25' })).toBeCloseTo(-10, 12);
+    // Scaled by 1,5, +25 % stays and the plane moves from 10 to 15 mm.
+    expect(request({ cylinderSectionOffsetPercent: '25', printSizeMm: '120' }).spec?.section).toEqual({
+      type: 'vertical',
+      offsetPercent: 25,
+    });
+    expect(planeOf({ cylinderSectionOffsetPercent: '25', printSizeMm: '120' })).toBeCloseTo(15, 12);
+    // Of the base circle's radius, not of half the bounding box: an oblique cylinder at M = 80 mm has r = 80/3 mm.
+    expect(planeOf({ cylinderSectionOffsetPercent: '25', cylinderOffsetRatio: '1' })).toBeCloseTo(20 / 3, 12);
+    // The text is the only state: nothing is stored in millimetres.
+    expect(request({ cylinderSectionOffsetPercent: '12,5' }).values.cylinderSectionOffsetPercent).toBe(12.5);
+  });
+
+  it('converts the geometric limits to percent: the same planes as before, inward only, both ends reachable', () => {
+    const limit = (printSizeMm: string, heightRatio = '2') => {
+      const overrides = { printSizeMm, cylinderHeightRatio: heightRatio };
+      const range = sectionNumberFields(group(sectioned, 'Переріз', overrides))[0]?.range;
+      if (range === undefined) throw new Error('Expected a range.');
+      return range;
+    };
+    // ±0,8·r whenever 10 % of the extent exceeds the 1,2 mm wall, whatever the proportions and the lean.
+    expect(limit('80')).toEqual({ min: -80, max: 80, increment: 5 });
+    expect(limit('1000')).toEqual({ min: -80, max: 80, increment: 5 });
+    expect(limit('80', '8')).toEqual({ min: -80, max: 80, increment: 5 });
+    // M = 10 mm, r = 5 mm: the wall leaves 3,8 mm, which is 76 %; M = 7 mm, r = 3,5 mm: 2,3 mm, 65,71… % rounded inwards.
+    expect(limit('10')).toEqual({ min: -76, max: 76, increment: 5 });
+    expect(limit('7')).toEqual({ min: -65.71, max: 65.71, increment: 5 });
+    // An end that is not a multiple of the step is reachable by a step, and the end itself is accepted as a value.
+    const range = limit('7');
+    expect(stepDecimal(65, 1, range)).toBe(65.71);
+    expect(stepDecimal(-65, -1, range)).toBe(-65.71);
+    expect(snapDecimal(65.7, range)).toBe(65.71);
+    const at = (text: string) => request({ printSizeMm: '7', cylinderSectionOffsetPercent: text }).errors;
+    expect(at('65,71')).toEqual({});
+    expect(at('-65,71')).toEqual({});
+    expect(at('65,72').cylinderSectionOffsetPercent).toMatch(/^Допустимі значення — від -65,71 % до 65,71 %/);
+    // Too small for any wall beside the axis: only the axial section, 0 to 0.
+    expect(limit('2')).toEqual({ min: 0, max: 0, increment: 5 });
+    expect(request({ printSizeMm: '2' }).errors).toEqual({});
+    expect(request({ printSizeMm: '2', cylinderSectionOffsetPercent: '5' }).errors.cylinderSectionOffsetPercent).toMatch(
+      /^Допустимі значення — від 0 % до 0 %/,
+    );
+  });
+
+  it('makes the connector sliders span exactly the values each field accepts', () => {
+    for (const choices of [choose('dovetail'), choose('plug'), choose('plug', 2), choose('dowel'), choose('dowel', 2)]) {
+      const { values, sectionRanges } = request({}, choices);
+      const panel = shapePanel('cylinder', choices, { values, sectionRanges });
+      if (panel.type === 'fixed') throw new Error('A cylinder has fields.');
+      const fields = panel.sections
+        .filter(({ title }) => title === 'Кріплення' || title === 'Переріз')
+        .flatMap(sectionNumberFields);
+      for (const field of fields) {
+        if (field.range === undefined) throw new Error(`${field.key} has no range.`);
+        const { min, max } = field.range;
+        const stored = (value: number) =>
+          field.unit === undefined ? formatSteppedDecimal(value) : storedText(formatSteppedDecimal(value), field.unit);
+        const errorAt = (value: number) => request({ [field.key]: stored(value) }, choices).errors[field.key];
+        expect(errorAt(min), `${field.key} at ${min}`).toBeUndefined();
+        expect(errorAt(max), `${field.key} at ${max}`).toBeUndefined();
+        expect(errorAt(min - 0.01), `${field.key} below ${min}`).toBeDefined();
+        expect(errorAt(max + 0.01), `${field.key} above ${max}`).toBeDefined();
+      }
+    }
+  });
+
+  it('explains a connector that does not fit this cut at the fields that repair it, builds nothing and recovers', () => {
+    // r = 40 mm, t = 25 mm: 15 mm remain in part 2 on the axis, and a 14 mm plug leaves too little under the hole.
+    const deep = request({ cylinderSectionOffsetPercent: '62,5', cylinderRoundDepth: '3,5' }, choose('plug'));
+    expect(deep.spec).toBeUndefined();
+    expect(deep.errors.cylinderRoundDepth).toMatch(
+      /^Під дном отвору у частині 2 лишається 0,\d+ мм, потрібно щонайменше 1,2 мм\./,
+    );
+    expect(deep.errors.cylinderRoundDepth).toMatch(/Зменште висоту виступу, діаметр виступу або зміщення від осі\./);
+    expect(deep.errors.cylinderRoundDepth).toMatch(/Зараз допустимо від 2,8 мм до 13,\d+ мм\.$/);
+    expect(deep.errors.cylinderSectionOffsetPercent).toBeUndefined();
+    // Moving the plane back repairs it, with nothing else changed.
+    expect(request({ cylinderSectionOffsetPercent: '25', cylinderRoundDepth: '3,5' }, choose('plug')).spec).toBeDefined();
+    // A dovetail too long for the stop is explained in this cut's words.
+    const long = request({ cylinderDovetailLengthPercent: '98' }, choose('dovetail'));
+    expect(long.errors.cylinderDovetailLengthPercent).toMatch(
+      /^Під нижнім упором паза лишається 0,\d+ мм, потрібно щонайменше 1,2 мм\./,
+    );
+    // A strongly leaning cylinder refuses the tongue, the slide stays vertical.
+    const leaning = request({ cylinderOffsetRatio: '4' }, choose('dovetail'));
+    expect(leaning.errors.cylinderDovetailLengthPercent).toMatch(/^Стінка біля паза — /);
+    expect(leaning.spec).toBeUndefined();
+    const short = request(
+      { cylinderOffsetRatio: '4', cylinderDovetailLengthPercent: '15', cylinderDovetailSize: '0,75' },
+      choose('dovetail'),
+    );
+    expect(short.spec).toBeDefined();
+  });
+
+  it('accepts dimensions the cut allows beyond what a parallel cut of the same cylinder would', () => {
+    const flat = { cylinderHeightRatio: '0,5', cylinderRoundDepth: '6' };
+    const parallel = { ...choose('plug'), cylinderSection: 'parallel-to-bases' } as const;
+    expect(request(flat, parallel).spec).toBeUndefined();
+    expect(request(flat, choose('plug')).spec?.section?.connector).toMatchObject({ depthFactor: 6 });
   });
 });

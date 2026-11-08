@@ -22,6 +22,7 @@ import {
   type ConnectorScale,
   connectorUnits,
   cylinderConnectorScale,
+  percentRange,
   physicalRange,
   type ScaledConnectorKey,
 } from './model/connectorScale.ts';
@@ -29,12 +30,12 @@ import {
   activeSection,
   type ChoiceKey,
   type ConnectorChoice,
-  type ConnectorRanges,
   canSwitchTiltMode,
   type ParameterChoices,
   type ParameterKey,
   type ParameterValues,
   type SectionChoice,
+  type SectionRanges,
   sectionKeys,
   type ToggleKey,
 } from './model/parameters.ts';
@@ -346,8 +347,8 @@ export type PanelContext = {
   readonly values?: ParameterValues | undefined;
   /** The scale that turns connector settings into millimetres; the connector group needs it. */
   readonly connectorScale?: ConnectorScale | undefined;
-  /** The feasible millimetres of the connector's fields, see `ConnectorRanges`. */
-  readonly connectorRanges?: ConnectorRanges | undefined;
+  /** The feasible millimetres of the connector's fields, see `SectionRanges`. */
+  readonly sectionRanges?: SectionRanges | undefined;
 };
 
 type TiltConfig = {
@@ -510,12 +511,14 @@ const pyramidBaseKeys: BaseFieldKeys = {
 
 const sideAMeaning = 'a — сторона основи.';
 
-// The position moves in steps of 5 percentage points; a typed value between them is kept.
-const sectionPositionRange: StepRange = { ...SECTION_POSITION_LIMITS, increment: 5 };
+// A cut's position and its distance from the axis move in steps of 5 percentage points; a typed value between them is kept.
+const SECTION_PERCENT_INCREMENT = 5;
+const sectionPositionRange: StepRange = { ...SECTION_POSITION_LIMITS, increment: SECTION_PERCENT_INCREMENT };
 
 const sectionNames: Readonly<Record<SectionChoice, string>> = {
   none: 'Без перерізу',
   'parallel-to-bases': 'Паралельно основам',
+  vertical: 'Вертикальний',
 };
 
 const parallelSectionHelp: Help = {
@@ -525,6 +528,18 @@ const parallelSectionHelp: Help = {
     'круг радіуса r; у похилого циліндра його центр зміщено разом із віссю, а площина не перпендикулярна до осі. ' +
     'Частини експортуються окремими об’єктами в одному масштабі; розсування змінює лише перегляд. Межі 10–90 % ' +
     'відсувають площину від основ, але не гарантують, що тонку частину вдасться надрукувати.',
+};
+
+const verticalSectionHelp: Help = {
+  label: 'Як задано переріз?',
+  text:
+    'Площина вертикальна й паралельна осі циліндра. 0% — осьовий переріз. Значення 50% зміщує площину на половину ' +
+    'радіуса основи. Знак визначає бік зміщення.\n\n' +
+    'У прямого циліндра переріз — прямокутник, у похилого в цьому режимі — паралелограм. Зміщення від осі зсуває ' +
+    'площину вбік: ширина перерізу змінюється, а висота лишається тією самою.\n\n' +
+    'Частини 1 і 2 лежать по різні боки площини й експортуються окремими об’єктами в одному масштабі; розсування ' +
+    'змінює лише перегляд. У файлі вони стоять на залишках своїх основ. Межі зміщення відсувають площину від бічної ' +
+    'поверхні, але не гарантують, що тонку частину вдасться надрукувати.',
 };
 
 const connectorNames: Readonly<Record<ConnectorChoice, string>> = {
@@ -578,6 +593,50 @@ const dowelHelp: Help = {
     BOUNDS_HELP,
 };
 
+const VERTICAL_PRINT_NOTE =
+  'Вісь кріплення горизонтальна, а частини у файлі стоять вертикально, тому виступи й отвори можуть потребувати ' +
+  'підтримок або іншої орієнтації в слайсері.';
+
+const verticalDovetailHelp: Help = {
+  label: 'Як працює кріплення?',
+  text:
+    'Паз відкритий угорі та закінчується упором унизу. Щоб скласти модель, опустіть половинку з виступом уздовж паза ' +
+    'до упора. Для розбирання утримуйте половинку з пазом і підніміть половинку з виступом. У такому положенні її вага ' +
+    'притискає виступ до нижнього упора.\n\n' +
+    'Виступ — на частині 1, паз — у частині 2. Похилі боки під кутом 45° утримують половинки від роз’єднання ' +
+    'перпендикулярно до перерізу, але це не замок: половинки роз’єднаються, якщо утримувати іншу або перевернути модель.\n\n' +
+    'Висота визначає, наскільки виступ виходить за переріз. Довжина вимірюється вертикально, вздовж паза. Зазор — ' +
+    'заданий у моделі проміжок між відповідними поверхнями виступу й паза.\n\n' +
+    BOUNDS_HELP,
+};
+
+const verticalPlugHelp: Help = {
+  label: 'Як працює кріплення?',
+  text:
+    'Виступ друкується разом із частиною 1 та входить в отвір частини 2. Частини з’єднують і розбирають рухом ' +
+    'перпендикулярно до перерізу.\n\n' +
+    'Висота виступу визначає, наскільки він заходить у частину 2. Отвір має додаткові 0,3 мм глибини, щоб його дно не ' +
+    'заважало зімкнути половинки.\n\n' +
+    'Збільшення діаметра отвору визначає, наскільки отвір ширший за виступ. Наприклад, для виступу діаметром 5 мм ' +
+    'значення 0,2 мм дає отвір діаметром 5,2 мм.\n\n' +
+    VERTICAL_PRINT_NOTE +
+    '\n\n' +
+    BOUNDS_HELP,
+};
+
+const verticalDowelHelp: Help = {
+  label: 'Як працює кріплення?',
+  text:
+    'Штифти друкуються окремо та вставляються в отвори обох половинок. Їх можна вийняти або замінити.\n\n' +
+    'Поле довжини задає повну довжину штифта. Номінально в кожну половинку входить половина цієї довжини. Кожен ' +
+    'отвір має додаткові 0,3 мм глибини, тому штифт може трохи зміщуватися вздовж осі.\n\n' +
+    'Розміри отворів частин 1 і 2 налаштовуються окремо. Наприклад, для штифта діаметром 5 мм збільшення діаметра ' +
+    'отвору на 0,2 мм дає отвір діаметром 5,2 мм.\n\n' +
+    VERTICAL_PRINT_NOTE +
+    '\n\n' +
+    BOUNDS_HELP,
+};
+
 const SCALE_NOTE =
   'Показано фактичні розміри для поточного масштабу моделі. Розміри кріплення змінюються разом із найбільшим габаритом.';
 const COUNT_NOTE =
@@ -606,10 +665,11 @@ function connectorSection(kind: 'cylinder', choices: ParameterChoices, context: 
     options: (['none', 'dovetail', 'plug', 'dowel'] as const).map((value) => ({ value, label: connectorNames[value] })),
   };
   const { dovetail, round } = keys;
-  const units = connectorUnits(scale, chosen === 'dowel' ? 'dowel' : 'plug');
+  const vertical = choices[keys.choice] === 'vertical';
+  const units = connectorUnits(scale, chosen === 'dowel' ? 'dowel' : 'plug', vertical ? 'vertical' : 'parallel-to-bases');
   /** The feasible range that the request computed; the calibration window, or nothing, until it can. */
   const rangeOf = (key: ParameterKey, increment: number, fallback?: StepRange): StepRange | undefined => {
-    const interval = context.connectorRanges?.[key];
+    const interval = context.sectionRanges?.[key];
     return interval === undefined ? fallback : physicalRange(interval, increment);
   };
   /** A stored multiplier or percentage shown in millimetres, over its feasible range. */
@@ -684,15 +744,23 @@ function connectorSection(kind: 'cylinder', choices: ParameterChoices, context: 
       ...roundFields(millimetreField(round.depth, 'Повна довжина штифта, мм'), [
         note('dowel-insertion', `У кожну половинку штифт входить на ${millimetres(shownHalf(shown(round.depth)))}.`),
       ]),
-      clearanceField(round.dowelLowerClearance, 'Збільшення діаметра нижніх отворів, мм', diametralClearanceRange),
-      clearanceField(round.dowelUpperClearance, 'Збільшення діаметра верхніх отворів, мм', diametralClearanceRange),
+      clearanceField(
+        round.dowelLowerClearance,
+        vertical ? 'Збільшення діаметра отворів частини 1, мм' : 'Збільшення діаметра нижніх отворів, мм',
+        diametralClearanceRange,
+      ),
+      clearanceField(
+        round.dowelUpperClearance,
+        vertical ? 'Збільшення діаметра отворів частини 2, мм' : 'Збільшення діаметра верхніх отворів, мм',
+        diametralClearanceRange,
+      ),
     ],
   };
   const help: Record<ConnectorChoice, Help | undefined> = {
     none: undefined,
-    dovetail: dovetailHelp,
-    plug: plugHelp,
-    dowel: dowelHelp,
+    dovetail: vertical ? verticalDovetailHelp : dovetailHelp,
+    plug: vertical ? verticalPlugHelp : plugHelp,
+    dowel: vertical ? verticalDowelHelp : dowelHelp,
   };
   return [
     section(`${kind}-connector`, 'Кріплення', [selector, ...fields[chosen]], {
@@ -709,7 +777,7 @@ const shownHalf = (length: number | undefined) => (length === undefined ? undefi
  * "Переріз": optional, so the group starts collapsed with the chosen section in its summary. The position and the
  * separation are shown only while a section is chosen.
  */
-function planeSection(kind: 'cylinder', choices: ParameterChoices): ParameterSection {
+function planeSection(kind: 'cylinder', choices: ParameterChoices, context: PanelContext): ParameterSection {
   const keys = sectionKeys[kind];
   if (keys === undefined) throw new Error(`No section fields for ${kind}.`);
   const chosen = choices[keys.choice];
@@ -717,18 +785,35 @@ function planeSection(kind: 'cylinder', choices: ParameterChoices): ParameterSec
     type: 'choice',
     key: keys.choice,
     label: 'Тип перерізу',
-    options: (['none', 'parallel-to-bases'] as const).map((value) => ({ value, label: sectionNames[value] })),
+    options: (['none', 'parallel-to-bases', 'vertical'] as const).map((value) => ({ value, label: sectionNames[value] })),
   };
-  const details: ParameterField[] =
-    chosen === 'none'
-      ? []
-      : [
-          { type: 'number', key: keys.position, label: 'Від нижньої основи', suffix: '% h', range: sectionPositionRange },
-          { type: 'toggle', key: keys.separated, label: 'Розсунути частини' },
-        ];
-  return section(`${kind}-section`, 'Переріз', [selector, ...details], {
+  const interval = context.sectionRanges?.[keys.offset];
+  const toggle: ToggleField = { type: 'toggle', key: keys.separated, label: 'Розсунути частини' };
+  const details: Record<SectionChoice, ParameterField[]> = {
+    none: [],
+    'parallel-to-bases': [
+      { type: 'number', key: keys.position, label: 'Від нижньої основи', suffix: '% h', range: sectionPositionRange },
+      toggle,
+    ],
+    vertical: [
+      {
+        type: 'number',
+        key: keys.offset,
+        label: 'Зміщення від осі',
+        suffix: '% r',
+        range: interval === undefined || interval === null ? undefined : percentRange(interval, SECTION_PERCENT_INCREMENT),
+      },
+      toggle,
+    ],
+  };
+  const help: Record<SectionChoice, Help | undefined> = {
+    none: undefined,
+    'parallel-to-bases': parallelSectionHelp,
+    vertical: verticalSectionHelp,
+  };
+  return section(`${kind}-section`, 'Переріз', [selector, ...details[chosen]], {
     initiallyOpen: false,
-    help: chosen === 'none' ? undefined : parallelSectionHelp,
+    help: help[chosen],
     status: { text: chosen === 'none' ? 'немає' : sectionNames[chosen].toLowerCase(), highlighted: chosen !== 'none' },
   });
 }
@@ -855,7 +940,7 @@ export function shapePanel(kind: ShapeKind, choices: ParameterChoices, context: 
             },
             context,
           ),
-          ...(kind === 'cylinder' ? [planeSection(kind, choices), ...connectorSection(kind, choices, context)] : []),
+          ...(kind === 'cylinder' ? [planeSection(kind, choices, context), ...connectorSection(kind, choices, context)] : []),
         ],
       };
     }

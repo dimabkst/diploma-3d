@@ -9,11 +9,13 @@ import { circularSegments } from '../shapes/round.ts';
 import { type ConnectorFeasibility, connectorFeasibility, type ParameterSpec } from './bounds.ts';
 import {
   CONNECTOR_MIN_WALL_MM,
+  type CylinderCut,
   type CylinderSection,
   connectorVolumeTolerance,
-  cylinderSection,
+  cylinderCut,
   frameMatrix,
   framePoint,
+  lateralWall,
   type SectionFrame,
   satisfies,
 } from './frame.ts';
@@ -109,11 +111,11 @@ export interface RoundConnectorDimensions {
   readonly clearance: { readonly lower?: number; readonly upper: number };
 }
 
-/** The settings in millimetres: d and e from M, and a pair's spacing as its percentage of the radius r. */
+/** The settings in millimetres: d and e from M, and a pair's spacing as its percentage of the section's half span. */
 export function roundConnectorDimensions(
   connector: RoundConnector,
   longestDimensionMm: number,
-  radiusMm: number,
+  halfSpanMm: number,
 ): RoundConnectorDimensions {
   const { diameter, insertion } = roundConnectorDimensionsMm(connector.diameterFactor, connector.depthFactor, longestDimensionMm);
   return {
@@ -121,7 +123,7 @@ export function roundConnectorDimensions(
     count: connector.count,
     diameter,
     insertion,
-    spacing: ((connector.spacingPercent ?? 0) / 100) * radiusMm,
+    spacing: ((connector.spacingPercent ?? 0) / 100) * halfSpanMm,
     clearance:
       connector.type === 'plug'
         ? { upper: connector.holeClearanceMm }
@@ -152,17 +154,15 @@ function siteLayout({ count, diameter, insertion, spacing }: RoundConnectorDimen
  * - A pair keys the parts: d − (0,8·d + the larger diametral clearance) ≥ 0,5 mm, on the straight hole, so that the
  *   larger pin enters neither smaller hole.
  * - In each receiving part, the wall beside every hole is at least 1,2 mm where the hole is widest (the chamfered
- *   entrance at the cut), where its straight wall starts and at its bottom e + 0,3 mm deep. The wall is measured to the
- *   polygon's inscribed circle, at each depth from the section's centre moved by an oblique cylinder's lean; the
- *   distance from the moved centre is convex in the depth, so these three depths bound the whole hole.
- * - Between a pair's entrances, and under each hole's bottom, at least 1,2 mm remain; under a plug the lower part keeps
- *   1,2 mm below its root overlap.
+ *   entrance at the cut), where its straight wall starts and, under `hole-bottom-thin`, at its bottom e + 0,3 mm deep;
+ *   see `holeWalls` for how each cut measures them.
+ * - Between a pair's entrances at least 1,2 mm remain, and under a plug the part that carries it keeps 1,2 mm behind
+ *   its root overlap.
  *
  * Each value is monotone in d, e, s and each clearance, which the bounds rely on: a larger d widens holes and
  * chamfers, a larger e deepens holes and may lengthen chamfers, a larger s moves holes apart and outwards.
  */
 export function roundConnectorChecks(section: CylinderSection, dimensions: RoundConnectorDimensions): RoundConnectorIssue[] {
-  const { inradius, leanAcross } = section;
   const { type, insertion, clearance } = dimensions;
   const sites = siteLayout(dimensions);
   const holeDepth = insertion + ROUND_CONNECTOR_DEPTH_ALLOWANCE_MM;
@@ -181,49 +181,100 @@ export function roundConnectorChecks(section: CylinderSection, dimensions: Round
     const widest = Math.max(clearance.upper, clearance.lower ?? 0);
     checks.push({ code: 'keying-lost', valueMm: primary.pinDiameter - (secondary.pinDiameter + widest), minimumMm: keying });
   }
-  const parts: [Part, number, number][] = [['upper', clearance.upper, section.upperThickness]];
-  if (clearance.lower !== undefined) parts.push(['lower', clearance.lower, section.lowerThickness]);
-  for (const [part, holeClearance, thickness] of parts) {
+  const parts: [Part, number][] = [['upper', clearance.upper]];
+  if (clearance.lower !== undefined) parts.push(['lower', clearance.lower]);
+  for (const [part, holeClearance] of parts) {
     const holes = sites.map(({ along, pinDiameter: pin, chamfer }) => {
       const straight = (pin + holeClearance) / 2;
       return { along, chamfer, straight, opening: straight + chamfer };
     });
-    const sideWall = Math.min(
-      ...holes.flatMap(({ along, chamfer, straight, opening }) =>
-        [
-          [0, opening],
-          [chamfer, straight],
-          [holeDepth, straight],
-        ].map(([depth, radius]) => inradius - Math.hypot(along, leanAcross * (depth as number)) - (radius as number)),
-      ),
-    );
-    checks.push({ code: 'hole-wall-thin', part, valueMm: sideWall, minimumMm: wall });
+    const walls = holes.map((hole) => holeWalls(section, part, hole, holeDepth));
+    checks.push({ code: 'hole-wall-thin', part, valueMm: Math.min(...walls.map(({ side }) => side)), minimumMm: wall });
     if (holes.length === 2) {
       const [first, second] = holes as [(typeof holes)[number], (typeof holes)[number]];
       const between = Math.abs(first.along - second.along) - first.opening - second.opening;
       checks.push({ code: 'holes-too-close', part, valueMm: between, minimumMm: wall });
     }
-    checks.push({ code: 'hole-bottom-thin', part, valueMm: thickness - holeDepth, minimumMm: wall });
+    checks.push({ code: 'hole-bottom-thin', part, valueMm: Math.min(...walls.map(({ bottom }) => bottom)), minimumMm: wall });
   }
   if (type === 'plug') {
-    checks.push({ code: 'base-thin', valueMm: section.lowerThickness - PLUG_ROOT_OVERLAP_MM, minimumMm: wall });
+    checks.push({ code: 'base-thin', valueMm: plugBacking(section, sites), minimumMm: wall });
   }
   return checks;
 }
 
+interface HoleExtent {
+  /** The position along u from the section's centre. */
+  readonly along: number;
+  readonly chamfer: number;
+  /** The radii of the straight hole and of its widened entrance. */
+  readonly straight: number;
+  readonly opening: number;
+}
+
 /**
- * The plugs or dowels of a cylinder cut parallel to its bases, in millimetres of the built solid, and the issues that
- * rule them out; pure, so that the interface can explain a combination before anything is built. Every axis is the
- * cut's normal n. See `roundConnectorChecks` for the constraints.
+ * The walls of one blind hole.
+ *
+ * In a parallel cut they are measured to the polygon's inscribed circle in each horizontal section, from the section's
+ * centre moved by an oblique cylinder's lean; the distance from the moved centre is convex in the depth, so the three
+ * depths bound the whole hole. The bottom has the part's thickness along the axis to the far base.
+ *
+ * In a vertical cut the axis lies along n, towards the curved surface, and a hole's depth is limited by the same wall
+ * that bounds its sides. The cavity consists of a cone and a cylinder, both convex, so that its circles at the entrance,
+ * at the end of the chamfer and at the bottom bound every point of it (see `lateralWall`). The lean moves a hole at
+ * `along` from the centroid by lean·along within its section, and the circle reaches radius·stretch from there; the
+ * centroid itself lies on the axis, because the polygon's chord is symmetric. A hole approaching the axis first gains
+ * material, so the farther of its entrance and bottom from the axis plane counts; on the way there the entrance is the
+ * thinner anyway. The bases are the planes z = 0 and z = H, at H/2 from the centroid.
+ */
+function holeWalls(section: CylinderSection, part: Part, hole: HoleExtent, holeDepth: number) {
+  const { along, chamfer, straight, opening } = hole;
+  if (section.type === 'parallel-to-bases') {
+    const { inradius, leanAcross, lowerThickness, upperThickness } = section;
+    const clearanceAt = (depth: number, radius: number) => inradius - Math.hypot(along, leanAcross * depth) - radius;
+    return {
+      side: Math.min(clearanceAt(0, opening), clearanceAt(chamfer, straight), clearanceAt(holeDepth, straight)),
+      bottom: (part === 'upper' ? upperThickness : lowerThickness) - holeDepth,
+    };
+  }
+  const { offset, lean, stretch, height } = section;
+  const towards = part === 'upper' ? 1 : -1;
+  const reachOf = (radius: number) => lean * Math.abs(along) + radius * stretch;
+  const farthest = (depth: number) => Math.max(Math.abs(offset), Math.abs(offset + towards * depth));
+  return {
+    side: Math.min(
+      lateralWall(section, reachOf(opening), offset),
+      lateralWall(section, reachOf(straight), farthest(chamfer)),
+      height / 2 - Math.abs(along) - opening,
+    ),
+    bottom: lateralWall(section, reachOf(straight), farthest(holeDepth)),
+  };
+}
+
+/** What remains behind the root overlap of the plugs in the part that carries them. */
+function plugBacking(section: CylinderSection, sites: readonly { along: number; pinDiameter: number }[]): number {
+  if (section.type === 'parallel-to-bases') return section.lowerThickness - PLUG_ROOT_OVERLAP_MM;
+  const { offset, lean, stretch } = section;
+  return Math.min(
+    ...sites.map(({ along, pinDiameter }) =>
+      lateralWall(section, lean * Math.abs(along) + (pinDiameter / 2) * stretch, offset - PLUG_ROOT_OVERLAP_MM),
+    ),
+  );
+}
+
+/**
+ * The plugs or dowels of a cut cylinder, in millimetres of the built solid, and the issues that rule them out; pure, so
+ * that the interface can explain a combination before anything is built. Every axis is the cut's normal n. See
+ * `roundConnectorChecks` for the constraints.
  */
 export function planRoundConnectors(
   shape: CylinderShape,
   scale: PhysicalScale,
-  positionPercent: number,
+  cut: CylinderCut,
   connector: RoundConnector,
 ): RoundConnectorPlan {
-  const section = cylinderSection(shape, scale, positionPercent);
-  const dimensions = roundConnectorDimensions(connector, scale.longestDimensionMm, section.radius);
+  const section = cylinderCut(shape, scale, cut);
+  const dimensions = roundConnectorDimensions(connector, scale.longestDimensionMm, section.span / 2);
   const { frame } = section;
   const { insertion, clearance } = dimensions;
   const sites = siteLayout(dimensions).map((site) => ({ ...site, centre: framePoint(frame, [site.along, 0, 0]) }));
@@ -245,31 +296,29 @@ export type RoundConnectorParameter = 'diameter' | 'insertion' | 'spacing' | 'lo
 
 /**
  * Which values of each dimension the current cylinder, cut and other dimensions allow, from the same checks that
- * `planRoundConnectors` applies. The search envelopes follow from the model: a diameter within the section's
- * diameter, an insertion within the cylinder's height and a spacing within its radius; clearances stay within their
- * calibration window, a policy for print trials rather than a geometric limit. A pair has a spacing, dowels a lower
- * clearance.
+ * `planRoundConnectors` applies. The search envelopes follow from the model: a diameter and an insertion within the
+ * solid's extents and a spacing within the section's half span; clearances stay within their calibration window, a
+ * policy for print trials rather than a geometric limit. A pair has a spacing, dowels a lower clearance.
  */
 export function roundConnectorFeasibility(
   shape: CylinderShape,
   scale: PhysicalScale,
-  positionPercent: number,
+  cut: CylinderCut,
   connector: RoundConnector,
 ): ConnectorFeasibility<RoundConnectorParameter, RoundConnectorIssue> {
-  const section = cylinderSection(shape, scale, positionPercent);
-  const dimensions = roundConnectorDimensions(connector, scale.longestDimensionMm, section.radius);
-  const { radius, lowerThickness, upperThickness } = section;
-  const height = lowerThickness + upperThickness;
+  const section = cylinderCut(shape, scale, cut);
+  const dimensions = roundConnectorDimensions(connector, scale.longestDimensionMm, section.span / 2);
+  const { radius, span, depthExtent } = section;
   const parameters: ParameterSpec<RoundConnectorParameter, RoundConnectorDimensions>[] = [
     {
       key: 'diameter',
-      envelope: { min: 0, max: 2 * radius },
+      envelope: { min: 0, max: Math.max(2 * radius, span) },
       value: dimensions.diameter,
       with: (current, diameter) => ({ ...current, diameter }),
     },
     {
       key: 'insertion',
-      envelope: { min: 0, max: height },
+      envelope: { min: 0, max: depthExtent },
       value: dimensions.insertion,
       with: (current, insertion) => ({ ...current, insertion }),
     },
@@ -283,7 +332,7 @@ export function roundConnectorFeasibility(
   if (dimensions.count === 2) {
     parameters.push({
       key: 'spacing',
-      envelope: { min: 0, max: radius },
+      envelope: { min: 0, max: span / 2 },
       value: dimensions.spacing,
       with: (current, spacing) => ({ ...current, spacing }),
     });

@@ -83,6 +83,7 @@ export {
   DEFAULT_DOWEL_CLEARANCES_MM,
   DEFAULT_PLUG_CLEARANCE_MM,
   DEFAULT_ROUND_CONNECTOR,
+  DEFAULT_SECTION_OFFSET_PERCENT,
   DEFAULT_SECTION_POSITION_PERCENT,
   DIAMETRAL_CLEARANCE_LIMITS,
   DOVETAIL_CLEARANCE_LIMITS,
@@ -100,8 +101,11 @@ export {
   SECTION_TYPES,
   type Section,
   type SectionType,
+  sectionOffsetSchema,
   sectionPositionSchema,
   sectionSchema,
+  type VerticalSection,
+  verticalSectionSchema,
 } from './section.ts';
 export { TETRAHEDRON_HEIGHT_RATIO, type TetrahedronShape, tetrahedronShapeSchema } from './tetrahedron.ts';
 export {

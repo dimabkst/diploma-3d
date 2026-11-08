@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const SECTION_TYPES = ['parallel-to-bases'] as const;
+export const SECTION_TYPES = ['parallel-to-bases', 'vertical'] as const;
 
 export type SectionType = (typeof SECTION_TYPES)[number];
 
@@ -9,6 +9,14 @@ export type SectionType = (typeof SECTION_TYPES)[number];
 export const SECTION_POSITION_LIMITS = { min: 10, max: 90 } as const;
 
 export const DEFAULT_SECTION_POSITION_PERCENT = 50;
+
+export const DEFAULT_SECTION_OFFSET_PERCENT = 0;
+
+/**
+ * A vertical plane's signed distance from the axis, in percent of the radius r, which scales it with the model. Beyond
+ * ±100 % no plane can cut a solid within that radius; the engine narrows this for the actual solid.
+ */
+export const sectionOffsetSchema = z.number().gt(-100).lt(100);
 
 /** The cutting plane's distance from the lower base, in percent of the perpendicular height h between the bases. */
 export const sectionPositionSchema = z.number().min(SECTION_POSITION_LIMITS.min).max(SECTION_POSITION_LIMITS.max);
@@ -29,7 +37,7 @@ export const dovetailConnectorSchema = z.strictObject({
   type: z.literal('dovetail'),
   /** k in h = 0,025·M·k. */
   sizeFactor: z.number().positive(),
-  /** The tongue's length in percent of the section's diameter along the sliding direction. */
+  /** The tongue's length in percent of the section's span along the sliding direction. */
   lengthPercent: z.number().positive(),
   /** The gap between each pair of mating surfaces, measured normal to them; not a difference of total widths. */
   clearanceMm: z.number().min(DOVETAIL_CLEARANCE_LIMITS.min).max(DOVETAIL_CLEARANCE_LIMITS.max),
@@ -39,8 +47,9 @@ export type DovetailConnector = z.infer<typeof dovetailConnectorSchema>;
 
 // Round connectors: one or a keyed pair, and the calibration window for print trials of their diametral fit clearances
 // in millimetres, a policy rather than a geometric limit. The multipliers of the diameter d = 0,0625·M and of the
-// insertion length e = 0,05·M and a pair's distance from the centre in percent of the radius have no fixed limits; the
-// cylinder, the cut and the construction constraints bound them, and the engine checks them before building.
+// insertion length e = 0,05·M and a pair's distance from the centre in percent of the section's half span along u have
+// no fixed limits; the cylinder, the cut and the construction constraints bound them, and the engine checks them before
+// building.
 export const ROUND_CONNECTOR_COUNTS = [1, 2] as const;
 export const DIAMETRAL_CLEARANCE_LIMITS = { min: 0, max: 0.4 } as const;
 
@@ -51,8 +60,8 @@ export const DEFAULT_DOWEL_CLEARANCES_MM = { lower: 0.1, upper: 0.2 } as const;
 const diametralClearanceSchema = z.number().min(DIAMETRAL_CLEARANCE_LIMITS.min).max(DIAMETRAL_CLEARANCE_LIMITS.max);
 
 /**
- * The fields that plugs and dowels share. One connector sits at the section's centre; a pair sits at ±spacing·r along
- * the section's u direction, with diameters d and 0,8d, so that the parts cannot be joined turned by 180°. The spacing
+ * The fields that plugs and dowels share. One connector sits at the section's centre; a pair sits at ±s along the
+ * section's u direction, with diameters d and 0,8d, so that the parts cannot be joined turned by 180°. The spacing
  * belongs to a pair only.
  */
 const roundConnectorFields = {
@@ -109,6 +118,19 @@ export const parallelSectionSchema = z.strictObject({
 
 export type ParallelSection = z.infer<typeof parallelSectionSchema>;
 
-export const sectionSchema = z.discriminatedUnion('type', [parallelSectionSchema]);
+/**
+ * A vertical plane parallel to the cylinder's axis, at a signed distance from it along the plane's normal: at zero it
+ * contains the whole axis, an axial section.
+ */
+export const verticalSectionSchema = z.strictObject({
+  type: z.literal('vertical'),
+  offsetPercent: sectionOffsetSchema.default(DEFAULT_SECTION_OFFSET_PERCENT),
+  /** Joins the parts; without one, both cut faces stay flat. */
+  connector: connectorSchema.optional(),
+});
+
+export type VerticalSection = z.infer<typeof verticalSectionSchema>;
+
+export const sectionSchema = z.discriminatedUnion('type', [parallelSectionSchema, verticalSectionSchema]);
 
 export type Section = z.infer<typeof sectionSchema>;

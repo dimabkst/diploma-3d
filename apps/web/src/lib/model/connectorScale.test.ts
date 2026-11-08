@@ -4,6 +4,7 @@ import {
   connectorUnits,
   cylinderConnectorScale,
   formatPhysical,
+  percentRange,
   physicalRange,
   shownText,
   storedText,
@@ -21,7 +22,7 @@ const scaleOf = (printSizeMm: number, cylinderHeightRatio = 2, cylinderOffsetRat
 
 describe('connector settings in millimetres', () => {
   it('takes the radius as the engine builds the cylinder, and needs every value for it', () => {
-    expect(scaleOf(80)).toEqual({ longestDimensionMm: 80, radiusMm: 40 });
+    expect(scaleOf(80)).toEqual({ longestDimensionMm: 80, radiusMm: 40, heightMm: 80 });
     expect(scaleOf(80, 8).radiusMm).toBeCloseTo(10, 12);
     expect(scaleOf(80, 2, 1).radiusMm).toBeCloseTo(
       roundDimensionsMm({ kind: 'cylinder', heightRatio: 2, offsetRatio: 1 }, { longestDimensionMm: 80 }).radius,
@@ -68,6 +69,36 @@ describe('connector settings in millimetres', () => {
     expect(0.75 * dowel.cylinderRoundDepth).toBeCloseTo(2 * pins.insertion, 12);
     expect(storedValue(8, dowel.cylinderRoundDepth)).toBe(1);
     expect(storedValue(4, plug.cylinderRoundDepth)).toBe(1);
+  });
+
+  it('takes a vertical section’s length and spacing from its height', () => {
+    // A flat cylinder, r = 40 mm and H = 20 mm: 50 % is 10 mm along the height, not 40 mm along a diameter.
+    const flat = scaleOf(80, 0.5);
+    const parallel = connectorUnits(flat, 'plug');
+    const vertical = connectorUnits(flat, 'plug', 'vertical');
+    expect(parallel.cylinderDovetailLengthPercent).toBe(0.8);
+    expect(parallel.cylinderRoundSpacingPercent).toBe(0.4);
+    expect(vertical.cylinderDovetailLengthPercent).toBe(0.2);
+    expect(vertical.cylinderRoundSpacingPercent).toBe(0.1);
+    // The size scales every one with the model.
+    const [small, large] = [scaleOf(60), scaleOf(120)].map((scale) => connectorUnits(scale, 'plug', 'vertical'));
+    for (const key of scaledKeys) expect(large?.[key]).toBeCloseTo(2 * (small?.[key] ?? 0), 12);
+    // The same settings give the engine's dimensions.
+    const shape = { kind: 'cylinder', heightRatio: 0.5, offsetRatio: 0 } as const;
+    const pins = planRoundConnectors(
+      shape,
+      { longestDimensionMm: 80 },
+      { offsetPercent: 25 },
+      { type: 'plug', count: 2, spacingPercent: 45, diameterFactor: 1, depthFactor: 1, holeClearanceMm: 0.2 },
+    );
+    expect(pins.sites[0]?.along).toBeCloseTo(45 * vertical.cylinderRoundSpacingPercent, 12);
+    const tongue = planDovetail(
+      shape,
+      { longestDimensionMm: 80 },
+      { offsetPercent: 0 },
+      { type: 'dovetail', sizeFactor: 1, lengthPercent: 50, clearanceMm: 0.2 },
+    );
+    expect(tongue.length).toBeCloseTo(50 * vertical.cylinderDovetailLengthPercent, 12);
   });
 
   it('scales with M at fixed settings, and keeps the length and spacing proportional to the radius', () => {
@@ -118,6 +149,15 @@ describe('connector settings in millimetres', () => {
     expect(Object.is(physicalRange({ min: 0, max: 2.2e-16 }, 0.05)?.min, 0)).toBe(true);
     expect(physicalRange(null, 0.25)).toBeUndefined();
     expect(physicalRange({ min: 3.1, max: 1.5 }, 0.25)).toBeUndefined();
+  });
+
+  it('rounds a plane’s percentage bounds inwards to hundredths, symmetrically, and keeps round ones as they are', () => {
+    expect(percentRange({ min: -80, max: 80 }, 5)).toEqual({ min: -80, max: 80, increment: 5 });
+    // The binary roundoff of 0,8·r does not move the bound.
+    expect(percentRange({ min: -80.00000000000001, max: 79.99999999999999 }, 5)).toEqual({ min: -80, max: 80, increment: 5 });
+    expect(percentRange({ min: -63.9639, max: 63.9639 }, 5)).toEqual({ min: -63.96, max: 63.96, increment: 5 });
+    // Only the axial cut remains: 0, not -0, which would read as a sign.
+    expect(Object.is(percentRange({ min: -0, max: 0 }, 5).min, 0)).toBe(true);
   });
 
   it('stores short decimals, and keeps drafts that are not numbers as typed', () => {

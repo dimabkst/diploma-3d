@@ -8,6 +8,7 @@ import {
   DEFAULT_PARALLELOGRAM_BASE,
   DEFAULT_PLUG_CLEARANCE_MM,
   DEFAULT_ROUND_CONNECTOR,
+  DEFAULT_SECTION_OFFSET_PERCENT,
   DEFAULT_TRAPEZOID_BASE,
   DEFAULT_TRIANGLE_BASE,
   DIAMETRAL_CLEARANCE_LIMITS,
@@ -743,11 +744,33 @@ describe('plane sections', () => {
   });
 
   it('offers the section only for the cylinder so far', () => {
-    expect(SECTIONS_BY_SHAPE).toEqual({ cylinder: ['parallel-to-bases'] });
+    expect(SECTIONS_BY_SHAPE).toEqual({ cylinder: ['parallel-to-bases', 'vertical'] });
     const cone = modelSpecSchema.safeParse({ shape: { kind: 'cone', heightRatio: 2 }, scale, section: at(50) });
     expect(cone.success).toBe(false);
     expect(cone.error?.issues[0]?.path).toEqual(['section']);
     expect(modelSpecSchema.safeParse({ shape: { kind: 'cube' }, scale, section: at(50) }).success).toBe(false);
+  });
+});
+
+describe('a vertical section', () => {
+  const parse = (section: Record<string, unknown>, shape: Record<string, unknown> = { kind: 'cylinder', heightRatio: 2 }) =>
+    modelSpecSchema.safeParse({ shape, scale: { longestDimensionMm: 80 }, section: { type: 'vertical', ...section } });
+
+  it('starts on the axis and takes a signed distance within the radius; the engine narrows it for the actual solid', () => {
+    expect(DEFAULT_SECTION_OFFSET_PERCENT).toBe(0);
+    expect(parse({}).data?.section).toEqual({ type: 'vertical', offsetPercent: 0 });
+    for (const offsetPercent of [-99.9, -80, 0, 12.5, 80, 99.9]) expect(parse({ offsetPercent }).success).toBe(true);
+    for (const offsetPercent of [-100, 100, 150, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(parse({ offsetPercent }).success).toBe(false);
+    }
+  });
+
+  it('takes every connector, and belongs to the cylinder', () => {
+    const plug = { type: 'plug', count: 1, diameterFactor: 1, depthFactor: 1, holeClearanceMm: 0.2 };
+    expect(parse({ connector: plug }).success).toBe(true);
+    expect(parse({ connector: { type: 'dovetail', ...DEFAULT_DOVETAIL } }).success).toBe(true);
+    expect(parse({ positionPercent: 50 }).success).toBe(false);
+    expect(parse({}, { kind: 'cone', heightRatio: 2 }).success).toBe(false);
   });
 });
 

@@ -9,6 +9,13 @@ import {
 } from '@diploma-3d/schema';
 import type { Manifold } from 'manifold-3d';
 import { buildDovetail, type DovetailPlan, planDovetail, verifyDovetail } from './connectors/dovetail.ts';
+import {
+  CONSTRAINT_ROUNDOFF_MM,
+  cutOfSection,
+  sectionOffsetMm,
+  verticalCylinderSection,
+  verticalOffsetLimitMm,
+} from './connectors/frame.ts';
 import { buildRoundConnectors, planRoundConnectors, type RoundConnectorPlan, verifyRoundConnectors } from './connectors/round.ts';
 import { ConnectorUnsuitableError, GeometryError, InfeasibleGeometryError, InvalidModelSpecError } from './errors.ts';
 import type { GeometryKernel } from './kernel.ts';
@@ -33,7 +40,7 @@ import { buildParallelepiped } from './shapes/parallelepiped.ts';
 import { buildPrismShape } from './shapes/prism.ts';
 import { buildPyramidShape } from './shapes/pyramid.ts';
 import { buildRegularPolyhedron } from './shapes/regular-polyhedron.ts';
-import { buildRoundSolid, roundShear } from './shapes/round.ts';
+import { buildRoundSolid, roundDimensionsMm, roundShear } from './shapes/round.ts';
 
 export interface Solid {
   /** ASCII identifier, also used as the object name in exported files. */
@@ -48,8 +55,8 @@ export interface Solid {
    */
   readonly smoothingShear?: readonly [number, number];
   /**
-   * Which part of a sectioned solid this is: below the cutting plane, above it on the side of its normal, or a separate
-   * removable dowel.
+   * Which part of a sectioned solid this is: below or above a plane parallel to the bases, on the negative (1) or
+   * positive (2) side of the normal of a vertical plane, or a separate removable dowel.
    */
   readonly part?: SectionPart;
   /**
@@ -59,12 +66,13 @@ export interface Solid {
   readonly newFaces?: Uint8Array;
 }
 
-export type SectionPart = 'lower' | 'upper' | 'dowel';
+export type SectionPart = 'lower' | 'upper' | 'part-1' | 'part-2' | 'dowel';
 
 export type ConnectorPlan = DovetailPlan | RoundConnectorPlan;
 
 export interface ModelSection {
-  /** The cutting plane in the model's millimetres; the upper part lies on the side its normal points to. */
+  readonly type: SectionType;
+  /** The cutting plane in the model's millimetres; the upper part or part 2 lies on the side its normal points to. */
   readonly plane: Plane;
   /** The connector joining the parts, with the frame it is built in; absent for flat cut faces. */
   readonly connector?: ConnectorPlan;
@@ -76,8 +84,8 @@ export interface GeneratedModel {
   readonly name: string;
   readonly spec: ModelSpec;
   /**
-   * The whole solid, or its lower and upper part in this order followed by any removable dowels, all in the assembled
-   * position.
+   * The whole solid, or its parts in the order of the plane's negative and positive side, followed by any removable
+   * dowels, all in the assembled position.
    */
   readonly solids: readonly Solid[];
   /** The bounds of the assembled model: of the whole solid, also when it is sectioned. */
@@ -98,7 +106,18 @@ type BuiltMeshes =
 type MarkedMesh = { readonly mesh: TriangleMesh; readonly newFaces: Uint8Array };
 
 /** Completes the model name of a sectioned solid, e.g. "cylinder-parallel-section". */
-const sectionNames: Readonly<Record<SectionType, string>> = { 'parallel-to-bases': 'parallel-section' };
+const sectionNames: Readonly<Record<SectionType, string>> = {
+  'parallel-to-bases': 'parallel-section',
+  vertical: 'vertical-section',
+};
+
+/** The names of a section's parts in the order of the plane's negative and positive side, and their object names. */
+const partNames: Readonly<Record<SectionType, readonly [SectionPart, SectionPart]>> = {
+  'parallel-to-bases': ['lower', 'upper'],
+  vertical: ['part-1', 'part-2'],
+};
+const partObjectName = (name: string, part: SectionPart): string =>
+  part === 'lower' || part === 'upper' ? `${name}-${part}-part` : `${name}-${part}`;
 
 /**
  * Validates the specification, filling in defaults, checks that the solid can be represented reliably, and builds it in
@@ -115,12 +134,13 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
   const feasibility = checkNumericalFeasibility(spec.shape);
   if (!feasibility.feasible) throw new InfeasibleGeometryError(feasibility.relativeRounding);
 
+  assertVerticalOffset(spec);
   const connector = planConnector(spec);
   const built = withScope((track): BuiltMeshes => {
     const solid = checked(buildShape(kernel, track, spec.shape, spec.scale));
     if (spec.section === undefined) return { whole: meshFromManifold(solid) };
     const originalIds = originalIdsOf(solid);
-    const plane = sectionPlane(spec.section, solid.boundingBox());
+    const plane = spec.section.type === 'vertical' ? verticalPlaneOf(spec) : sectionPlane(spec.section, solid.boundingBox());
     const split = splitByPlane(track, solid, plane);
     let parts = { lower: split.negative, upper: split.positive };
     let dowels: readonly Manifold[] = [];
@@ -161,15 +181,12 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
     const { bounds, size } = solid.measurements;
     return { kind: shape.kind, name, spec, solids: [solid], bounds, size };
   }
-  const parts = (['lower', 'upper'] as const).map(
-    (part): Solid => ({
-      ...solidOf(`${name}-${part}-part`, built.parts[part].mesh),
-      part,
-      newFaces: built.parts[part].newFaces,
-    }),
-  );
+  const parts = (['lower', 'upper'] as const).map((side, index): Solid => {
+    const part = partNames[built.type][index] as SectionPart;
+    return { ...solidOf(partObjectName(name, part), built.parts[side].mesh), part, newFaces: built.parts[side].newFaces };
+  });
   const bounds = unionBounds(parts.map((part) => part.measurements.bounds));
-  // Curved but never sheared: a dowel stands along the cut's normal however the cylinder leans.
+  // Curved but never sheared: a dowel lies along the cut's normal however the cylinder leans.
   const dowels = built.dowels.map(({ mesh, newFaces }, index): Solid => {
     assertValidSolidMesh(mesh);
     return {
@@ -188,19 +205,39 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
     solids: [...parts, ...dowels],
     bounds,
     size: subtract(bounds.max, bounds.min),
-    section: { plane: built.plane, ...(connector === undefined ? {} : { connector }) },
+    section: { type: built.type, plane: built.plane, ...(connector === undefined ? {} : { connector }) },
   };
+}
+
+/** The plane of a vertical section, which only a cylinder offers. */
+function verticalPlaneOf({ shape, scale, section }: ModelSpec): Plane {
+  if (section?.type !== 'vertical' || shape.kind !== 'cylinder')
+    throw new GeometryError('Expected a vertical cut of a cylinder.');
+  return verticalCylinderSection(shape, scale, section.offsetPercent).plane;
+}
+
+/** A vertical plane within the distance from the axis that leaves both parts usable; see `verticalOffsetLimitMm`. */
+function assertVerticalOffset({ shape, scale, section }: ModelSpec): void {
+  if (section?.type !== 'vertical' || shape.kind !== 'cylinder') return;
+  const offset = sectionOffsetMm(section.offsetPercent, roundDimensionsMm(shape, scale).radius);
+  const limit = verticalOffsetLimitMm(shape, scale);
+  if (Math.abs(offset) > limit + CONSTRAINT_ROUNDOFF_MM) {
+    throw new InvalidModelSpecError([
+      `section.offsetPercent: ${offset} mm is beyond the ${limit} mm that leave two usable parts.`,
+    ]);
+  }
 }
 
 /** The connector's plan; refuses the specification before any geometry is built when the connector does not fit. */
 function planConnector({ shape, scale, section }: ModelSpec): ConnectorPlan | undefined {
   if (section?.connector === undefined) return undefined;
   if (shape.kind !== 'cylinder') throw new ConnectorUnsuitableError([{ code: 'unsupported-shape' }]);
-  const { connector, positionPercent } = section;
+  const { connector } = section;
+  const cut = cutOfSection(section);
   const plan =
     connector.type === 'dovetail'
-      ? planDovetail(shape, scale, positionPercent, connector)
-      : planRoundConnectors(shape, scale, positionPercent, connector);
+      ? planDovetail(shape, scale, cut, connector)
+      : planRoundConnectors(shape, scale, cut, connector);
   if (plan.issues.length > 0) throw new ConnectorUnsuitableError(plan.issues);
   return plan;
 }

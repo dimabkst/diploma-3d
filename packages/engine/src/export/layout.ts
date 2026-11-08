@@ -41,6 +41,28 @@ export function rotateHalfTurn(mesh: TriangleMesh, [ax, ay, az]: Vec3): Triangle
   return { positions, triangles: mesh.triangles };
 }
 
+/**
+ * Turns the mesh about the origin so that the unit vector `axis` becomes +Z: by the shortest rotation, Rodrigues' formula
+ * with k = axis × Z, sinθ = |k| and cosθ = axis·Z. A proper rotation, so the triangles keep their outward winding; with
+ * `axis` already along +Z the mesh stays as it is.
+ */
+export function rotateOntoZ(mesh: TriangleMesh, axis: Vec3): TriangleMesh {
+  const [ax, ay, az] = axis;
+  if (ax === 0 && ay === 0 && az === 1) return mesh;
+  if (az === -1) return rotateHalfTurn(mesh, [1, 0, 0]);
+  // k = (ay, −ax, 0); R = I + [k]× + [k]×²/(1 + cosθ).
+  const [kx, ky] = [ay, -ax];
+  const scale = 1 / (1 + az);
+  const positions = new Float32Array(mesh.positions.length);
+  for (let index = 0; index < positions.length; index += 3) {
+    const [x, y, z] = [mesh.positions[index], mesh.positions[index + 1], mesh.positions[index + 2]] as [number, number, number];
+    positions[index] = x + ky * z + scale * ky * (kx * y - ky * x);
+    positions[index + 1] = y - kx * z + scale * kx * (ky * x - kx * y);
+    positions[index + 2] = z + kx * y - ky * x - scale * (kx * kx + ky * ky) * z;
+  }
+  return { positions, triangles: mesh.triangles };
+}
+
 function translateMesh(mesh: TriangleMesh, offset: Vec3): TriangleMesh {
   return {
     positions: mesh.positions.map((value, index) => value + (offset[index % 3] as number)),

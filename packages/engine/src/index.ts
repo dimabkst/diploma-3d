@@ -39,14 +39,26 @@ export {
 export {
   CONNECTOR_MIN_WALL_MM,
   CONSTRAINT_ROUNDOFF_MM,
+  type CylinderCut,
   type CylinderSection,
   connectorVolumeTolerance,
+  cutOfSection,
+  cylinderCut,
   cylinderSection,
   frameMatrix,
   framePoint,
+  lateralWall,
   type Measurement,
+  type ParallelCylinderSection,
   type SectionFrame,
   satisfies,
+  sectionOffsetMm,
+  sectionOffsetPercent,
+  type VerticalCut,
+  type VerticalCylinderSection,
+  verticalCylinderSection,
+  verticalOffsetLimitMm,
+  verticalOffsetLimitPercent,
 } from './connectors/frame.ts';
 export {
   buildRoundConnectors,
@@ -77,7 +89,7 @@ export {
   KernelInitializationError,
 } from './errors.ts';
 export { createPreviewGlb, GLB_MEDIA_TYPE, type PreviewObject, toGltfPosition } from './export/glb.ts';
-export { arrangeInRow, PRINT_LAYOUT_GAP_MM, rotateHalfTurn } from './export/layout.ts';
+export { arrangeInRow, PRINT_LAYOUT_GAP_MM, rotateHalfTurn, rotateOntoZ } from './export/layout.ts';
 export { createThreeMf, THREE_MF_MEDIA_TYPE, type ThreeMfObject, type ThreeMfOptions } from './export/three-mf.ts';
 export { type GeometryKernel, type KernelOptions, loadGeometryKernel } from './kernel.ts';
 export {

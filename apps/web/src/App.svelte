@@ -14,7 +14,6 @@ import { describeModelError, type ModelState, visibleArtifacts } from './lib/mod
 import {
   activeConnector,
   activeSection,
-  type ConnectorRanges,
   canResetShapeParameters,
   initialParameterChoices,
   initialParameterTexts,
@@ -23,6 +22,7 @@ import {
   partsSeparated,
   resetShapeParameters,
   resolveModelRequest,
+  type SectionRanges,
   switchTiltMode,
 } from './lib/model/parameters.ts';
 import { loadPrintSizeText, savePrintSize } from './lib/model/printSize.ts';
@@ -69,31 +69,47 @@ $effect.pre(() => {
   const current = cylinderConnectorScale(request?.values ?? {});
   // Only a different scale is stored: the request reads it, so storing an equal copy would recompute it in a loop.
   const last = untrack(() => lastConnectorScale);
-  if (current !== undefined && (current.longestDimensionMm !== last?.longestDimensionMm || current.radiusMm !== last?.radiusMm)) {
+  if (
+    current !== undefined &&
+    (current.longestDimensionMm !== last?.longestDimensionMm ||
+      current.radiusMm !== last?.radiusMm ||
+      current.heightMm !== last?.heightMm)
+  ) {
     lastConnectorScale = current;
   }
 });
-// The last feasible ranges of the chosen connector, so that its sliders keep their ranges while one of its fields is
-// being typed; ranges of another connector or count are never shown.
-let lastConnectorRanges = $state.raw<{ readonly context: string; readonly ranges: ConnectorRanges } | undefined>();
+// The last feasible ranges of the chosen cut and connector, so that their sliders keep their ranges while one of their
+// fields is being typed; ranges of another cut, connector or count are never shown.
+let lastSectionRanges = $state.raw<{ readonly context: string; readonly ranges: SectionRanges } | undefined>();
 const connectorContext = $derived(
   selectedKind === undefined
     ? ''
-    : `${selectedKind}:${activeConnector(selectedKind, parameterChoices) ?? 'none'}:${parameterChoices.cylinderRoundCount}`,
+    : [
+        selectedKind,
+        activeSection(selectedKind, parameterChoices) ?? 'none',
+        activeConnector(selectedKind, parameterChoices) ?? 'none',
+        parameterChoices.cylinderRoundCount,
+      ].join(':'),
 );
 $effect.pre(() => {
-  const ranges = request?.connectorRanges;
-  if (ranges !== undefined) lastConnectorRanges = { context: connectorContext, ranges };
+  const ranges = request?.sectionRanges;
+  if (ranges === undefined) return;
+  // Merged, not replaced; the request reads no ranges, so this cannot loop.
+  const previous = untrack(() => lastSectionRanges);
+  const kept = previous?.context === connectorContext ? previous.ranges : undefined;
+  lastSectionRanges = { context: connectorContext, ranges: { ...kept, ...ranges } };
 });
-const connectorRanges = $derived(
-  request?.connectorRanges ?? (lastConnectorRanges?.context === connectorContext ? lastConnectorRanges.ranges : undefined),
-);
+// A plane beyond its limit has no connector ranges of its own, so the last ones stay until it is corrected.
+const sectionRanges = $derived.by(() => {
+  const last = lastSectionRanges?.context === connectorContext ? lastSectionRanges.ranges : undefined;
+  return { ...last, ...request?.sectionRanges };
+});
 // Texts that denote the same specification ("1,5" and "1.50") share a key and do not trigger a rebuild.
 const requestKey = $derived(request?.key);
 const panel = $derived(
   selectedKind === undefined
     ? { type: 'fixed' as const, note: '' }
-    : shapePanel(selectedKind, parameterChoices, { tiltModes, values: request?.values, connectorScale, connectorRanges }),
+    : shapePanel(selectedKind, parameterChoices, { tiltModes, values: request?.values, connectorScale, sectionRanges }),
 );
 const invalidFields = $derived(
   [printSizeField, ...(panel.type === 'fixed' ? [] : panel.sections.flatMap(sectionNumberFields))]

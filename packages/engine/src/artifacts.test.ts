@@ -1053,3 +1053,151 @@ describe('for a cylinder joined by plugs or dowels', () => {
     expect(printFile.bytes).toEqual((await buildModelArtifacts(kernel, spec)).printFile.bytes);
   });
 });
+
+describe('for a cylinder cut vertically', () => {
+  const vertical = (
+    shape: { heightRatio: number; offsetRatio: number },
+    connector?: Record<string, unknown>,
+  ): ModelSpecInput => ({
+    shape: { kind: 'cylinder', ...shape },
+    scale: { longestDimensionMm: 80 },
+    section: {
+      type: 'vertical',
+      offsetPercent: 25,
+      ...(connector === undefined ? {} : { connector: connector as never }),
+    },
+  });
+  const right = { heightRatio: 2, offsetRatio: 0 };
+  const oblique = { heightRatio: 2, offsetRatio: 1 };
+  const round = { diameterFactor: 1, depthFactor: 1 };
+  const plug = (count: 1 | 2) => ({
+    type: 'plug',
+    ...round,
+    count,
+    holeClearanceMm: 0.2,
+    ...(count === 2 ? { spacingPercent: 45 } : {}),
+  });
+  const dowel = (count: 1 | 2) => ({
+    type: 'dowel',
+    ...round,
+    count,
+    lowerClearanceMm: 0.1,
+    upperClearanceMm: 0.2,
+    ...(count === 2 ? { spacingPercent: 45 } : {}),
+  });
+  const dovetail = { type: 'dovetail', sizeFactor: 1, lengthPercent: 50, clearanceMm: 0.2 };
+  const translations = async (glb: Uint8Array) =>
+    Object.fromEntries(
+      (await new WebIO().readBinary(glb))
+        .getRoot()
+        .listNodes()
+        .map((node) => [node.getName(), node.getTranslation()]),
+    );
+
+  it.each([
+    ['a smooth cut', right, undefined, ['cylinder-part-1', 'cylinder-part-2']],
+    ['one plug', right, plug(1), ['cylinder-part-1', 'cylinder-part-2']],
+    ['two plugs', oblique, plug(2), ['cylinder-part-1', 'cylinder-part-2']],
+    ['a dovetail', right, dovetail, ['cylinder-part-1', 'cylinder-part-2']],
+    ['an oblique dovetail', oblique, dovetail, ['cylinder-part-1', 'cylinder-part-2']],
+    ['one dowel', right, dowel(1), ['cylinder-part-1', 'cylinder-part-2', 'cylinder-dowel-1']],
+    ['two dowels', oblique, dowel(2), ['cylinder-part-1', 'cylinder-part-2', 'cylinder-dowel-1', 'cylinder-dowel-2']],
+  ] as const)(
+    'exports %s as separate upright objects at the original scale, in a row without overlaps',
+    async (_, shape, connector, names) => {
+      const { model, printFile } = await buildModelArtifacts(kernel, vertical(shape, connector));
+      expect(printFile.fileName).toBe('cylinder-vertical-section.3mf');
+      const parsed = readThreeMf(printFile.bytes).model;
+      expect(parsed.unit).toBe('millimeter');
+      expect(parsed.objects.map(({ name }) => name)).toEqual([...names]);
+      const printed = parsed.objects.map(({ mesh }) => {
+        expect(findMeshDefects(mesh)).toEqual([]);
+        return measureMesh(mesh);
+      });
+      printed.forEach((measured, index) => {
+        expect(measured.bounds.min[2]).toBe(0);
+        if (index > 0) expect(measured.bounds.min[0] - (printed[index - 1]?.bounds.max[0] ?? 0)).toBeCloseTo(5, 4);
+        expect(measured.volume / (model.solids[index]?.measurements.volume ?? Number.NaN)).toBeCloseTo(1, 6);
+      });
+      // The parts stay upright, translated only: as high and wide as in the model, not turned onto another face.
+      for (const index of [0, 1]) {
+        for (const axis of [0, 1, 2] as const) {
+          expect(printed[index]?.size[axis]).toBeCloseTo(model.solids[index]?.measurements.size[axis] ?? Number.NaN, 4);
+        }
+      }
+      expect(printed[0]?.size[2]).toBeCloseTo(model.size[2], 4);
+      // Removable pins stand on an end face: 2e = 8 mm high, d and 0,8d wide, not lying along the normal as assembled.
+      printed.slice(2).forEach((pin, index) => {
+        expect(pin.size[2]).toBeCloseTo(8, 3);
+        expect(pin.size[0]).toBeCloseTo([5, 4][index] ?? Number.NaN, 3);
+        expect(pin.size[1]).toBeCloseTo([5, 4][index] ?? Number.NaN, 3);
+      });
+    },
+  );
+
+  it('separates a smooth cut, plugs and dowels along the normal, moving part 2 only', async () => {
+    const smooth = await buildModelArtifacts(kernel, vertical(right));
+    expect(await translations(smooth.separatedPreviewGlb as Uint8Array)).toEqual({
+      // +Y, the plane's normal, is glTF −Z; by 0,15 × 80 mm.
+      'cylinder-part-1': [0, 0, 0],
+      'cylinder-part-2': [0, 0, expect.closeTo(-0.012, 6)],
+    });
+    const dowels = await buildModelArtifacts(kernel, vertical(right, dowel(2)));
+    expect(await translations(dowels.separatedPreviewGlb as Uint8Array)).toEqual({
+      'cylinder-part-1': [0, 0, 0],
+      'cylinder-part-2': [0, 0, expect.closeTo(-0.04, 6)],
+      'cylinder-dowel-1': [0, 0, 0],
+      'cylinder-dowel-2': [0, 0, 0],
+    });
+  });
+
+  it.each([
+    ['a right cylinder', right],
+    ['an oblique cylinder', oblique],
+  ] as const)('lifts part 1, with the tongue, off the groove of %s, and holds part 2 still', async (_, shape) => {
+    const { model, separatedPreviewGlb, previewGlb } = await buildModelArtifacts(kernel, vertical(shape, dovetail));
+    const plan = model.section?.connector;
+    if (plan?.type !== 'dovetail') throw new Error('Expected a dovetail');
+    const lift = plan.exitDistance + SECTION_PREVIEW_GAP_RELATIVE * 80;
+    // Up in Z is glTF +Y, by the distance that takes the tongue beyond part 2, and the gap.
+    expect(await translations(separatedPreviewGlb as Uint8Array)).toEqual({
+      'cylinder-part-1': [0, expect.closeTo(lift / 1000, 6), 0],
+      'cylinder-part-2': [0, 0, 0],
+    });
+    expect(await translations(previewGlb)).toEqual({ 'cylinder-part-1': [0, 0, 0], 'cylinder-part-2': [0, 0, 0] });
+    // The seated tongue's lowest end clears the whole of part 2 at that height.
+    const tongueBottom = plan.frame.origin[2] - plan.length / 2;
+    expect(tongueBottom + lift).toBeGreaterThan(model.size[2]);
+  });
+
+  it('keeps the separation out of the geometry and the print file', async () => {
+    for (const connector of [undefined, plug(2), dowel(2), dovetail]) {
+      const first = await buildModelArtifacts(kernel, vertical(right, connector));
+      const second = await buildModelArtifacts(kernel, vertical(right, connector));
+      expect(first.printFile.bytes).toEqual(second.printFile.bytes);
+      // Each preview draws the same meshes, whether the parts are apart or together.
+      const positionsOf = async (glb: Uint8Array) =>
+        (await new WebIO().readBinary(glb))
+          .getRoot()
+          .listMeshes()
+          .map((mesh) => Array.from(mesh.listPrimitives()[0]?.getAttribute('POSITION')?.getArray() ?? []));
+      expect(await positionsOf(first.separatedPreviewGlb as Uint8Array)).toEqual(await positionsOf(first.previewGlb));
+    }
+  });
+
+  it('raises part 2 further for a long plug, from the generated parts', async () => {
+    const { model } = await buildModelArtifacts(kernel, vertical(right, { ...plug(1), depthFactor: 2 }));
+    expect(previewSeparation(model)).toBeCloseTo(40, 6);
+    const long = await buildModelArtifacts(kernel, {
+      ...vertical(right, { ...plug(1), depthFactor: 7 }),
+      section: { type: 'vertical', offsetPercent: -25, connector: { ...plug(1), depthFactor: 7 } as never },
+    });
+    // 28 mm above the cut, plus the flat cut's 0,15 × 80 = 12 mm gap.
+    expect(previewSeparation(long.model)).toBeCloseTo(28 + 12, 3);
+    const longer = await buildModelArtifacts(kernel, {
+      ...vertical(right, { ...plug(1), depthFactor: 8 }),
+      section: { type: 'vertical', offsetPercent: -25, connector: { ...plug(1), depthFactor: 8 } as never },
+    });
+    expect(previewSeparation(longer.model)).toBeCloseTo(32 + 12, 3);
+  });
+});

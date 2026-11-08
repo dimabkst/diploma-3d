@@ -138,6 +138,21 @@ describe('stepDecimal', () => {
 });
 
 describe('snapDecimal', () => {
+  it('reaches a range end that is no multiple of the increment, and keeps multiples inside the range', () => {
+    const range = { min: -65.71, max: 65.71, increment: 5 };
+    expect(snapDecimal(65.71, range)).toBe(65.71);
+    expect(snapDecimal(-65.71, range)).toBe(-65.71);
+    expect(snapDecimal(65.4, range)).toBe(65.71);
+    expect(snapDecimal(62, range)).toBe(60);
+    expect(snapDecimal(63, range)).toBe(65);
+    expect(snapDecimal(0.4, range)).toBe(0);
+    // The connector sliders' bounds: 2,8–38,364 mm with the increment 0,25.
+    const depth = { min: 2.8, max: 38.364, increment: 0.25 };
+    expect(snapDecimal(38.364, depth)).toBe(38.364);
+    expect(snapDecimal(2.8, depth)).toBe(2.8);
+    expect(snapDecimal(20.1, depth)).toBe(20);
+  });
+
   it.each([
     [2.05, 2],
     [2.12, 2],

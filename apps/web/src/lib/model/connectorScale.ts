@@ -1,10 +1,11 @@
 import { DOVETAIL_PROPORTIONS, ROUND_CONNECTOR_PROPORTIONS, roundDimensionsMm } from '@diploma-3d/engine';
+import type { SectionType } from '@diploma-3d/schema';
 import { formatDecimal, formatSteppedDecimal, parseDecimal, type StepRange } from '../decimal.ts';
 
-/** What turns the connector settings into millimetres: the assembled model's longest side M and the cylinder's radius. */
-export type ConnectorScale = { readonly longestDimensionMm: number; readonly radiusMm: number };
+/** What turns the connector settings into millimetres: the assembled model's longest side M and the cylinder's size. */
+export type ConnectorScale = { readonly longestDimensionMm: number; readonly radiusMm: number; readonly heightMm: number };
 
-/** The connector fields whose stored value is a multiplier or a percentage, shown in millimetres. */
+/** The fields whose stored value is a multiplier or a percentage, shown in millimetres. */
 export type ScaledConnectorKey =
   | 'cylinderDovetailSize'
   | 'cylinderDovetailLengthPercent'
@@ -13,25 +14,29 @@ export type ScaledConnectorKey =
   | 'cylinderRoundSpacingPercent';
 
 /**
- * Millimetres per unit of each stored setting, following the engine's formulas: the dovetail's height h = 0,025·M·k
- * and its length L = (p/100)·2r along a full diameter; the round connectors' diameter d = 0,0625·M·k_d, a plug's height
- * e = 0,05·M·k_e or a dowel's whole length 2e, and a pair's distance from the centre s = (p/100)·r. The stored values
- * stay the source of truth, so a new M scales every connector as before and a new radius keeps the proportions.
+ * Millimetres per unit of each stored setting, following the engine's formulas: the dovetail's height h = 0,025·M·k and
+ * its length L = (p/100)·S along the section's span S; the
+ * round connectors' diameter d = 0,0625·M·k_d, a plug's height e = 0,05·M·k_e or a dowel's whole length 2e, and a pair's
+ * distance from the centre s = (p/100)·S/2. The span is the diameter 2r in a parallel cut and the height H in a vertical
+ * one. The stored values stay the source of truth, so a new M scales every connector as before and a new radius or
+ * height keeps the proportions.
  */
 export function connectorUnits(
-  { longestDimensionMm: m, radiusMm: r }: ConnectorScale,
+  { longestDimensionMm: m, radiusMm: r, heightMm }: ConnectorScale,
   roundType: 'plug' | 'dowel',
+  sectionType: SectionType = 'parallel-to-bases',
 ): Readonly<Record<ScaledConnectorKey, number>> {
+  const span = sectionType === 'vertical' ? heightMm : 2 * r;
   return {
     cylinderDovetailSize: DOVETAIL_PROPORTIONS.height * m,
-    cylinderDovetailLengthPercent: (2 * r) / 100,
+    cylinderDovetailLengthPercent: span / 100,
     cylinderRoundDiameter: ROUND_CONNECTOR_PROPORTIONS.diameter * m,
     cylinderRoundDepth: ROUND_CONNECTOR_PROPORTIONS.insertion * m * (roundType === 'dowel' ? 2 : 1),
-    cylinderRoundSpacingPercent: r / 100,
+    cylinderRoundSpacingPercent: span / 2 / 100,
   };
 }
 
-/** The cylinder's scale from valid values: M, h/r and d/r give the radius as the engine builds it. */
+/** The cylinder's scale from valid values: M, h/r and d/r give the radius and height as the engine builds them. */
 export function cylinderConnectorScale(values: {
   readonly printSizeMm?: number | undefined;
   readonly cylinderHeightRatio?: number | undefined;
@@ -39,11 +44,11 @@ export function cylinderConnectorScale(values: {
 }): ConnectorScale | undefined {
   const { printSizeMm, cylinderHeightRatio, cylinderOffsetRatio } = values;
   if (printSizeMm === undefined || cylinderHeightRatio === undefined || cylinderOffsetRatio === undefined) return undefined;
-  const { radius } = roundDimensionsMm(
+  const { radius, height } = roundDimensionsMm(
     { kind: 'cylinder', heightRatio: cylinderHeightRatio, offsetRatio: cylinderOffsetRatio },
     { longestDimensionMm: printSizeMm },
   );
-  return { longestDimensionMm: printSizeMm, radiusMm: radius };
+  return { longestDimensionMm: printSizeMm, radiusMm: radius, heightMm: height };
 }
 
 // Display and slider precision: a thousandth of a millimetre.
@@ -52,6 +57,7 @@ const FACTOR = 10 ** DIGITS;
 // Absorbs the binary roundoff of a bound that is a decimal in exact arithmetic, such as 38,5 computed as
 // 38,49999999999999; a ten-billionth of a millimetre, well inside the plans' roundoff tolerance.
 const ROUNDOFF_THOUSANDTHS = 1e-7;
+const PERCENT_FACTOR = 100;
 
 /**
  * Feasible millimetres for a slider: rounded inwards to thousandths, so that every slider and button position, and a
@@ -67,6 +73,16 @@ export function physicalRange(
   const min = Math.ceil(interval.min * FACTOR - ROUNDOFF_THOUSANDTHS) / FACTOR + 0;
   const max = Math.floor(interval.max * FACTOR + ROUNDOFF_THOUSANDTHS) / FACTOR + 0;
   return min <= max ? { min, max, increment } : { min: interval.min, max: interval.max, increment };
+}
+
+/**
+ * A vertical plane's allowed distance from the axis in percent of r, for a slider: rounded inwards to hundredths of a
+ * percent, and symmetric. Both ends stay reachable, as stepping and the slider stop at them even when they are not
+ * multiples of the step.
+ */
+export function percentRange({ min, max }: { readonly min: number; readonly max: number }, increment: number): StepRange {
+  const inwards = (value: number) => Math.floor(value * PERCENT_FACTOR + ROUNDOFF_THOUSANDTHS) / PERCENT_FACTOR;
+  return { min: -inwards(-min) + 0, max: inwards(max) + 0, increment };
 }
 
 /** Millimetres for display: rounded to thousandths only here. */

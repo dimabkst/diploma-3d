@@ -1,4 +1,4 @@
-import type { Section } from '@diploma-3d/schema';
+import type { ParallelSection } from '@diploma-3d/schema';
 import type { Box, Manifold } from 'manifold-3d';
 import { GeometryError } from './errors.ts';
 import type { Vec3 } from './mesh.ts';
@@ -38,7 +38,7 @@ export function splitByPlane(track: Track, solid: Manifold, plane: Plane): Split
  * leans, so it is not perpendicular to an oblique cylinder's axis; there, every horizontal section is the base circle
  * moved by t times the upper base's displacement.
  */
-export function sectionPlane(section: Section, bounds: Box): Plane {
+export function sectionPlane(section: ParallelSection, bounds: Box): Plane {
   const [, , zBottom] = bounds.min;
   const height = bounds.max[2] - zBottom;
   return { normal: [0, 0, 1], offset: zBottom + (section.positionPercent / 100) * height };

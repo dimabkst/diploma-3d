@@ -16,7 +16,10 @@ let {
 }: {
   shapeName: string;
   model: ModelState;
-  /** Show the parts of a section moved apart; the model and its print file stay the same. */
+  /**
+   * The switch that shows the parts of a section moved apart; the model and its print file stay the same. It selects
+   * between the previews of the shown model only, which has none to select from without a section.
+   */
   separated: boolean;
   /** The fields that keep the model from updating, in panel order. */
   invalidFields: readonly { readonly key: ParameterKey; readonly label: string }[];

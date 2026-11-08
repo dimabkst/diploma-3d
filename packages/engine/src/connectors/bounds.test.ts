@@ -11,7 +11,7 @@ import {
 import { describe, expect, it } from 'vitest';
 import { type GeometryKernel, loadGeometryKernel } from '../kernel.ts';
 import { generateModel } from '../model.ts';
-import { hasFeasibleValues, type ParameterBounds } from './bounds.ts';
+import { connectorFeasibility, hasFeasibleValues, type ParameterBounds } from './bounds.ts';
 import {
   DOVETAIL_LEAD_IN_RELATIVE,
   DOVETAIL_MINIMUMS_MM,
@@ -396,6 +396,29 @@ describe('round connectors at their bounds match the 3D checks', () => {
         section: { type: 'parallel-to-bases', positionPercent: position, connector: extreme },
       }),
     ).not.toThrow();
+  });
+});
+
+describe('the solver', () => {
+  const measure = (value: number) => [{ valueMm: 1 - (value - 5) ** 2, minimumMm: 0 }];
+  const checks = ({ value }: { value: number }) => measure(value);
+  const solved = (value: number, envelope = { min: 0, max: 10 }) =>
+    connectorFeasibility(checks, { value }, [{ key: 'value', envelope, value, with: (_, next) => ({ value: next }) }]).parameters
+      .value;
+
+  it('finds an interval that reaches neither end of the search, for a concave constraint', () => {
+    const { bounds, issues } = solved(5);
+    expect(bounds.min).toBeCloseTo(4, 9);
+    expect(bounds.max).toBeCloseTo(6, 9);
+    expect(bounds.blocked).toBe(false);
+    expect(issues).toEqual([]);
+    expect(solved(8).issues).toHaveLength(1);
+  });
+
+  it('follows the interval to an end of the search, and reports none when the best value fails', () => {
+    expect(solved(5, { min: 4.5, max: 10 }).bounds).toMatchObject({ min: 4.5, blocked: false });
+    expect(solved(5, { min: 0, max: 5.5 }).bounds).toMatchObject({ max: 5.5, blocked: false });
+    expect(solved(8, { min: 7, max: 10 }).bounds.blocked).toBe(true);
   });
 });
 

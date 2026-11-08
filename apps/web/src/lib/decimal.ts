@@ -27,13 +27,19 @@ export function stepDecimal(value: number, direction: StepDirection, range: Step
   return clamp(stepped, range);
 }
 
-/** The multiple of `increment` (anchored at zero) nearest to `value`, with halves rounded up, clamped to the range. */
+/**
+ * The multiple of `increment` (anchored at zero) nearest to `value`, with halves rounded up, clamped to the range. The
+ * range's ends count as well: an end that is no multiple, such as 65,71 with the increment 5, is reachable by dragging.
+ */
 export function snapDecimal(value: number, range: StepRange): number {
   // round(u / s) = floor((2u + s) / 2s), computed exactly.
-  return clamp(
+  const multiple = clamp(
     multipleOfIncrement(value, range.increment, (units, stepUnits) => floorDivide(2n * units + stepUnits, 2n * stepUnits)),
     range,
   );
+  const distance = Math.abs(value - multiple);
+  if (Math.abs(value - range.max) < distance) return range.max;
+  return Math.abs(value - range.min) < distance ? range.min : multiple;
 }
 
 /**

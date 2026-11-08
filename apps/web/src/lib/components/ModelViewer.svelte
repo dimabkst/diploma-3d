@@ -10,7 +10,10 @@ let {
   onerror,
 }: {
   glb: Uint8Array<ArrayBuffer>;
-  /** The shape of `glb`: a model of another shape is shown from the default direction, an edited one keeps the view. */
+  /**
+   * The shape of `glb`: a model of another shape is shown from the default direction. An edited one keeps the view, also
+   * when its section changes: the new parts are placed in the GLB, and the camera has no part in that.
+   */
   viewKey: string;
   alt: string;
   onload: (glb: Uint8Array<ArrayBuffer>) => void;
