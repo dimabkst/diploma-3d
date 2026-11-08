@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const SECTION_TYPES = ['parallel-to-bases', 'vertical'] as const;
+export const SECTION_TYPES = ['parallel-to-bases', 'vertical', 'oblique'] as const;
 
 export type SectionType = (typeof SECTION_TYPES)[number];
 
@@ -20,6 +20,15 @@ export const sectionOffsetSchema = z.number().gt(-100).lt(100);
 
 /** The cutting plane's distance from the lower base, in percent of the perpendicular height h between the bases. */
 export const sectionPositionSchema = z.number().min(SECTION_POSITION_LIMITS.min).max(SECTION_POSITION_LIMITS.max);
+
+/**
+ * Application restrictions of an oblique plane, not mathematical limits: the exactly horizontal and vertical planes
+ * have their own modes. The direction's 0° and 360° are the same direction, so that a slider can reach either end.
+ */
+export const OBLIQUE_INCLINATION_LIMITS = { min: 5, max: 85 } as const;
+export const OBLIQUE_DIRECTION_LIMITS = { min: 0, max: 360 } as const;
+
+export const DEFAULT_OBLIQUE_SECTION = { positionPercent: 50, inclinationDeg: 45, directionDeg: 0 } as const;
 
 // The calibration window for print trials of the dovetail's clearance between mating surfaces, in millimetres: a policy,
 // not a geometric limit. The tongue's size and length have no fixed limits; the cylinder, the cut and the connector's
@@ -131,6 +140,29 @@ export const verticalSectionSchema = z.strictObject({
 
 export type VerticalSection = z.infer<typeof verticalSectionSchema>;
 
-export const sectionSchema = z.discriminatedUnion('type', [parallelSectionSchema, verticalSectionSchema]);
+/**
+ * A plane through the axis point C0 + t·(C1 − C0), t = positionPercent/100, at the angle inclinationDeg to the base
+ * plane, rising along the horizontal direction directionDeg, measured from the model's +X towards +Y.
+ */
+export const obliqueSectionSchema = z.strictObject({
+  type: z.literal('oblique'),
+  positionPercent: sectionPositionSchema.default(DEFAULT_OBLIQUE_SECTION.positionPercent),
+  inclinationDeg: z
+    .number()
+    .min(OBLIQUE_INCLINATION_LIMITS.min)
+    .max(OBLIQUE_INCLINATION_LIMITS.max)
+    .default(DEFAULT_OBLIQUE_SECTION.inclinationDeg),
+  directionDeg: z
+    .number()
+    .min(OBLIQUE_DIRECTION_LIMITS.min)
+    .max(OBLIQUE_DIRECTION_LIMITS.max)
+    .default(DEFAULT_OBLIQUE_SECTION.directionDeg),
+  /** Joins the parts; without one, both cut faces stay flat. */
+  connector: connectorSchema.optional(),
+});
+
+export type ObliqueSection = z.infer<typeof obliqueSectionSchema>;
+
+export const sectionSchema = z.discriminatedUnion('type', [parallelSectionSchema, verticalSectionSchema, obliqueSectionSchema]);
 
 export type Section = z.infer<typeof sectionSchema>;

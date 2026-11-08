@@ -1,11 +1,13 @@
 import type { ModelSpecInput } from '@diploma-3d/schema';
+import { obliqueAxes } from './connectors/frame.ts';
 import { createPreviewGlb, type PreviewObject } from './export/glb.ts';
-import { arrangeInRow, rotateHalfTurn, rotateOntoZ } from './export/layout.ts';
+import { arrangeInRow, restOnFlatFace, rotateHalfTurn, rotateOntoZ } from './export/layout.ts';
 import type { ThreeMfObject } from './export/three-mf.ts';
 import { createThreeMf } from './export/three-mf.ts';
 import type { GeometryKernel } from './kernel.ts';
 import { type Vec3, vertexAt, vertexCount } from './mesh.ts';
 import { type GeneratedModel, generateModel, type Solid } from './model.ts';
+import { roundDimensionsMm } from './shapes/round.ts';
 
 export interface ModelArtifacts {
   readonly model: GeneratedModel;
@@ -81,17 +83,17 @@ export function previewSeparation({ solids, section, size }: GeneratedModel): nu
  * The solids for the preview. With `gap` > 0 the part on the plane's positive side moves away by `gap` along the plane's
  * normal, from flat cut faces, plugs and dowels, which stay seated in the other part. A dovetail cannot come apart along
  * the normal once engaged, so its parts slide off the tongue and `gap` further. In a parallel cut the upper part moves
- * along +u. In a vertical cut part 2, with the groove, stays where it is and part 1, with the tongue, rises along −u,
- * which is the way it comes off; the groove opens upwards.
+ * along +u. In a vertical or oblique cut part 2, with the groove, stays where it is and part 1, with the tongue, moves
+ * uphill along −u, which is the way it comes off; the groove opens uphill.
  */
 function previewObjects({ solids, section }: GeneratedModel, gap: number): PreviewObject[] {
   if (section === undefined || gap === 0) return [...solids];
   const { connector, plane, type } = section;
   const sliding = connector?.type === 'dovetail' ? connector : undefined;
-  const direction = sliding === undefined ? plane.normal : type === 'vertical' ? scaled(sliding.frame.u, -1) : sliding.frame.u;
+  const tongueMoves = sliding !== undefined && type !== 'parallel-to-bases';
+  const direction = sliding === undefined ? plane.normal : tongueMoves ? scaled(sliding.frame.u, -1) : sliding.frame.u;
   const offset = scaled(direction, (sliding?.exitDistance ?? 0) + gap);
-  const moves = (solid: Solid) =>
-    sliding !== undefined && type === 'vertical' ? solid.part === 'part-1' : onPositiveSide(solid);
+  const moves = (solid: Solid) => (tongueMoves ? solid.part === 'part-1' : onPositiveSide(solid));
   return solids.map((solid) => (moves(solid) ? { ...solid, displayOffset: offset } : solid));
 }
 
@@ -102,12 +104,24 @@ const scaled = (a: Vec3, factor: number): Vec3 => [a[0] * factor, a[1] * factor,
  * cut's connector both connector faces print upwards: the lower part stands on its lower base, and the upper part is
  * turned half a turn about u onto its upper base, which also keeps a dovetail groove's flanks at 45° overhangs. A
  * vertical cut's parts stay upright on what remains of their bases, by translation only; their connector faces stand
- * upright too, so a connector along them may need another orientation in the slicer. Removable dowels stand upright on
- * an end face.
+ * upright too, so a connector along them may need another orientation in the slicer. An oblique cut's parts each choose
+ * their own resting face, see `restOnFlatFace`. Removable dowels stand upright on an end face.
  */
-function printObjects({ solids, section }: GeneratedModel): readonly ThreeMfObject[] {
+function printObjects({ solids, section, spec }: GeneratedModel): readonly ThreeMfObject[] {
   if (solids.length === 1) return solids;
   const connector = section?.connector;
+  if (spec.section?.type === 'oblique' && spec.shape.kind === 'cylinder') {
+    const baseHeight = roundDimensionsMm(spec.shape, spec.scale).height;
+    const { n, v } = obliqueAxes(spec.section.inclinationDeg, spec.section.directionDeg);
+    return arrangeInRow(
+      solids.map((solid) => {
+        if (solid.part === 'dowel') return { ...solid, mesh: rotateOntoZ(solid.mesh, n) };
+        // A connector on the cut face could not rest on the bed.
+        const cutFace = connector === undefined ? { cutFaceOutward: solid.part === 'part-1' ? n : scaled(n, -1) } : {};
+        return { ...solid, mesh: restOnFlatFace(solid.mesh, { baseHeight, turnAxis: v, ...cutFace }) };
+      }),
+    );
+  }
   if (connector === undefined) return arrangeInRow(solids);
   const { u, n } = connector.frame;
   return arrangeInRow(

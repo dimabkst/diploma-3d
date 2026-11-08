@@ -49,6 +49,12 @@ export {
   framePoint,
   lateralWall,
   type Measurement,
+  type ObliqueCut,
+  type ObliqueCylinderSection,
+  obliqueAxes,
+  obliqueCylinderSection,
+  obliquePlaneContainsAxis,
+  obliqueSplitReach,
   type ParallelCylinderSection,
   type SectionFrame,
   satisfies,
@@ -89,7 +95,7 @@ export {
   KernelInitializationError,
 } from './errors.ts';
 export { createPreviewGlb, GLB_MEDIA_TYPE, type PreviewObject, toGltfPosition } from './export/glb.ts';
-export { arrangeInRow, PRINT_LAYOUT_GAP_MM, rotateHalfTurn, rotateOntoZ } from './export/layout.ts';
+export { arrangeInRow, PRINT_LAYOUT_GAP_MM, restOnFlatFace, rotateHalfTurn, rotateOntoZ } from './export/layout.ts';
 export { createThreeMf, THREE_MF_MEDIA_TYPE, type ThreeMfObject, type ThreeMfOptions } from './export/three-mf.ts';
 export { type GeometryKernel, type KernelOptions, loadGeometryKernel } from './kernel.ts';
 export {

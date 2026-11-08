@@ -1,7 +1,8 @@
 import { type CylinderShape, type PhysicalScale, SECTION_POSITION_LIMITS, type Section } from '@diploma-3d/schema';
 import type { Mat4 } from 'manifold-3d';
 import { GeometryError } from '../errors.ts';
-import { cross, length, type Vec3 } from '../mesh.ts';
+import { cross, dot, length, type Vec3 } from '../mesh.ts';
+import { cosSinDeg } from '../shapes/angle.ts';
 import { circularSegments, roundDimensionsMm } from '../shapes/round.ts';
 
 /**
@@ -61,15 +62,59 @@ export interface VerticalCylinderSection extends CutGeometry {
   readonly plane: { readonly normal: Vec3; readonly offset: number };
 }
 
-export type CylinderSection = ParallelCylinderSection | VerticalCylinderSection;
+/**
+ * One flat face of the polygonal cylinder, seen from the frame of a cut: the plane's distance from the frame's origin,
+ * the outward unit normal in the frame's axes, and which parts of the cut the face actually bounds. A face wholly on the
+ * other side of the cut is not a wall of a part, however close its plane comes.
+ */
+export interface SolidFace {
+  readonly clearance: number;
+  readonly alongU: number;
+  readonly alongV: number;
+  readonly alongN: number;
+  readonly boundsNegative: boolean;
+  readonly boundsPositive: boolean;
+}
+
+/**
+ * A cylinder's oblique cut: part A (`negative`) lies on the negative side of the normal, part B (`positive`) on the
+ * positive one. The section is the actual polygonal solid's convex `contour`, which either base may clip, and
+ * `frame.origin` is its area centroid: u points uphill within the plane, v = u × n is horizontal.
+ */
+export interface ObliqueCylinderSection extends CutGeometry {
+  readonly type: 'oblique';
+  /** The plane itself: its unit normal, and the distance of the plane along it from the world's origin. */
+  readonly plane: { readonly normal: Vec3; readonly offset: number };
+  /** P = C0 + t·(C1 − C0), through which the plane passes. */
+  readonly axisPoint: Vec3;
+  /** The section's corners, counter-clockwise seen along −n. */
+  readonly contour: readonly Vec3[];
+  readonly area: number;
+  /** Whether the whole axis lies in the plane, so that the position along it changes nothing. */
+  readonly containsAxis: boolean;
+  readonly faces: readonly SolidFace[];
+  /** How far each part reaches from the plane along the normal. */
+  readonly reach: { readonly negative: number; readonly positive: number };
+  /** The farthest point along +u of the part on the positive side within this distance above the plane. */
+  readonly uphillReachWithin: (thickness: number) => number;
+}
+
+export type CylinderSection = ParallelCylinderSection | VerticalCylinderSection | ObliqueCylinderSection;
 
 /** A vertical cut's position: the signed distance from the axis in percent of the radius. */
 export interface VerticalCut {
   readonly offsetPercent: number;
 }
 
-/** Where a cylinder is cut: a plane parallel to the bases at this percentage of the height, or a vertical plane. */
-export type CylinderCut = number | VerticalCut;
+/** An oblique cut: the point on the axis, the angle to the base plane, and the horizontal direction it rises along. */
+export interface ObliqueCut {
+  readonly positionPercent: number;
+  readonly inclinationDeg: number;
+  readonly directionDeg: number;
+}
+
+/** Where a cylinder is cut: a plane parallel to the bases at this percentage of the height, or another plane. */
+export type CylinderCut = number | VerticalCut | ObliqueCut;
 
 const normalised = (a: Vec3): Vec3 => {
   const norm = length(a);
@@ -201,13 +246,227 @@ export function verticalCylinderSection(
   };
 }
 
+/** n = −sin α·q + cos α·Z, with q = (cos φ, sin φ, 0) the direction the plane rises along; 360° gives what 0° gives. */
+export function obliqueAxes(
+  inclinationDeg: number,
+  directionDeg: number,
+): { readonly n: Vec3; readonly u: Vec3; readonly v: Vec3 } {
+  const [cosAlpha, sinAlpha] = cosSinDeg(inclinationDeg);
+  const [cosPhi, sinPhi] = cosSinDeg(directionDeg % 360);
+  return {
+    // + 0 turns −sin α·0 into 0.
+    n: [-sinAlpha * cosPhi + 0, -sinAlpha * sinPhi + 0, cosAlpha],
+    // Z − (Z·n)·n = sin α·(cos α·q + sin α·Z): well-defined for every α > 0, and of unit length once sin α is taken out.
+    u: [cosAlpha * cosPhi, cosAlpha * sinPhi, sinAlpha],
+    // u × n = q × Z, written out so that it is exactly horizontal, which an upright part's half turn relies on.
+    v: [sinPhi, -cosPhi, 0],
+  };
+}
+
+/**
+ * Whether the plane contains the cylinder's whole axis a = (d, 0, H), so that every P on it gives the same plane:
+ * n·a = 0. The ratio d/H decides, whatever the size. Compared rather than solved for, so nothing divides by n·a.
+ */
+export function obliquePlaneContainsAxis(shape: CylinderShape, inclinationDeg: number, directionDeg: number): boolean {
+  const { n } = obliqueAxes(inclinationDeg, directionDeg);
+  const axis: Vec3 = [shape.offsetRatio, 0, shape.heightRatio];
+  return Math.abs(dot(n, axis)) <= AXIS_IN_PLANE_RELATIVE * length(axis);
+}
+
+// Relative to the axis's length; far below any change of the plane that a printed part could show.
+const AXIS_IN_PLANE_RELATIVE = 1e-9;
+
+/** The convex polygon where a plane meets the polyhedron's edges, in order around it; empty when it misses them. */
+function planeContour(
+  vertices: readonly Vec3[],
+  edges: readonly (readonly [number, number])[],
+  { n, u, v }: { readonly n: Vec3; readonly u: Vec3; readonly v: Vec3 },
+  offset: number,
+): Vec3[] {
+  const sides = vertices.map((vertex) => dot(n, vertex) - offset);
+  const crossings: Vec3[] = [];
+  for (const [first, second] of edges) {
+    const [a, b] = [sides[first] as number, sides[second] as number];
+    if (a < 0 === b < 0) continue;
+    const share = a / (a - b);
+    const [p, q] = [vertices[first] as Vec3, vertices[second] as Vec3];
+    crossings.push([p[0] + share * (q[0] - p[0]), p[1] + share * (q[1] - p[1]), p[2] + share * (q[2] - p[2])]);
+  }
+  if (crossings.length === 0) return [];
+  const centre = crossings.reduce<Vec3>((sum, point) => [sum[0] + point[0], sum[1] + point[1], sum[2] + point[2]], [0, 0, 0]);
+  const middle: Vec3 = [centre[0] / crossings.length, centre[1] / crossings.length, centre[2] / crossings.length];
+  const angleOf = (point: Vec3) => {
+    const relative: Vec3 = [point[0] - middle[0], point[1] - middle[1], point[2] - middle[2]];
+    return Math.atan2(dot(relative, u), dot(relative, v));
+  };
+  const ordered = crossings.map((point) => ({ point, angle: angleOf(point) })).sort((a, b) => a.angle - b.angle);
+  return ordered
+    .filter(({ point }, index) => {
+      const next = (ordered[(index + 1) % ordered.length] as (typeof ordered)[number]).point;
+      // A plane through a vertex crosses each edge at that vertex: the same corner, once.
+      return ordered.length === 1 || Math.hypot(point[0] - next[0], point[1] - next[1], point[2] - next[2]) > CONTOUR_MERGE_MM;
+    })
+    .map(({ point }) => point);
+}
+
+// Far below any feature of the polygon, whose sides are never shorter than a fraction of a millimetre.
+const CONTOUR_MERGE_MM = 1e-9;
+
+/**
+ * The area and area centroid of a convex polygon, in the plane with axes (v, u) through its first corner: the sum of the
+ * triangle fan, each triangle's centroid weighted by its area. The average of the corners would follow their spacing.
+ */
+function polygonCentroid(corners: readonly Vec3[], u: Vec3, v: Vec3): { readonly area: number; readonly centroid: Vec3 } {
+  const origin = corners[0] as Vec3;
+  const relative = corners.map((corner): Vec3 => [corner[0] - origin[0], corner[1] - origin[1], corner[2] - origin[2]]);
+  let area = 0;
+  let sum: Vec3 = [0, 0, 0];
+  for (let index = 1; index + 1 < relative.length; index += 1) {
+    const [b, c] = [relative[index] as Vec3, relative[index + 1] as Vec3];
+    const twice = dot(b, v) * dot(c, u) - dot(b, u) * dot(c, v);
+    area += twice / 2;
+    sum = [sum[0] + (twice * (b[0] + c[0])) / 6, sum[1] + (twice * (b[1] + c[1])) / 6, sum[2] + (twice * (b[2] + c[2])) / 6];
+  }
+  return { area, centroid: [origin[0] + sum[0] / area, origin[1] + sum[1] / area, origin[2] + sum[2] / area] };
+}
+
+/**
+ * The oblique cut of the cylinder as it is built: P = t·C1 with C0 at the origin, whatever the lean, and the plane
+ * n·x = n·P. The solid is a convex polyhedron, the base polygon sheared along X, so its section is the convex polygon
+ * where the plane crosses its edges, clipped by a base wherever it reaches one; no ellipse is assumed.
+ *
+ * A convex body's interior point is exactly as far from its surface as from the nearest face's plane, so the faces below
+ * measure every wall of a part. Only faces with a corner strictly on a part's side bound that part.
+ */
+export function obliqueCylinderSection(shape: CylinderShape, scale: PhysicalScale, cut: ObliqueCut): ObliqueCylinderSection {
+  const { radius, height, offset: d } = roundDimensionsMm(shape, scale);
+  const axes = obliqueAxes(cut.inclinationDeg, cut.directionDeg);
+  const { n, u, v } = axes;
+  const t = cut.positionPercent / 100;
+  const axisPoint: Vec3 = [t * d, 0, t * height];
+  const offset = dot(n, axisPoint);
+  const polygon = basePolygon(radius);
+  const count = polygon.length;
+  const vertices: Vec3[] = [...polygon.map(([x, y]): Vec3 => [x, y, 0]), ...polygon.map(([x, y]): Vec3 => [x + d, y, height])];
+  const edges: (readonly [number, number])[] = polygon.flatMap((_, index) => {
+    const next = (index + 1) % count;
+    return [
+      [index, next],
+      [count + index, count + next],
+      [index, count + index],
+    ] as const;
+  });
+  const contour = planeContour(vertices, edges, axes, offset);
+  if (contour.length < 3) throw new GeometryError('The oblique plane does not cut the cylinder.');
+  const { area, centroid } = polygonCentroid(contour, u, v);
+  const alongPlane = contour.map((corner) => dot(corner, u));
+  const across = vertices.map((vertex) => dot(n, vertex) - offset);
+  const frame: SectionFrame = { origin: centroid, u, v, n };
+  const faceOf = (normal: Vec3, planeOffset: number, corners: readonly number[]): SolidFace => ({
+    clearance: planeOffset - dot(normal, centroid),
+    alongU: dot(normal, u),
+    alongV: dot(normal, v),
+    alongN: dot(normal, n),
+    boundsNegative: corners.some((corner) => (across[corner] as number) < -CONTOUR_MERGE_MM),
+    boundsPositive: corners.some((corner) => (across[corner] as number) > CONTOUR_MERGE_MM),
+  });
+  const indices = polygon.map((_, index) => index);
+  const shear = d / height;
+  const faces: SolidFace[] = [
+    faceOf([0, 0, -1], 0, indices),
+    faceOf(
+      [0, 0, 1],
+      height,
+      indices.map((index) => count + index),
+    ),
+    ...indices.map((index) => {
+      const next = (index + 1) % count;
+      const [[x0, y0], [x1, y1]] = [polygon[index] as [number, number], polygon[next] as [number, number]];
+      // The right prism's side (a, b, 0)·p = c becomes (a, b, −a·d/H) under the shear x' = x + (d/H)·z.
+      const [a, b] = [y1 - y0, x0 - x1];
+      const norm = Math.hypot(a, b, a * shear);
+      const normal: Vec3 = [a / norm, b / norm, (-a * shear) / norm];
+      return faceOf(normal, dot(normal, [x0, y0, 0]), [index, next, count + index, count + next]);
+    }),
+  ];
+  return {
+    type: 'oblique',
+    frame,
+    radius,
+    inradius: radius * Math.cos(Math.PI / count),
+    span: Math.max(...alongPlane) - Math.min(...alongPlane),
+    depthExtent: Math.max(...across) - Math.min(...across),
+    plane: { normal: n, offset },
+    axisPoint,
+    contour,
+    area,
+    containsAxis: obliquePlaneContainsAxis(shape, cut.inclinationDeg, cut.directionDeg),
+    faces,
+    reach: { negative: -Math.min(...across), positive: Math.max(...across) },
+    uphillReachWithin: (thickness) => {
+      // The layer's farthest point lies on one of its two planes or at a corner of the solid between them.
+      const inLayer = vertices.filter((_, index) => (across[index] as number) >= 0 && (across[index] as number) <= thickness);
+      const candidates = [...contour, ...planeContour(vertices, edges, axes, offset + thickness), ...inLayer];
+      return Math.max(...candidates.map((point) => dot(point, u))) - dot(centroid, u);
+    },
+  };
+}
+
+/**
+ * The least distance each part must keep from the plane along the normal for a usable part, in millimetres: the rule of
+ * a vertical cut, at least one wall and a tenth of the solid's extent. The position's limits already keep that share,
+ * since the part's reach from P is a mean of t·|n·a| and the polygon's own reach. An application restriction: it does
+ * not make every thin part printable.
+ */
+export function obliquePartMinimumMm(section: ObliqueCylinderSection): number {
+  return Math.max((SECTION_POSITION_LIMITS.min / 100) * section.depthExtent, CONNECTOR_MIN_WALL_MM);
+}
+
+/** How far the thinner part reaches from an oblique plane, in millimetres, with what it must reach. */
+export function obliqueSplitReach(
+  shape: CylinderShape,
+  scale: PhysicalScale,
+  cut: ObliqueCut,
+): { readonly valueMm: number; readonly minimumMm: number } {
+  const section = obliqueCylinderSection(shape, scale, cut);
+  return { valueMm: Math.min(section.reach.negative, section.reach.positive), minimumMm: obliquePartMinimumMm(section) };
+}
+
+/** A round cavity's circle in the plane normal to n: the wall to one face, which its nearest point to that plane sets. */
+export const discWall = (face: SolidFace, along: number, normal: number, radius: number): number =>
+  face.clearance - along * face.alongU - normal * face.alongN - radius * Math.hypot(face.alongU, face.alongV);
+
+/** The wall from a point (along u, across v, along n) in the frame to one face. */
+export const pointWall = (face: SolidFace, along: number, across: number, normal: number): number =>
+  face.clearance - along * face.alongU - across * face.alongV - normal * face.alongN;
+
+/** The faces that bound the part on one side of an oblique plane. */
+export const facesOfPart = ({ faces }: ObliqueCylinderSection, part: 'negative' | 'positive'): readonly SolidFace[] =>
+  faces.filter((face) => (part === 'negative' ? face.boundsNegative : face.boundsPositive));
+
 /** Where the specification's section cuts the cylinder. */
-export const cutOfSection = (section: Section): CylinderCut =>
-  section.type === 'vertical' ? { offsetPercent: section.offsetPercent } : section.positionPercent;
+export const cutOfSection = (section: Section): CylinderCut => {
+  switch (section.type) {
+    case 'vertical':
+      return { offsetPercent: section.offsetPercent };
+    case 'oblique':
+      return {
+        positionPercent: section.positionPercent,
+        inclinationDeg: section.inclinationDeg,
+        directionDeg: section.directionDeg,
+      };
+    case 'parallel-to-bases':
+      return section.positionPercent;
+  }
+};
 
 /** The geometry of the cut. */
-export const cylinderCut = (shape: CylinderShape, scale: PhysicalScale, cut: CylinderCut): CylinderSection =>
-  typeof cut === 'number' ? cylinderSection(shape, scale, cut) : verticalCylinderSection(shape, scale, cut.offsetPercent);
+export function cylinderCut(shape: CylinderShape, scale: PhysicalScale, cut: CylinderCut): CylinderSection {
+  if (typeof cut === 'number') return cylinderSection(shape, scale, cut);
+  return 'offsetPercent' in cut
+    ? verticalCylinderSection(shape, scale, cut.offsetPercent)
+    : obliqueCylinderSection(shape, scale, cut);
+}
 
 /**
  * The shortest distance from a point of an ellipse's interior to its boundary, for the semi-axes major ≥ minor and the

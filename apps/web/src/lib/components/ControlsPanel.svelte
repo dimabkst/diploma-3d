@@ -122,6 +122,8 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
       range={field.range}
       suffix={field.suffix}
       error={errors[field.key]}
+      disabled={field.disabled}
+      describedBy={field.describedBy}
     />
   {:else}
     {@const unit = field.unit}
@@ -177,7 +179,7 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
                 <Select id={field.key} bind:value={choices[field.key]} options={field.options} />
               </Field>
             {:else if field.type === 'note'}
-              <p class="group-status">{field.text}</p>
+              <p class="group-status" id={field.key}>{field.text}</p>
             {:else if field.type === 'toggle'}
               <Checkbox id={field.key} label={field.label} bind:checked={choices[field.key]} />
             {:else if field.type === 'tilt'}

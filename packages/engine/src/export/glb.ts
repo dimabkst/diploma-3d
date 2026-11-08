@@ -114,7 +114,7 @@ export async function createPreviewGlb(objects: readonly PreviewObject[]): Promi
     const smooth = object.smoothShading ?? false;
     const shear = smooth ? object.smoothingShear : undefined;
     const rightMesh = shear === undefined ? object.mesh : unshear(object.mesh, shear);
-    const shaded = shadedTriangles(object.mesh, rightMesh, smooth, shear);
+    const shaded = shadedTriangles(object.mesh, rightMesh, smooth, shear, object.newFaces);
     const mesh = document.createMesh(object.name);
     for (const cut of [false, true]) {
       const selected = selectTriangles(shaded, (triangle) => (object.newFaces?.[triangle] === 1) === cut);
@@ -133,6 +133,7 @@ export async function createPreviewGlb(objects: readonly PreviewObject[]): Promi
       object.mesh,
       rightMesh,
       smooth ? FEATURE_EDGE_MIN_COSINE : POLYHEDRON_EDGE_MIN_COSINE,
+      object.newFaces,
     );
     if (edgePositions.length > 0) {
       mesh.addPrimitive(
@@ -192,13 +193,15 @@ function shearNormal(normal: Vec3, [kx, ky]: readonly [number, number]): Vec3 {
  * shading averages, weighted by their angles at the vertex, the normals of the faces around the vertex that lie within
  * the feature-edge angle of this face: the facets of a curved side blend, while a rim between the side and a flat cap
  * stays sharp. At a cone's apex each side triangle thus gets a normal close to its own instead of the axis direction.
- * For a sheared solid this happens on `rightMesh`, the solid before the shear, and the result is mapped back.
+ * For a sheared solid this happens on `rightMesh`, the solid before the shear, and the result is mapped back. A cut face
+ * never blends with the solid's own surface, which a steep oblique plane can meet at a small angle.
  */
 function shadedTriangles(
   mesh: TriangleMesh,
   rightMesh: TriangleMesh,
   smooth: boolean,
   shear: readonly [number, number] | undefined,
+  newFaces: Uint8Array | undefined,
 ): ShadedTriangles {
   const faceNormals = Array.from({ length: triangleCount(mesh) }, (_, triangle) => unitNormal(rightMesh, triangle));
   const cornersOfVertex = new Map<number, { triangle: number; angle: number }[]>();
@@ -227,7 +230,8 @@ function shadedTriangles(
         let sum: Vec3 = [0, 0, 0];
         for (const neighbour of cornersOfVertex.get(vertex) ?? []) {
           const neighbourNormal = faceNormals[neighbour.triangle] as Vec3;
-          if (dot(neighbourNormal, faceNormal) >= FEATURE_EDGE_MIN_COSINE)
+          const sameKind = newFaces?.[neighbour.triangle] === newFaces?.[triangle];
+          if (sameKind && dot(neighbourNormal, faceNormal) >= FEATURE_EDGE_MIN_COSINE)
             sum = add(sum, scale(neighbourNormal, neighbour.angle));
         }
         normal = scale(sum, 1 / length(sum));
@@ -244,9 +248,15 @@ function shadedTriangles(
 /**
  * Feature edges, lifted off the surface. Each vertex gets one offset shared by all its edges, so that the lines stay
  * connected at corners; offsetting every edge along its own normal bisector would leave gaps there. The edges are
- * found by the angle between faces of `rightMesh`, the solid before any shear, and lifted along the faces of `mesh`.
+ * found by the angle between faces of `rightMesh`, the solid before any shear, and lifted along the faces of `mesh`. The
+ * rim of a cut face is a feature edge at any angle.
  */
-function featureEdgeSegments(mesh: TriangleMesh, rightMesh: TriangleMesh, minCosine: number): Float32Array<ArrayBuffer> {
+function featureEdgeSegments(
+  mesh: TriangleMesh,
+  rightMesh: TriangleMesh,
+  minCosine: number,
+  newFaces: Uint8Array | undefined,
+): Float32Array<ArrayBuffer> {
   const firstTriangleOfEdge = new Map<string, number>();
   const edges: [number, number][] = [];
   const adjacentNormals = new Map<number, Vec3[]>();
@@ -260,7 +270,10 @@ function featureEdgeSegments(mesh: TriangleMesh, rightMesh: TriangleMesh, minCos
       const neighbour = firstTriangleOfEdge.get(key);
       if (neighbour === undefined) {
         firstTriangleOfEdge.set(key, triangle);
-      } else if (dot(unitNormal(rightMesh, triangle), unitNormal(rightMesh, neighbour)) < minCosine) {
+      } else if (
+        newFaces?.[triangle] !== newFaces?.[neighbour] ||
+        dot(unitNormal(rightMesh, triangle), unitNormal(rightMesh, neighbour)) < minCosine
+      ) {
         edges.push([from, to]);
         for (const vertex of [from, to]) {
           const normals = adjacentNormals.get(vertex) ?? [];

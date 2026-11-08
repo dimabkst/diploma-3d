@@ -170,3 +170,41 @@ describe('connector settings in millimetres', () => {
     expect(shownText('1,1', 2)).toBe('2,2');
   });
 });
+
+describe('connector settings on an oblique plane', () => {
+  const plane = {
+    cylinderObliquePositionPercent: 50,
+    cylinderObliqueInclinationDeg: 30,
+    cylinderObliqueDirectionDeg: 0,
+  };
+  const withPlane = (printSizeMm: number, previous?: Parameters<typeof cylinderConnectorScale>[1]) =>
+    cylinderConnectorScale({ printSizeMm, cylinderHeightRatio: 2, cylinderOffsetRatio: 0, ...plane }, previous);
+
+  it('measures lengths on the actual section’s span, which scales with M', () => {
+    const scale = withPlane(80);
+    if (scale === undefined) throw new Error('Expected a scale');
+    expect(scale.obliqueSpanMm).toBeCloseTo(160 / Math.sqrt(3), 1);
+    const units = connectorUnits(scale, 'plug', 'oblique');
+    expect(units.cylinderDovetailLengthPercent).toBeCloseTo((scale.obliqueSpanMm as number) / 100, 12);
+    expect(units.cylinderRoundSpacingPercent).toBeCloseTo((scale.obliqueSpanMm as number) / 200, 12);
+    expect(units.cylinderRoundDiameter).toBeCloseTo(5, 12);
+    expect(withPlane(160)?.obliqueSpanMm).toBeCloseTo(2 * (scale.obliqueSpanMm as number), 1);
+  });
+
+  it('keeps the last span while the plane is being corrected, and ignores it for the other cuts', () => {
+    const last = withPlane(80);
+    const scale = cylinderConnectorScale({ printSizeMm: 80, cylinderHeightRatio: 2, cylinderOffsetRatio: 0 }, last);
+    expect(scale?.obliqueSpanMm).toBe(last?.obliqueSpanMm);
+    const { cylinderObliquePositionPercent: _, ...withoutPosition } = plane;
+    expect(
+      cylinderConnectorScale({ printSizeMm: 80, cylinderHeightRatio: 2, cylinderOffsetRatio: 0, ...withoutPosition }, last)
+        ?.obliqueSpanMm,
+    ).toBe(last?.obliqueSpanMm);
+    const units = connectorUnits(scale as NonNullable<typeof scale>, 'plug');
+    expect(units.cylinderDovetailLengthPercent).toBeCloseTo(0.8, 12);
+    expect(connectorUnits(scale as NonNullable<typeof scale>, 'plug', 'vertical').cylinderDovetailLengthPercent).toBeCloseTo(
+      0.8,
+      12,
+    );
+  });
+});

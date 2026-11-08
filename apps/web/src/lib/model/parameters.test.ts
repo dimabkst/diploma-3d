@@ -1,4 +1,4 @@
-import { roundDimensionsMm, sectionOffsetMm } from '@diploma-3d/engine';
+import { obliqueCylinderSection, roundDimensionsMm, sectionOffsetMm } from '@diploma-3d/engine';
 import { describe, expect, it } from 'vitest';
 import { formatSteppedDecimal, snapDecimal, stepDecimal } from '../decimal.ts';
 import { sectionNumberFields, shapePanel } from '../shapes.ts';
@@ -22,6 +22,8 @@ import {
   validateAngle,
   validateApex,
   validateDirection,
+  validateObliqueDirection,
+  validateObliqueInclination,
   validateOffset,
   validatePrintSize,
   validateRatio,
@@ -173,6 +175,9 @@ describe('resolveModelRequest', () => {
       coneInclinationDeg: '90',
       cylinderSectionPercent: '50',
       cylinderSectionOffsetPercent: '0',
+      cylinderObliquePositionPercent: '50',
+      cylinderObliqueInclinationDeg: '45',
+      cylinderObliqueDirectionDeg: '0',
       cylinderDovetailSize: '1',
       cylinderDovetailLengthPercent: '50',
       cylinderDovetailClearanceMm: '0,2',
@@ -1781,6 +1786,7 @@ describe('a vertical section of the cylinder', () => {
         { value: 'none', label: 'Без перерізу' },
         { value: 'parallel-to-bases', label: 'Паралельно основам' },
         { value: 'vertical', label: 'Вертикальний' },
+        { value: 'oblique', label: 'Похилий' },
       ],
     });
   });
@@ -2006,5 +2012,255 @@ describe('a vertical section of the cylinder', () => {
     const parallel = { ...choose('plug'), cylinderSection: 'parallel-to-bases' } as const;
     expect(request(flat, parallel).spec).toBeUndefined();
     expect(request(flat, choose('plug')).spec?.section?.connector).toMatchObject({ depthFactor: 6 });
+  });
+});
+
+describe('an oblique section of the cylinder', () => {
+  const sectioned = { ...triangle, cylinderSection: 'oblique' } as const;
+  const choose = (cylinderConnector: 'dovetail' | 'plug' | 'dowel', cylinderRoundCount: 1 | 2 = 1) =>
+    ({ ...sectioned, cylinderConnector, cylinderRoundCount }) as const;
+  const request = (overrides: Partial<ParameterTexts> = {}, choices: typeof triangle = sectioned) =>
+    resolveModelRequest('cylinder', texts(overrides), choices);
+  const groupsOf = (choices: typeof triangle, overrides: Partial<ParameterTexts> = {}) => {
+    const { values, sectionRanges } = request(overrides, choices);
+    const panel = shapePanel('cylinder', choices, { values, sectionRanges });
+    return panel.type === 'parameters' ? panel.sections : [];
+  };
+  const group = (choices: typeof triangle, title: string, overrides: Partial<ParameterTexts> = {}) => {
+    const found = groupsOf(choices, overrides).find((part) => part.title === title);
+    if (found === undefined) throw new Error(`No group ${title}`);
+    return found;
+  };
+  const containingAxis = { cylinderHeightRatio: '2', cylinderOffsetRatio: '2' } as const;
+
+  it('starts at the default plane, with the three fields in the specified units, ranges and steps', () => {
+    const result = request();
+    expect(result.errors).toEqual({});
+    expect(result.spec?.section).toEqual({ type: 'oblique', positionPercent: 50, inclinationDeg: 45, directionDeg: 0 });
+    const cut = group(sectioned, 'Переріз');
+    expect(cut.status).toEqual({ text: 'похилий', highlighted: true });
+    expect(cut.fields[0]).toMatchObject({
+      options: [
+        { value: 'none', label: 'Без перерізу' },
+        { value: 'parallel-to-bases', label: 'Паралельно основам' },
+        { value: 'vertical', label: 'Вертикальний' },
+        { value: 'oblique', label: 'Похилий' },
+      ],
+    });
+    expect(sectionNumberFields(cut)).toMatchObject([
+      {
+        key: 'cylinderObliquePositionPercent',
+        label: 'Точка на осі від нижньої основи',
+        suffix: '% h',
+        range: { min: 10, max: 90, increment: 5 },
+      },
+      {
+        key: 'cylinderObliqueInclinationDeg',
+        label: 'Кут до площини основи',
+        suffix: '°',
+        range: { min: 5, max: 85, increment: 5 },
+      },
+      { key: 'cylinderObliqueDirectionDeg', label: 'Напрям нахилу', suffix: '°', range: { min: 0, max: 360, increment: 5 } },
+    ]);
+    expect(cut.fields.at(-1)).toMatchObject({ type: 'toggle', key: 'cylinderPartsSeparated' });
+  });
+
+  it('holds typed values to the same bounds as the sliders', () => {
+    expect(validateObliqueInclination('5')).toEqual({ value: 5 });
+    expect(validateObliqueInclination('85')).toEqual({ value: 85 });
+    expect(validateObliqueInclination('4,9')).toEqual({ error: 'Допустимі значення — від 5° до 85°.' });
+    expect(validateObliqueInclination('85,1')).toEqual({ error: 'Допустимі значення — від 5° до 85°.' });
+    expect(validateObliqueDirection('360')).toEqual({ value: 360 });
+    expect(validateObliqueDirection('-1')).toEqual({ error: 'Допустимі значення — від 0° до 360°.' });
+    expect(validateObliqueDirection('360,5')).toEqual({ error: 'Допустимі значення — від 0° до 360°.' });
+    expect(request({ cylinderObliquePositionPercent: '95' }).errors.cylinderObliquePositionPercent).toBe(
+      'Допустимі значення — від 10 % до 90 %.',
+    );
+    for (const key of [
+      'cylinderObliquePositionPercent',
+      'cylinderObliqueInclinationDeg',
+      'cylinderObliqueDirectionDeg',
+    ] as const) {
+      const result = request({ [key]: '' });
+      expect(result.errors[key]).toBe('Введіть значення.');
+      expect(result.spec).toBeUndefined();
+    }
+    // A typed value between the steps is kept.
+    expect(request({ cylinderObliqueInclinationDeg: '47,5' }).spec?.section).toMatchObject({ inclinationDeg: 47.5 });
+  });
+
+  it('keeps 360° in the field but makes one model of 0° and 360°', () => {
+    const [start, end] = [request({ cylinderObliqueDirectionDeg: '0' }), request({ cylinderObliqueDirectionDeg: '360' })];
+    expect(end.values.cylinderObliqueDirectionDeg).toBe(360);
+    expect(end.key).toBe(start.key);
+    expect(end.spec?.section).toMatchObject({ directionDeg: 0 });
+    // The slider stays at its end rather than jumping back to the start.
+    const direction = sectionNumberFields(group(sectioned, 'Переріз', { cylinderObliqueDirectionDeg: '360' }))[2];
+    expect(direction?.range?.max).toBe(360);
+    expect(stepDecimal(360, -1, direction?.range as { min: number; max: number; increment: number })).toBe(355);
+    expect(snapDecimal(359, direction?.range as { min: number; max: number; increment: number })).toBe(360);
+  });
+
+  it('stores the plane apart from the model’s size, so a new maximum dimension keeps it', () => {
+    const edited = {
+      cylinderObliquePositionPercent: '35',
+      cylinderObliqueInclinationDeg: '55',
+      cylinderObliqueDirectionDeg: '120',
+    };
+    const [small, large] = [request(edited), request({ ...edited, printSizeMm: '160' })];
+    expect(large.spec?.section).toEqual(small.spec?.section);
+    expect(large.spec?.scale.longestDimensionMm).toBe(160);
+  });
+
+  it('keeps each mode’s own values, and other modes unaffected', () => {
+    const edited = {
+      cylinderObliquePositionPercent: '30',
+      cylinderSectionPercent: '70',
+      cylinderSectionOffsetPercent: '25',
+    };
+    expect(request(edited).spec?.section).toMatchObject({ type: 'oblique', positionPercent: 30 });
+    expect(request(edited, { ...triangle, cylinderSection: 'parallel-to-bases' }).spec?.section).toEqual({
+      type: 'parallel-to-bases',
+      positionPercent: 70,
+    });
+    expect(request(edited, { ...triangle, cylinderSection: 'vertical' }).spec?.section).toEqual({
+      type: 'vertical',
+      offsetPercent: 25,
+    });
+    // A hidden draft of another mode blocks nothing.
+    expect(request({ cylinderSectionPercent: '' }).errors).toEqual({});
+    expect(request({ cylinderObliqueInclinationDeg: '' }, { ...triangle, cylinderSection: 'vertical' }).errors).toEqual({});
+  });
+
+  it('disables the position while the plane contains the whole axis, and keeps its value for later', () => {
+    const edited = { ...containingAxis, cylinderObliquePositionPercent: '30' };
+    const result = request(edited);
+    expect(result.errors).toEqual({});
+    expect(result.spec?.section).toMatchObject({ positionPercent: 30, inclinationDeg: 45, directionDeg: 0 });
+    const fields = group(sectioned, 'Переріз', edited).fields;
+    const noteId = 'cylinder-oblique-axis-note';
+    expect(fields[1]).toMatchObject({ key: 'cylinderObliquePositionPercent', disabled: true, describedBy: noteId });
+    expect(fields[2]).toEqual({
+      type: 'note',
+      key: noteId,
+      text: 'Площина містить усю вісь циліндра, тому положення точки за висотою не змінює переріз.',
+    });
+    // Another angle or another lean brings the field back, with the value it had.
+    const turned = { ...edited, cylinderObliqueInclinationDeg: '50' };
+    expect(group(sectioned, 'Переріз', turned).fields[1]).not.toHaveProperty('disabled');
+    expect(request(turned).spec?.section).toMatchObject({ positionPercent: 30, inclinationDeg: 50 });
+    const upright = { ...edited, cylinderOffsetRatio: '0' };
+    expect(group(sectioned, 'Переріз', upright).fields[1]).not.toHaveProperty('disabled');
+    // Also a right cylinder at the steepest angle keeps the field, as n·a stays positive.
+    expect(group(sectioned, 'Переріз', { cylinderObliqueInclinationDeg: '85' }).fields[1]).not.toHaveProperty('disabled');
+  });
+
+  it('does not let an invalid draft of the disabled position block the model', () => {
+    const edited = { ...containingAxis, cylinderObliquePositionPercent: 'x' };
+    const result = request(edited);
+    expect(result.errors).toEqual({});
+    expect(result.spec?.section).toMatchObject({ positionPercent: 50 });
+    // The draft is still there, and an error again once the field matters.
+    expect(request({ ...edited, cylinderObliqueInclinationDeg: '50' }).errors.cylinderObliquePositionPercent).toBeDefined();
+  });
+
+  it('tells a part too thin to be usable from a connector that does not fit', () => {
+    const thin = request({ printSizeMm: '2', cylinderObliquePositionPercent: '10' });
+    expect(thin.spec).toBeUndefined();
+    expect(thin.errors.cylinderObliquePositionPercent).toMatch(/^Тонша частина сягає від площини лише 0,8\d? мм/);
+    // No connector to blame, and none is checked on such a plane.
+    expect(thin.sectionRanges).toEqual({});
+    const unfit = request({ printSizeMm: '10' }, choose('plug'));
+    expect(unfit.errors.cylinderObliquePositionPercent).toBeUndefined();
+    expect(unfit.errors.cylinderRoundDiameter).toMatch(/виступу/);
+    // On a contained axis the angle is what can repair it.
+    const contained = request({ ...containingAxis, printSizeMm: '1' });
+    expect(contained.errors.cylinderObliqueInclinationDeg ?? '').toMatch(/^Тонша частина/);
+    expect(contained.errors.cylinderObliquePositionPercent).toBeUndefined();
+  });
+
+  it('keeps the connector group below the section’s explanation, with the parts by number', () => {
+    const titles = groupsOf(choose('dowel')).map(({ title }) => title);
+    expect(titles.indexOf('Кріплення')).toBe(titles.indexOf('Переріз') + 1);
+    const { help } = group(sectioned, 'Переріз');
+    expect(help?.label).toBe('Як задано переріз?');
+    expect(help?.text).toMatch(/проходить через вибрану точку на осі/);
+    expect(help?.text).toMatch(/відносно площини основи/);
+    expect(help?.text).toMatch(/куди площина піднімається/);
+    expect(help?.text).toMatch(/перетинає основу/);
+    const labels = sectionNumberFields(group(choose('dowel'), 'Кріплення')).map(({ label }) => label);
+    expect(labels).toContain('Збільшення діаметра отворів частини 1, мм');
+    expect(labels).toContain('Збільшення діаметра отворів частини 2, мм');
+    expect(labels.join(' ')).not.toMatch(/нижніх|верхніх/);
+  });
+
+  it('explains the uphill removal and the downhill stop of the dovetail, without promising anything about supports', () => {
+    const help = group(choose('dovetail'), 'Кріплення').help?.text;
+    expect(help).toMatch(/угорі схилу/);
+    expect(help).toMatch(/упором унизу/);
+    expect(help).toMatch(/вниз по схилу до упора/);
+    expect(help).toMatch(/вгору по схилу/);
+    expect(help).toMatch(/не обов’язково вертикально/);
+    expect(help).toMatch(/не замок/);
+    for (const connector of ['dovetail', 'plug', 'dowel'] as const) {
+      expect(group(choose(connector), 'Кріплення').help?.text).toMatch(/можуть потребувати підтримок/);
+    }
+  });
+
+  it('shows connector millimetres of the actual section, whose span follows the plane', () => {
+    const { span } = obliqueCylinderSection(
+      { kind: 'cylinder', heightRatio: 2, offsetRatio: 0 },
+      { longestDimensionMm: 80 },
+      { positionPercent: 50, inclinationDeg: 30, directionDeg: 0 },
+    );
+    const overrides = { cylinderObliqueInclinationDeg: '30' };
+    const { values, sectionRanges } = request(overrides, choose('dovetail'));
+    const panel = shapePanel('cylinder', choose('dovetail'), {
+      values,
+      sectionRanges,
+      connectorScale: { longestDimensionMm: 80, radiusMm: 40, heightMm: 80, obliqueSpanMm: span },
+    });
+    const fields = panel.type === 'parameters' ? panel.sections.flatMap(sectionNumberFields) : [];
+    expect(fields.find(({ key }) => key === 'cylinderDovetailLengthPercent')?.unit).toBeCloseTo(span / 100, 12);
+    expect(span).toBeCloseTo(160 / Math.sqrt(3), 1);
+  });
+
+  it('explains a connector’s problem at the field that repairs it, in oblique terms', () => {
+    const tooWide = request({ cylinderRoundDiameter: '30' }, choose('plug'));
+    expect(tooWide.spec).toBeUndefined();
+    expect(tooWide.errors.cylinderRoundDiameter).toMatch(/у частині 2/);
+    expect(tooWide.errors.cylinderRoundDiameter).toMatch(/Зараз допустимо/);
+    const tooDeep = request(
+      { cylinderObliquePositionPercent: '90', cylinderObliqueInclinationDeg: '15', cylinderRoundDepth: '8' },
+      choose('plug'),
+    );
+    expect(tooDeep.errors.cylinderRoundDepth).toMatch(/змініть положення чи кут площини/);
+    expect(tooDeep.errors.cylinderRoundDepth).not.toMatch(/зміщення від осі|опустіть|підніміть/);
+    const tooLong = request({ cylinderDovetailLengthPercent: '99' }, choose('dovetail'));
+    expect(tooLong.errors.cylinderDovetailLengthPercent).toBeDefined();
+    expect(tooLong.sectionRanges?.cylinderDovetailLengthPercent).toBeTruthy();
+  });
+
+  it('resets its fields with the others, and offers a reset only for what shapes the model', () => {
+    const edited: ParameterState = {
+      texts: texts({
+        printSizeMm: '120',
+        cylinderObliquePositionPercent: '30',
+        cylinderObliqueInclinationDeg: '60',
+        cylinderObliqueDirectionDeg: '360',
+      }),
+      choices: sectioned,
+    };
+    expect(canResetShapeParameters('cylinder', edited)).toBe(true);
+    const reset = resetShapeParameters('cylinder', edited);
+    expect(reset.texts).toEqual(texts({ printSizeMm: '120' }));
+    expect(reset.choices.cylinderSection).toBe('none');
+    // Fields of a mode that is not chosen shape nothing.
+    expect(canResetShapeParameters('cylinder', { texts: edited.texts, choices: triangle })).toBe(false);
+    expect(
+      canResetShapeParameters('cylinder', { texts: edited.texts, choices: { ...triangle, cylinderSection: 'vertical' } }),
+    ).toBe(true);
+    expect(activeSection('cylinder', sectioned)).toBe('oblique');
+    expect(activeConnector('cylinder', choose('plug'))).toBe('plug');
   });
 });

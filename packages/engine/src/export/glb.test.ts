@@ -330,6 +330,31 @@ describe('createPreviewGlb shading', () => {
     expect(edgeSegments).toBe(64);
   });
 
+  it('never blends a cut face with the solid’s side, however shallow a steep oblique plane meets it', async () => {
+    // r = 10 mm, H = 80 mm at 75°: at the section's ends the cut meets the side at only 15°, below the feature angle.
+    const { solids, section } = generateModel(await loadGeometryKernel(), {
+      shape: { kind: 'cylinder', heightRatio: 8, offsetRatio: 0 },
+      scale: { longestDimensionMm: 80 },
+      section: { type: 'oblique', positionPercent: 50, inclinationDeg: 75, directionDeg: 0 },
+    });
+    const [part] = solids;
+    if (part === undefined || section === undefined) throw new Error('Expected the parts of a section.');
+    const document = await new WebIO().readBinary(await createPreviewGlb([part]));
+    const primitives = document.getRoot().listMeshes()[0]?.listPrimitives() ?? [];
+    const cut = primitives.find((primitive) => primitive.getMaterial()?.getName() === 'cut');
+    expect(cut).toBeDefined();
+    const [nx, ny, nz] = section.plane.normal;
+    const expected: Vec3 = [nx, nz, -ny];
+    for (const normal of vectors(cut?.getAttribute('NORMAL') ?? null)) {
+      expect(dot(normal, expected)).toBeCloseTo(1, 4);
+    }
+    // Its rim is outlined all the way round, the shallow ends included.
+    const edges = primitives.find((primitive) => primitive.getMode() === LINES);
+    const edgeHeights = vectors(edges?.getAttribute('POSITION') ?? null).map(([, y]) => y);
+    expect(Math.min(...edgeHeights)).toBeLessThan(0.04 - 0.03);
+    expect(Math.max(...edgeHeights)).toBeGreaterThan(0.04 + 0.03);
+  });
+
   it('keeps exactly flat normals for polyhedra and when smooth shading is off', async () => {
     for (const [spec, smoothShading] of [
       [{ shape: { kind: 'prism', baseSides: 8, heightRatio: 0.25 }, scale: { longestDimensionMm: 80 } }, undefined],

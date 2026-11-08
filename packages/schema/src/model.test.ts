@@ -744,7 +744,7 @@ describe('plane sections', () => {
   });
 
   it('offers the section only for the cylinder so far', () => {
-    expect(SECTIONS_BY_SHAPE).toEqual({ cylinder: ['parallel-to-bases', 'vertical'] });
+    expect(SECTIONS_BY_SHAPE).toEqual({ cylinder: ['parallel-to-bases', 'vertical', 'oblique'] });
     const cone = modelSpecSchema.safeParse({ shape: { kind: 'cone', heightRatio: 2 }, scale, section: at(50) });
     expect(cone.success).toBe(false);
     expect(cone.error?.issues[0]?.path).toEqual(['section']);

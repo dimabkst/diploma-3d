@@ -8,6 +8,7 @@ let {
   alt,
   onload,
   onerror,
+  oncamerachange,
 }: {
   glb: Uint8Array<ArrayBuffer>;
   /**
@@ -18,6 +19,8 @@ let {
   alt: string;
   onload: (glb: Uint8Array<ArrayBuffer>) => void;
   onerror: (glb: Uint8Array<ArrayBuffer>) => void;
+  /** The camera's direction in radians: θ around the vertical axis from the model's −Y side, φ from straight above. */
+  oncamerachange?: (direction: { theta: number; phi: number }) => void;
 } = $props();
 
 /** The parts of model-viewer's camera API used here. */
@@ -90,6 +93,21 @@ $effect(() => {
   const sheet = new CSSStyleSheet();
   sheet.replaceSync(FOCUS_STYLES);
   shadowRoot.adoptedStyleSheets = [...shadowRoot.adoptedStyleSheets, sheet];
+});
+
+$effect(() => {
+  if (viewer === undefined || oncamerachange === undefined) return;
+  const [element, report] = [viewer, oncamerachange];
+  const handleChange = () => {
+    const { theta, phi } = element.getCameraOrbit();
+    report({ theta, phi });
+  };
+  element.addEventListener('camera-change', handleChange);
+  element.addEventListener('load', handleChange);
+  return () => {
+    element.removeEventListener('camera-change', handleChange);
+    element.removeEventListener('load', handleChange);
+  };
 });
 
 // The element stays mounted while models are replaced, so the camera and WebGL context are kept. A load event names

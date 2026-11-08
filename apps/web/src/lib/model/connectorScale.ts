@@ -1,9 +1,15 @@
-import { DOVETAIL_PROPORTIONS, ROUND_CONNECTOR_PROPORTIONS, roundDimensionsMm } from '@diploma-3d/engine';
+import { DOVETAIL_PROPORTIONS, obliqueCylinderSection, ROUND_CONNECTOR_PROPORTIONS, roundDimensionsMm } from '@diploma-3d/engine';
 import type { SectionType } from '@diploma-3d/schema';
 import { formatDecimal, formatSteppedDecimal, parseDecimal, type StepRange } from '../decimal.ts';
 
 /** What turns the connector settings into millimetres: the assembled model's longest side M and the cylinder's size. */
-export type ConnectorScale = { readonly longestDimensionMm: number; readonly radiusMm: number; readonly heightMm: number };
+export type ConnectorScale = {
+  readonly longestDimensionMm: number;
+  readonly radiusMm: number;
+  readonly heightMm: number;
+  /** The actual section's extent along u of the current or last valid oblique plane. */
+  readonly obliqueSpanMm?: number | undefined;
+};
 
 /** The fields whose stored value is a multiplier or a percentage, shown in millimetres. */
 export type ScaledConnectorKey =
@@ -17,16 +23,16 @@ export type ScaledConnectorKey =
  * Millimetres per unit of each stored setting, following the engine's formulas: the dovetail's height h = 0,025·M·k and
  * its length L = (p/100)·S along the section's span S; the
  * round connectors' diameter d = 0,0625·M·k_d, a plug's height e = 0,05·M·k_e or a dowel's whole length 2e, and a pair's
- * distance from the centre s = (p/100)·S/2. The span is the diameter 2r in a parallel cut and the height H in a vertical
- * one. The stored values stay the source of truth, so a new M scales every connector as before and a new radius or
- * height keeps the proportions.
+ * distance from the centre s = (p/100)·S/2. The span is the diameter 2r in a parallel cut, the height H in a vertical
+ * one and the actual section's extent along u in an oblique one. The stored values stay the source of truth, so a new M
+ * scales every connector as before and a new radius, height or plane keeps the proportions.
  */
 export function connectorUnits(
-  { longestDimensionMm: m, radiusMm: r, heightMm }: ConnectorScale,
+  { longestDimensionMm: m, radiusMm: r, heightMm, obliqueSpanMm }: ConnectorScale,
   roundType: 'plug' | 'dowel',
   sectionType: SectionType = 'parallel-to-bases',
 ): Readonly<Record<ScaledConnectorKey, number>> {
-  const span = sectionType === 'vertical' ? heightMm : 2 * r;
+  const span = sectionType === 'vertical' ? heightMm : sectionType === 'oblique' ? (obliqueSpanMm ?? 2 * r) : 2 * r;
   return {
     cylinderDovetailSize: DOVETAIL_PROPORTIONS.height * m,
     cylinderDovetailLengthPercent: span / 100,
@@ -36,19 +42,36 @@ export function connectorUnits(
   };
 }
 
-/** The cylinder's scale from valid values: M, h/r and d/r give the radius and height as the engine builds them. */
-export function cylinderConnectorScale(values: {
-  readonly printSizeMm?: number | undefined;
-  readonly cylinderHeightRatio?: number | undefined;
-  readonly cylinderOffsetRatio?: number | undefined;
-}): ConnectorScale | undefined {
+/**
+ * The cylinder's scale from valid values: M, h/r and d/r give the radius and height as the engine builds them, and a
+ * valid oblique plane its section's span; while the plane is being corrected, `previous` keeps the last span.
+ */
+export function cylinderConnectorScale(
+  values: {
+    readonly printSizeMm?: number | undefined;
+    readonly cylinderHeightRatio?: number | undefined;
+    readonly cylinderOffsetRatio?: number | undefined;
+    readonly cylinderObliquePositionPercent?: number | undefined;
+    readonly cylinderObliqueInclinationDeg?: number | undefined;
+    readonly cylinderObliqueDirectionDeg?: number | undefined;
+  },
+  previous?: ConnectorScale,
+): ConnectorScale | undefined {
   const { printSizeMm, cylinderHeightRatio, cylinderOffsetRatio } = values;
   if (printSizeMm === undefined || cylinderHeightRatio === undefined || cylinderOffsetRatio === undefined) return undefined;
-  const { radius, height } = roundDimensionsMm(
-    { kind: 'cylinder', heightRatio: cylinderHeightRatio, offsetRatio: cylinderOffsetRatio },
-    { longestDimensionMm: printSizeMm },
-  );
-  return { longestDimensionMm: printSizeMm, radiusMm: radius, heightMm: height };
+  const shape = { kind: 'cylinder', heightRatio: cylinderHeightRatio, offsetRatio: cylinderOffsetRatio } as const;
+  const scale = { longestDimensionMm: printSizeMm };
+  const { radius, height } = roundDimensionsMm(shape, scale);
+  const {
+    cylinderObliquePositionPercent: positionPercent,
+    cylinderObliqueInclinationDeg: inclinationDeg,
+    cylinderObliqueDirectionDeg: directionDeg,
+  } = values;
+  const obliqueSpanMm =
+    positionPercent === undefined || inclinationDeg === undefined || directionDeg === undefined
+      ? previous?.obliqueSpanMm
+      : obliqueCylinderSection(shape, scale, { positionPercent, inclinationDeg, directionDeg }).span;
+  return { longestDimensionMm: printSizeMm, radiusMm: radius, heightMm: height, obliqueSpanMm };
 }
 
 // Display and slider precision: a thousandth of a millimetre.

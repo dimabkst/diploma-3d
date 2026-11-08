@@ -13,9 +13,12 @@ import {
   type CylinderSection,
   connectorVolumeTolerance,
   cylinderCut,
+  discWall,
+  facesOfPart,
   frameMatrix,
   framePoint,
   lateralWall,
+  type ObliqueCylinderSection,
   type SectionFrame,
   satisfies,
 } from './frame.ts';
@@ -226,6 +229,8 @@ interface HoleExtent {
  * centroid itself lies on the axis, because the polygon's chord is symmetric. A hole approaching the axis first gains
  * material, so the farther of its entrance and bottom from the axis plane counts; on the way there the entrance is the
  * thinner anyway. The bases are the planes z = 0 and z = H, at H/2 from the centroid.
+ *
+ * In an oblique cut they are measured to the actual faces that bound the part, see `obliqueHoleWalls`.
  */
 function holeWalls(section: CylinderSection, part: Part, hole: HoleExtent, holeDepth: number) {
   const { along, chamfer, straight, opening } = hole;
@@ -237,6 +242,7 @@ function holeWalls(section: CylinderSection, part: Part, hole: HoleExtent, holeD
       bottom: (part === 'upper' ? upperThickness : lowerThickness) - holeDepth,
     };
   }
+  if (section.type === 'oblique') return obliqueHoleWalls(section, part, hole, holeDepth);
   const { offset, lean, stretch, height } = section;
   const towards = part === 'upper' ? 1 : -1;
   const reachOf = (radius: number) => lean * Math.abs(along) + radius * stretch;
@@ -251,9 +257,32 @@ function holeWalls(section: CylinderSection, part: Part, hole: HoleExtent, holeD
   };
 }
 
+/**
+ * A hole of an oblique cut, wherever the plane leaves the bases and the lateral side: it is a cone and a cylinder, both
+ * convex, so that its circles at the entrance, at the end of the chamfer and at the bottom bound every point of it, and a
+ * circle's wall to a face follows from the face's plane. The whole cavity is measured, with its bottom apart, because
+ * a part may thin out behind a mouth that fits with room to spare.
+ */
+function obliqueHoleWalls(section: ObliqueCylinderSection, part: Part, hole: HoleExtent, holeDepth: number) {
+  const { along, chamfer, straight, opening } = hole;
+  const towards = part === 'upper' ? 1 : -1;
+  const faces = facesOfPart(section, part === 'upper' ? 'positive' : 'negative');
+  const wallAt = (depth: number, radius: number) =>
+    Math.min(...faces.map((face) => discWall(face, along, towards * depth, radius)));
+  return { side: Math.min(wallAt(0, opening), wallAt(chamfer, straight)), bottom: wallAt(holeDepth, straight) };
+}
+
 /** What remains behind the root overlap of the plugs in the part that carries them. */
 function plugBacking(section: CylinderSection, sites: readonly { along: number; pinDiameter: number }[]): number {
   if (section.type === 'parallel-to-bases') return section.lowerThickness - PLUG_ROOT_OVERLAP_MM;
+  if (section.type === 'oblique') {
+    const faces = facesOfPart(section, 'negative');
+    return Math.min(
+      ...sites.flatMap(({ along, pinDiameter }) =>
+        faces.map((face) => discWall(face, along, -PLUG_ROOT_OVERLAP_MM, pinDiameter / 2)),
+      ),
+    );
+  }
   const { offset, lean, stretch } = section;
   return Math.min(
     ...sites.map(({ along, pinDiameter }) =>
@@ -392,6 +421,44 @@ export interface RoundConnectorParts {
   readonly sites: readonly { readonly pin: Manifold; readonly cutters: Partial<Record<Part, Manifold>> }[];
 }
 
+/** A solid of revolution about the axis through `centre` along the frame's n. */
+function revolveAlongN(
+  kernel: GeometryKernel,
+  track: Track,
+  frame: SectionFrame,
+  profile: readonly Vec2[],
+  segments: number,
+  centre: Vec3,
+): Manifold {
+  const local = track(kernel.Manifold.revolve([profile.map(([x, y]) => [x, y] as KernelVec2)], segments));
+  return track(local.transform(frameMatrix(frame, centre)));
+}
+
+/** The number of segments that a site's pins and holes share. */
+const siteSegments = ({ clearance }: RoundConnectorPlan, { pinDiameter, chamfer }: { pinDiameter: number; chamfer: number }) =>
+  circularSegments((pinDiameter + clearance.upper) / 2 + chamfer + CUTTER_MARGIN_MM);
+
+/**
+ * A site's plug or dowel swept along its own axis, from `below` to `above` millimetres away: the same profile with a longer
+ * straight wall. Built as such rather than as the convex hull of the two end positions, which at an arbitrary orientation
+ * manifold-3d can get wrong for corners that lie on one straight line.
+ */
+function pinSweep(
+  kernel: GeometryKernel,
+  track: Track,
+  plan: RoundConnectorPlan,
+  site: RoundConnectorSite,
+  { below = 0, above = 0 }: { below?: number; above?: number },
+): Manifold {
+  const { pinDiameter, chamfer, centre } = site;
+  const e = plan.insertion;
+  const profile =
+    plan.type === 'plug'
+      ? pinProfile(pinDiameter / 2, -PLUG_ROOT_OVERLAP_MM - below, e + above, { top: chamfer })
+      : pinProfile(pinDiameter / 2, -e - below, e + above, { bottom: chamfer, top: chamfer });
+  return revolveAlongN(kernel, track, plan.frame, profile, siteSegments(plan, site), centre);
+}
+
 /**
  * Builds the plugs or dowels on the parts. Pins and holes of a site are revolved with the same number of segments from
  * the same starting angle, so that their polygons are aligned and the diametral clearance holds between corresponding
@@ -404,14 +471,12 @@ export function buildRoundConnectors(
   plan: RoundConnectorPlan,
 ): RoundConnectorParts {
   const { frame, insertion: e, holeDepth, clearance } = plan;
-  const revolve = (profile: readonly Vec2[], segments: number, centre: Vec3): Manifold => {
-    const local = track(kernel.Manifold.revolve([profile.map(([x, y]) => [x, y] as KernelVec2)], segments));
-    return track(local.transform(frameMatrix(frame, centre)));
-  };
+  const revolve = (profile: readonly Vec2[], segments: number, centre: Vec3): Manifold =>
+    revolveAlongN(kernel, track, frame, profile, segments, centre);
   const sites = plan.sites.map(({ centre, pinDiameter, chamfer }) => {
     const pinRadius = pinDiameter / 2;
     const holeRadius = (part: Part) => (pinDiameter + (clearance[part] ?? 0)) / 2;
-    const segments = circularSegments(holeRadius('upper') + chamfer + CUTTER_MARGIN_MM);
+    const segments = siteSegments(plan, { pinDiameter, chamfer });
     const pin =
       plan.type === 'plug'
         ? revolve(pinProfile(pinRadius, -PLUG_ROOT_OVERLAP_MM, e, { top: chamfer }), segments, centre)
@@ -455,11 +520,11 @@ function halfTurnAbout([ax, ay, az]: Vec3, [cx, cy, cz]: Vec3): Mat4 {
  * Checks the built parts in three dimensions; throws ConnectorVerificationError naming the first failed check.
  *
  * - Each half and each dowel is one connected solid, so an integral plug is attached to the lower part.
- * - Neither half leaves the uncut cylinder, and no hole breaks through its outer surface.
+ * - Neither half leaves the uncut cylinder, and no hole breaks through its outer surface within its own part; the bit
+ *   of a cutter past the cut removes nothing from that part.
  * - Nothing overlaps in the assembled position, also with a dowel pushed to either hole's bottom.
  * - The parts come apart along n: each plug or seated dowel, swept along −n out of the upper part, and each dowel,
- *   swept along +n out of the lower part, meets nothing. Every sweep is the convex hull of a convex solid of revolution
- *   and its translate, which is exactly the swept volume.
+ *   swept along +n out of the lower part, meets nothing.
  * - A pair keys the parts: the upper part turned by 180° about the section's axis meets the plugs or dowels.
  */
 export function verifyRoundConnectors(
@@ -484,22 +549,27 @@ export function verifyRoundConnectors(
   }
   if (volume(built.lower.subtract(whole)) > tolerance) fail('lower-inside-envelope');
   if (volume(built.upper.subtract(whole)) > tolerance) fail('upper-inside-envelope');
+  const cutOffset = n[0] * origin[0] + n[1] * origin[1] + n[2] * origin[2];
   for (const { cutters } of built.sites) {
-    for (const cutter of Object.values(cutters)) if (volume(cutter.subtract(whole)) > tolerance) fail('no-breakthrough');
+    const inside = [
+      ...(cutters.upper === undefined ? [] : [cutters.upper.trimByPlane([n[0], n[1], n[2]], cutOffset)]),
+      ...(cutters.lower === undefined ? [] : [cutters.lower.trimByPlane([-n[0], -n[1], -n[2]], -cutOffset)]),
+    ];
+    for (const cutter of inside) if (volume(track(cutter).subtract(whole)) > tolerance) fail('no-breakthrough');
   }
   if (volume(built.lower.intersect(built.upper)) > tolerance) fail('no-overlap');
-  for (const pin of built.pins) {
+  built.pins.forEach((pin, index) => {
     for (const shift of [-ROUND_CONNECTOR_DEPTH_ALLOWANCE_MM, 0, ROUND_CONNECTOR_DEPTH_ALLOWANCE_MM]) {
       const moved = track(pin.translate(along(shift)));
       if (volume(moved.intersect(built.lower)) > tolerance || volume(moved.intersect(built.upper)) > tolerance) {
         fail('dowel-fit');
       }
     }
-    const out = track(kernel.Manifold.hull([pin, track(pin.translate(along(2 * plan.insertion + 1)))]));
+    const out = pinSweep(kernel, track, plan, plan.sites[index] as RoundConnectorSite, { above: 2 * plan.insertion + 1 });
     if (volume(out.intersect(built.lower)) > tolerance) fail('dowel-removal');
-  }
-  for (const { pin } of built.sites) {
-    const sweep = track(kernel.Manifold.hull([pin, track(pin.translate(along(-(plan.holeDepth + 1))))]));
+  });
+  for (const site of plan.sites) {
+    const sweep = pinSweep(kernel, track, plan, site, { below: plan.holeDepth + 1 });
     if (volume(sweep.intersect(built.upper)) > tolerance) fail('separation-path');
   }
   if (plan.sites.length === 2) {

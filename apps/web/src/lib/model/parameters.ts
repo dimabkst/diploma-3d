@@ -6,11 +6,14 @@ import {
   dovetailFeasibility,
   hasFeasibleValues,
   type Interval,
+  obliquePlaneContainsAxis,
+  obliqueSplitReach,
   type ParameterBounds,
   type ParameterFeasibility,
   type RoundConnectorIssue,
   roundConnectorFeasibility,
   roundDimensionsMm,
+  satisfies,
   sectionOffsetMm,
   verticalOffsetLimitPercent,
 } from '@diploma-3d/engine';
@@ -25,6 +28,7 @@ import {
   DEFAULT_DOVETAIL,
   DEFAULT_DOWEL_CLEARANCES_MM,
   DEFAULT_LONGEST_DIMENSION_MM,
+  DEFAULT_OBLIQUE_SECTION,
   DEFAULT_PARALLELOGRAM_BASE,
   DEFAULT_PLUG_CLEARANCE_MM,
   DEFAULT_ROUND_CONNECTOR,
@@ -44,6 +48,8 @@ import {
   type ModelSpec,
   type ModelSpecInput,
   modelSpecSchema,
+  OBLIQUE_DIRECTION_LIMITS,
+  OBLIQUE_INCLINATION_LIMITS,
   offsetRatioSchema,
   type PrismBaseSides,
   type PrismBaseType,
@@ -134,6 +140,9 @@ export type ParameterKey =
   | 'cylinderInclinationDeg'
   | 'cylinderSectionPercent'
   | 'cylinderSectionOffsetPercent'
+  | 'cylinderObliquePositionPercent'
+  | 'cylinderObliqueInclinationDeg'
+  | 'cylinderObliqueDirectionDeg'
   | 'cylinderDovetailSize'
   | 'cylinderDovetailLengthPercent'
   | 'cylinderDovetailClearanceMm'
@@ -255,6 +264,9 @@ export const initialParameterTexts = (): ParameterTexts => ({
   coneInclinationDeg: RIGHT_INCLINATION_TEXT,
   cylinderSectionPercent: formatDecimal(DEFAULT_SECTION_POSITION_PERCENT),
   cylinderSectionOffsetPercent: formatDecimal(DEFAULT_SECTION_OFFSET_PERCENT),
+  cylinderObliquePositionPercent: formatDecimal(DEFAULT_OBLIQUE_SECTION.positionPercent),
+  cylinderObliqueInclinationDeg: formatDecimal(DEFAULT_OBLIQUE_SECTION.inclinationDeg),
+  cylinderObliqueDirectionDeg: formatDecimal(DEFAULT_OBLIQUE_SECTION.directionDeg),
   cylinderDovetailSize: formatDecimal(DEFAULT_DOVETAIL.sizeFactor),
   cylinderDovetailLengthPercent: formatDecimal(DEFAULT_DOVETAIL.lengthPercent),
   cylinderDovetailClearanceMm: formatDecimal(DEFAULT_DOVETAIL.clearanceMm),
@@ -346,6 +358,14 @@ export const validateDirection = (text: string, exact?: number): Validation =>
 export const validateSectionPosition = (text: string, exact?: number): Validation =>
   validateNumber(text, sectionPositionSchema, SECTION_POSITION_LIMITS, '50', ' %', exact);
 
+/** An oblique plane's angle to the base plane: exactly horizontal and vertical planes have their own modes. */
+export const validateObliqueInclination = (text: string, exact?: number): Validation =>
+  validateNumber(text, inclusiveRange(OBLIQUE_INCLINATION_LIMITS), OBLIQUE_INCLINATION_LIMITS, '45', '°', exact);
+
+/** The horizontal direction an oblique plane rises along, from +X towards +Y; 360° is the same as 0°. */
+export const validateObliqueDirection = (text: string, exact?: number): Validation =>
+  validateNumber(text, inclusiveRange(OBLIQUE_DIRECTION_LIMITS), OBLIQUE_DIRECTION_LIMITS, '90', '°', exact);
+
 /** The gap between mating surfaces of a dovetail, in millimetres, within its calibration window. */
 export const validateDovetailClearance = (text: string, exact?: number): Validation =>
   validateNumber(text, dovetailConnectorSchema.shape.clearanceMm, DOVETAIL_CLEARANCE_LIMITS, '0,2', ' мм', exact);
@@ -414,6 +434,9 @@ const validators: Readonly<Record<IndependentKey, (text: string, exact?: number)
   coneOffsetRatio: validateRoundOffset,
   cylinderSectionPercent: validateSectionPosition,
   cylinderSectionOffsetPercent: validateSectionOffset,
+  cylinderObliquePositionPercent: validateSectionPosition,
+  cylinderObliqueInclinationDeg: validateObliqueInclination,
+  cylinderObliqueDirectionDeg: validateObliqueDirection,
   cylinderDovetailSize: validateConnectorDimension,
   cylinderDovetailLengthPercent: validateConnectorDimension,
   cylinderDovetailClearanceMm: validateDovetailClearance,
@@ -556,10 +579,13 @@ export function resolveModelRequest(
   const resolved = resolveShape(kind, texts, choices, options);
   const size = validatePrintSize(texts.printSizeMm);
   const scale =
-    cylinderConnectorScale({ ...resolved.values, printSizeMm: 'value' in size ? size.value : undefined }) ??
+    cylinderConnectorScale(
+      { ...resolved.values, printSizeMm: 'value' in size ? size.value : undefined },
+      options.connectorScale,
+    ) ??
     options.connectorScale ??
     INITIAL_CONNECTOR_SCALE;
-  const section = resolveSection(kind, texts, choices, options.exact, scale);
+  const section = resolveSection(kind, texts, choices, options.exact, scale, resolved.shape);
   const values = { ...resolved.values, ...section.values };
   const errors = { ...resolved.errors, ...section.errors };
   if ('error' in size) errors.printSizeMm = size.error;
@@ -611,8 +637,8 @@ function cachedFeasibility(shape: CylinderShape, longestDimensionMm: number, sec
 
 /**
  * The ranges of the section's fields and their problems. A vertical plane stays within the distance from the axis that
- * leaves two usable parts, from the engine's limit; a connector is not checked on a plane beyond it, which has no
- * usable section. Nothing is moved to make the plane fit.
+ * leaves two usable parts, from the engine's limit, and an oblique plane leaves both parts a usable thickness; a
+ * connector is not checked on a plane beyond that, which has no usable section. Nothing is moved to make the plane fit.
  */
 function sectionChecks(
   kind: ShapeKind,
@@ -623,8 +649,22 @@ function sectionChecks(
   const keys = sectionKeys[kind];
   if (keys === undefined || shape.kind !== 'cylinder') return undefined;
   const cylinder = shape as CylinderShape;
-  if (section.type !== 'vertical') return connectorChecks(keys, cylinder, longestDimensionMm, section);
+  if (section.type === 'parallel-to-bases') return connectorChecks(keys, cylinder, longestDimensionMm, section);
   const scale = { longestDimensionMm };
+  if (section.type === 'oblique') {
+    const reach = obliqueSplitReach(cylinder, scale, section);
+    if (satisfies(reach)) return connectorChecks(keys, cylinder, longestDimensionMm, section);
+    const contained = obliquePlaneContainsAxis(cylinder, section.inclinationDeg, section.directionDeg);
+    const field = contained ? keys.oblique.inclination : keys.oblique.position;
+    return {
+      errors: {
+        [field]:
+          `Тонша частина сягає від площини лише ${millimetres(reach.valueMm)}, потрібно щонайменше ` +
+          `${millimetres(reach.minimumMm)}. Змініть положення чи кут площини або збільште найбільший габарит.`,
+      },
+      ranges: {},
+    };
+  }
   const limit = verticalOffsetLimitPercent(cylinder, scale);
   const ranges: SectionRanges = { [keys.offset]: { min: -limit, max: limit } };
   const { radius } = roundDimensionsMm(cylinder, scale);
@@ -653,7 +693,6 @@ function connectorChecks(
 ): { errors: ParameterErrors; ranges: SectionRanges } | undefined {
   const { connector } = section;
   if (connector === undefined) return undefined;
-  const vertical = section.type === 'vertical';
   const feasibility = cachedFeasibility(shape, longestDimensionMm, section);
   if (feasibility === undefined) return undefined;
   const { dovetail, round } = keys;
@@ -677,8 +716,8 @@ function connectorChecks(
         ];
   const explain = (issue: DovetailIssue | RoundConnectorIssue) =>
     connector.type === 'dovetail'
-      ? dovetailIssueMessage(issue as DovetailIssue, vertical)
-      : roundConnectorIssueMessage(issue as RoundConnectorIssue, connector.type, connector.count, vertical);
+      ? dovetailIssueMessage(issue as DovetailIssue, section.type)
+      : roundConnectorIssueMessage(issue as RoundConnectorIssue, connector.type, connector.count, section.type);
   const parameters = feasibility.parameters as Readonly<
     Record<string, ParameterFeasibility<DovetailIssue | RoundConnectorIssue>>
   >;
@@ -692,7 +731,8 @@ function connectorChecks(
     if (issues.length > 0) errors[key] = [...issues.map(explain), rangeSentence(bounds, shown)].join(' ');
   }
   if (feasibility.unattributed.length > 0) {
-    errors[vertical ? keys.offset : keys.position] = feasibility.unattributed.map(explain).join(' ');
+    const cutField = { 'parallel-to-bases': keys.position, vertical: keys.offset, oblique: keys.oblique.inclination };
+    errors[cutField[section.type]] = feasibility.unattributed.map(explain).join(' ');
   }
   return { errors, ranges };
 }
@@ -713,16 +753,20 @@ function rangeSentence(bounds: ParameterBounds, shown: number): string {
   );
 }
 
-/** A part as the messages name it: by its place in a parallel cut, by its number in a vertical one. */
-const partInMessage = (part: 'lower' | 'upper', vertical: boolean): string =>
-  vertical ? (part === 'lower' ? 'у частині 1' : 'у частині 2') : part === 'lower' ? 'у нижній частині' : 'у верхній частині';
+/** A part as the messages name it: by its place in a parallel cut, by its number in the others, where it has no place. */
+function partInMessage(part: 'lower' | 'upper', cut: SectionType): string {
+  if (cut !== 'parallel-to-bases') return part === 'lower' ? 'у частині 1' : 'у частині 2';
+  return part === 'lower' ? 'у нижній частині' : 'у верхній частині';
+}
+
+const CHANGE_OBLIQUE_PLANE = 'змініть положення чи кут площини';
 
 /** What falls short, by how much, and what to change, for plugs and dowels; in Ukrainian for the interface. */
 export function roundConnectorIssueMessage(
   issue: RoundConnectorIssue,
   type: 'plug' | 'dowel',
   count: 1 | 2 = 1,
-  vertical = false,
+  cut: SectionType = 'parallel-to-bases',
 ): string {
   const shortfall = `${millimetres(issue.valueMm)}, потрібно щонайменше ${millimetres(issue.minimumMm)}`;
   const diameter = type === 'plug' ? 'діаметр виступу' : 'діаметр штифта';
@@ -742,22 +786,26 @@ export function roundConnectorIssueMessage(
       );
     case 'hole-wall-thin':
       return (
-        `Стінка біля отвору ${partInMessage(issue.part, vertical)} — ${shortfall}. ` +
+        `Стінка біля отвору ${partInMessage(issue.part, cut)} — ${shortfall}. ` +
         `Зменште ${diameter}${count === 2 ? ' або відстань від центра до осей' : ''}.`
       );
     case 'holes-too-close':
-      return `Між отворами ${partInMessage(issue.part, vertical)} лишається ${shortfall}. Збільште відстань від центра до осей або зменште ${diameter}.`;
+      return `Між отворами ${partInMessage(issue.part, cut)} лишається ${shortfall}. Збільште відстань від центра до осей або зменште ${diameter}.`;
     case 'hole-bottom-thin':
       return (
-        `Під дном отвору ${partInMessage(issue.part, vertical)} лишається ${shortfall}. ` +
-        (vertical
-          ? `Зменште ${length}, ${diameter} або зміщення від осі.`
-          : `Зменште ${length} або ${issue.part === 'upper' ? 'опустіть' : 'підніміть'} переріз.`)
+        `Під дном отвору ${partInMessage(issue.part, cut)} лишається ${shortfall}. ` +
+        {
+          vertical: `Зменште ${length}, ${diameter} або зміщення від осі.`,
+          oblique: `Зменште ${length} чи ${diameter} або ${CHANGE_OBLIQUE_PLANE}.`,
+          'parallel-to-bases': `Зменште ${length} або ${issue.part === 'upper' ? 'опустіть' : 'підніміть'} переріз.`,
+        }[cut]
       );
     case 'base-thin':
-      return vertical
-        ? `За виступом у частині 1 лишається ${shortfall}. Зменште ${diameter} або зміщення від осі.`
-        : `Під виступом лишається ${shortfall} нижньої частини. Підніміть переріз або збільште найбільший габарит.`;
+      return {
+        vertical: `За виступом у частині 1 лишається ${shortfall}. Зменште ${diameter} або зміщення від осі.`,
+        oblique: `За виступом у частині 1 лишається ${shortfall}. Зменште ${diameter} або ${CHANGE_OBLIQUE_PLANE}.`,
+        'parallel-to-bases': `Під виступом лишається ${shortfall} нижньої частини. Підніміть переріз або збільште найбільший габарит.`,
+      }[cut];
   }
 }
 
@@ -765,7 +813,7 @@ export function roundConnectorIssueMessage(
 const millimetres = (value: number) => `${formatDecimal(Math.max(0, Math.floor(value * 100) / 100))} мм`;
 
 /** What falls short, by how much, and what to change; in Ukrainian for the interface. */
-export function dovetailIssueMessage(issue: DovetailIssue, vertical = false): string {
+export function dovetailIssueMessage(issue: DovetailIssue, cut: SectionType = 'parallel-to-bases'): string {
   const shortfall = `${millimetres(issue.valueMm)}, потрібно щонайменше ${millimetres(issue.minimumMm)}`;
   switch (issue.code) {
     case 'tongue-too-low':
@@ -777,17 +825,21 @@ export function dovetailIssueMessage(issue: DovetailIssue, vertical = false): st
     case 'tongue-too-short':
       return `Пряма ділянка виступу після фаски — ${shortfall}. Збільште довжину виступу.`;
     case 'groove-wall-thin':
-      return vertical
-        ? `Стінка біля паза — ${shortfall}. Зменште висоту або довжину виступу чи зміщення від осі.`
-        : `Стінка біля закритого кінця паза — ${shortfall}. Зменште довжину або висоту виступу.`;
+      return {
+        vertical: `Стінка біля паза — ${shortfall}. Зменште висоту або довжину виступу чи зміщення від осі.`,
+        oblique: `Стінка біля паза — ${shortfall}. Зменште висоту чи довжину виступу або ${CHANGE_OBLIQUE_PLANE}.`,
+        'parallel-to-bases': `Стінка біля закритого кінця паза — ${shortfall}. Зменште довжину або висоту виступу.`,
+      }[cut];
     case 'stop-thin':
       return `Під нижнім упором паза лишається ${shortfall}. Зменште довжину виступу або зазор.`;
     case 'backing-thin':
       return `Над пазом лишається ${shortfall} верхньої частини. Опустіть переріз або зменште висоту виступу.`;
     case 'base-thin':
-      return vertical
-        ? `За виступом у частині 1 лишається ${shortfall}. Зменште висоту виступу або зміщення від осі.`
-        : `Під виступом лишається ${shortfall} нижньої частини. Підніміть переріз або збільште найбільший габарит.`;
+      return {
+        vertical: `За виступом у частині 1 лишається ${shortfall}. Зменште висоту виступу або зміщення від осі.`,
+        oblique: `За виступом у частині 1 лишається ${shortfall}. Зменште висоту чи довжину виступу або ${CHANGE_OBLIQUE_PLANE}.`,
+        'parallel-to-bases': `Під виступом лишається ${shortfall} нижньої частини. Підніміть переріз або збільште найбільший габарит.`,
+      }[cut];
   }
 }
 
@@ -795,6 +847,11 @@ type SectionKeys = {
   readonly choice: 'cylinderSection';
   readonly position: 'cylinderSectionPercent';
   readonly offset: 'cylinderSectionOffsetPercent';
+  readonly oblique: {
+    readonly position: 'cylinderObliquePositionPercent';
+    readonly inclination: 'cylinderObliqueInclinationDeg';
+    readonly direction: 'cylinderObliqueDirectionDeg';
+  };
   readonly separated: ToggleKey;
   readonly connector: 'cylinderConnector';
   readonly dovetail: {
@@ -844,6 +901,11 @@ export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys>>> = {
     choice: 'cylinderSection',
     position: 'cylinderSectionPercent',
     offset: 'cylinderSectionOffsetPercent',
+    oblique: {
+      position: 'cylinderObliquePositionPercent',
+      inclination: 'cylinderObliqueInclinationDeg',
+      direction: 'cylinderObliqueDirectionDeg',
+    },
     separated: 'cylinderPartsSeparated',
     connector: 'cylinderConnector',
     dovetail: {
@@ -932,6 +994,7 @@ function resolveSection(
   choices: ParameterChoices,
   exact: ParameterExact | undefined,
   scale: ConnectorScale,
+  shape: ShapeInput | undefined,
 ): { values: ParameterValues; errors: ParameterErrors; section: Section | 'none' | undefined } {
   const keys = sectionKeys[kind];
   const type = activeSection(kind, choices);
@@ -939,20 +1002,33 @@ function resolveSection(
   const connectorType = activeConnector(kind, choices);
   const count = choices[keys.round.count];
   const fields = activeConnectorKeys(keys, connectorType, count) as IndependentKey[];
-  // A plane parallel to the bases has a position along the height, a vertical one a distance from the axis.
-  const cutKey = type === 'vertical' ? keys.offset : keys.position;
-  const { values, errors } = validateFields([cutKey, ...fields], texts, exact);
+  // A plane parallel to the bases has a position along the height, a vertical one a distance from the axis, an oblique
+  // one a point on the axis and two angles.
+  const cutKeys: IndependentKey[] =
+    type === 'oblique' ? Object.values(keys.oblique) : [type === 'vertical' ? keys.offset : keys.position];
+  const { values, errors } = validateFields([...cutKeys, ...fields], texts, exact);
   // The fields show millimetres: their errors name millimetres too.
   const units = connectorUnits(scale, connectorType === 'dowel' ? 'dowel' : 'plug', type);
-  for (const key of [cutKey, ...fields]) {
+  for (const key of fields) {
     if (errors[key] !== undefined && isScaledConnectorKey(key)) {
       errors[key] = scaledError(key, texts[key], units[key]) ?? errors[key];
     }
   }
-  const cutValue = values[cutKey];
-  if (cutValue === undefined || fields.some((key) => values[key] === undefined)) {
-    return { values, errors, section: undefined };
+  const { inclination, direction, position } = keys.oblique;
+  const [inclinationDeg, directionDeg] = [values[inclination], values[direction]];
+  // The position cannot change a plane that contains the whole axis and its field is disabled, so an invalid draft of it
+  // blocks nothing; it stays as typed for when the plane no longer does.
+  if (
+    type === 'oblique' &&
+    shape?.kind === 'cylinder' &&
+    inclinationDeg !== undefined &&
+    directionDeg !== undefined &&
+    obliquePlaneContainsAxis(shape as CylinderShape, inclinationDeg, directionDeg)
+  ) {
+    delete errors[position];
+    values[position] ??= DEFAULT_OBLIQUE_SECTION.positionPercent;
   }
+  if ([...cutKeys, ...fields].some((key) => values[key] === undefined)) return { values, errors, section: undefined };
   const read = (key: ParameterKey) => values[key] as number;
   const { dovetail, round } = keys;
   const shared = {
@@ -980,9 +1056,24 @@ function resolveSection(
             }
           : undefined;
   const joining = connector === undefined ? {} : { connector };
-  const section: Section =
-    type === 'vertical' ? { type, offsetPercent: cutValue, ...joining } : { type, positionPercent: cutValue, ...joining };
-  return { values, errors, section };
+  const sectionOf = (): Section => {
+    switch (type) {
+      case 'vertical':
+        return { type, offsetPercent: read(keys.offset), ...joining };
+      case 'parallel-to-bases':
+        return { type, positionPercent: read(keys.position), ...joining };
+      case 'oblique':
+        return {
+          type,
+          positionPercent: read(position),
+          inclinationDeg: read(inclination),
+          // 360° and 0° are one direction, hence one model: the field keeps showing what was chosen, its slider stays put.
+          directionDeg: read(direction) % OBLIQUE_DIRECTION_LIMITS.max,
+          ...joining,
+        };
+    }
+  };
+  return { values, errors, section: sectionOf() };
 }
 
 const valid = (values: ParameterValues, shape: ShapeInput): ShapeResolution => ({ values, errors: {}, shape });
@@ -1187,6 +1278,9 @@ export const shapeParameterKeys: Readonly<
       'cylinderInclinationDeg',
       'cylinderSectionPercent',
       'cylinderSectionOffsetPercent',
+      'cylinderObliquePositionPercent',
+      'cylinderObliqueInclinationDeg',
+      'cylinderObliqueDirectionDeg',
       'cylinderDovetailSize',
       'cylinderDovetailLengthPercent',
       'cylinderDovetailClearanceMm',
@@ -1253,9 +1347,17 @@ function inactiveSectionKeys(kind: ShapeKind, choices: ParameterChoices): (keyof
   const connectorFields: (keyof ParameterChoices | ParameterKey)[] = connectorTextKeys(keys).filter((key) => !active.has(key));
   if (connector !== 'plug' && connector !== 'dowel') connectorFields.push(keys.round.count);
   const section = activeSection(kind, choices);
-  if (section === 'vertical') return [keys.position, ...connectorFields];
-  if (section !== undefined) return [keys.offset, ...connectorFields];
-  return [keys.position, keys.offset, keys.separated, keys.connector, ...connectorFields];
+  const obliqueFields = Object.values(keys.oblique);
+  switch (section) {
+    case 'vertical':
+      return [keys.position, ...obliqueFields, ...connectorFields];
+    case 'oblique':
+      return [keys.position, keys.offset, ...connectorFields];
+    case 'parallel-to-bases':
+      return [keys.offset, ...obliqueFields, ...connectorFields];
+    case undefined:
+      return [keys.position, keys.offset, ...obliqueFields, keys.separated, keys.connector, ...connectorFields];
+  }
 }
 
 /**

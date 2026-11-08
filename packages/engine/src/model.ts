@@ -12,6 +12,9 @@ import { buildDovetail, type DovetailPlan, planDovetail, verifyDovetail } from '
 import {
   CONSTRAINT_ROUNDOFF_MM,
   cutOfSection,
+  obliqueCylinderSection,
+  obliqueSplitReach,
+  satisfies,
   sectionOffsetMm,
   verticalCylinderSection,
   verticalOffsetLimitMm,
@@ -56,7 +59,7 @@ export interface Solid {
   readonly smoothingShear?: readonly [number, number];
   /**
    * Which part of a sectioned solid this is: below or above a plane parallel to the bases, on the negative (1) or
-   * positive (2) side of the normal of a vertical plane, or a separate removable dowel.
+   * positive (2) side of the normal of a vertical or oblique plane, or a separate removable dowel.
    */
   readonly part?: SectionPart;
   /**
@@ -109,12 +112,14 @@ type MarkedMesh = { readonly mesh: TriangleMesh; readonly newFaces: Uint8Array }
 const sectionNames: Readonly<Record<SectionType, string>> = {
   'parallel-to-bases': 'parallel-section',
   vertical: 'vertical-section',
+  oblique: 'oblique-section',
 };
 
 /** The names of a section's parts in the order of the plane's negative and positive side, and their object names. */
 const partNames: Readonly<Record<SectionType, readonly [SectionPart, SectionPart]>> = {
   'parallel-to-bases': ['lower', 'upper'],
   vertical: ['part-1', 'part-2'],
+  oblique: ['part-1', 'part-2'],
 };
 const partObjectName = (name: string, part: SectionPart): string =>
   part === 'lower' || part === 'upper' ? `${name}-${part}-part` : `${name}-${part}`;
@@ -135,12 +140,13 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
   if (!feasibility.feasible) throw new InfeasibleGeometryError(feasibility.relativeRounding);
 
   assertVerticalOffset(spec);
+  assertObliqueSplit(spec);
   const connector = planConnector(spec);
   const built = withScope((track): BuiltMeshes => {
     const solid = checked(buildShape(kernel, track, spec.shape, spec.scale));
     if (spec.section === undefined) return { whole: meshFromManifold(solid) };
     const originalIds = originalIdsOf(solid);
-    const plane = spec.section.type === 'vertical' ? verticalPlaneOf(spec) : sectionPlane(spec.section, solid.boundingBox());
+    const plane = spec.section.type === 'parallel-to-bases' ? sectionPlane(spec.section, solid.boundingBox()) : cutPlaneOf(spec);
     const split = splitByPlane(track, solid, plane);
     let parts = { lower: split.negative, upper: split.positive };
     let dowels: readonly Manifold[] = [];
@@ -209,11 +215,12 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
   };
 }
 
-/** The plane of a vertical section, which only a cylinder offers. */
-function verticalPlaneOf({ shape, scale, section }: ModelSpec): Plane {
-  if (section?.type !== 'vertical' || shape.kind !== 'cylinder')
-    throw new GeometryError('Expected a vertical cut of a cylinder.');
-  return verticalCylinderSection(shape, scale, section.offsetPercent).plane;
+/** The plane of a vertical or oblique section, which only a cylinder offers. */
+function cutPlaneOf({ shape, scale, section }: ModelSpec): Plane {
+  if (shape.kind !== 'cylinder') throw new GeometryError('Expected a cut of a cylinder.');
+  if (section?.type === 'vertical') return verticalCylinderSection(shape, scale, section.offsetPercent).plane;
+  if (section?.type === 'oblique') return obliqueCylinderSection(shape, scale, section).plane;
+  throw new GeometryError('Expected a vertical or oblique cut.');
 }
 
 /** A vertical plane within the distance from the axis that leaves both parts usable; see `verticalOffsetLimitMm`. */
@@ -224,6 +231,17 @@ function assertVerticalOffset({ shape, scale, section }: ModelSpec): void {
   if (Math.abs(offset) > limit + CONSTRAINT_ROUNDOFF_MM) {
     throw new InvalidModelSpecError([
       `section.offsetPercent: ${offset} mm is beyond the ${limit} mm that leave two usable parts.`,
+    ]);
+  }
+}
+
+/** Both parts of an oblique cut keep a usable thickness: a body that cannot be split, whatever the connector. */
+function assertObliqueSplit({ shape, scale, section }: ModelSpec): void {
+  if (section?.type !== 'oblique' || shape.kind !== 'cylinder') return;
+  const reach = obliqueSplitReach(shape, scale, section);
+  if (!satisfies(reach)) {
+    throw new InvalidModelSpecError([
+      `section: the thinner part reaches ${reach.valueMm} mm from the plane, less than the ${reach.minimumMm} mm of a usable part.`,
     ]);
   }
 }

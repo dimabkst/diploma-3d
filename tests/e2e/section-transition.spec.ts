@@ -128,6 +128,12 @@ for (const [name, oblique] of [
       'Вертикальний',
       'Паралельно основам',
       'Вертикальний',
+      'Похилий',
+      'Паралельно основам',
+      'Похилий',
+      'Вертикальний',
+      'Без перерізу',
+      'Похилий',
       'Без перерізу',
       'Паралельно основам',
       'Без перерізу',
@@ -156,6 +162,61 @@ for (const [name, oblique] of [
     expectSteadyTransition(await framesOf(page, () => separation.check()), direction);
   });
 }
+
+for (const [name, oblique] of [
+  ['right', false],
+  ['oblique', true],
+] as const) {
+  test(`${name} cylinder: an oblique plane’s angle, direction and connectors never turn the camera`, async ({ page }) => {
+    await openCylinder(page, oblique);
+    await turnCamera(page);
+    const direction = await orbit(page);
+    expectSteadyTransition(await framesOf(page, () => cut(page, 'Похилий')), direction);
+    const field = (label: string) => page.getByLabel(label, { exact: true });
+    for (const [label, value] of [
+      ['Кут до площини основи', '30'],
+      ['Напрям нахилу', '120'],
+      ['Точка на осі від нижньої основи', '40'],
+      ['Кут до площини основи', '70'],
+      ['Напрям нахилу', '360'],
+    ] as const) {
+      expectSteadyTransition(await framesOf(page, () => field(label).fill(value)), direction);
+    }
+    for (const label of ['Ластівчин хвіст', 'Виступ і отвір', 'Знімні штифти', 'Без кріплення']) {
+      expectSteadyTransition(await framesOf(page, () => connector(page, label)), direction);
+    }
+    const separation = page.getByRole('checkbox', { name: 'Розсунути частини', exact: true });
+    expectSteadyTransition(await framesOf(page, () => separation.uncheck()), direction);
+    expectSteadyTransition(await framesOf(page, () => field('Напрям нахилу').fill('200')), direction);
+    expectSteadyTransition(await framesOf(page, () => separation.check()), direction);
+  });
+}
+
+test('oblique plane: dragging through angles ends on the last one, whatever finished in between', async ({ page }) => {
+  await openCylinder(page);
+  const direction = await orbit(page);
+  await cut(page, 'Похилий');
+  await expectLoaded(page);
+  await page.waitForTimeout(300);
+  await expectLoaded(page);
+  const field = page.getByLabel('Напрям нахилу', { exact: true });
+  const frames = await framesOf(page, async () => {
+    for (const value of ['10', '20', '30', '40', '50', '60', '70', '80', '90']) {
+      await field.fill(value);
+      await page.waitForTimeout(40);
+    }
+    await expect(page.getByRole('button', { name: 'Завантажити частини · 3MF', exact: true })).toBeEnabled({ timeout: 30_000 });
+  });
+  for (const frame of frames) {
+    expect(frame.theta).toBeCloseTo(direction.theta, 6);
+    expect(frame.phi).toBeCloseTo(direction.phi, 6);
+  }
+  await expect(page.locator('[data-direction]')).toHaveAttribute('data-direction', '90');
+  // The plane rises along +Y: part 2 moved along −Y, which is glTF +Z, not along X.
+  const size = await modelViewer(page).evaluate((element) => (element as unknown as ModelViewerElement).getDimensions());
+  expect(size.z).toBeGreaterThan(0.085);
+  expect(size.x).toBeLessThan(0.085);
+});
 
 test('section change: the shown parts keep their placement until the new parts arrive together with theirs', async ({ page }) => {
   await openCylinder(page);
@@ -215,7 +276,7 @@ test('narrow phone: selecting a section keeps the direction and the page fits', 
   await openCylinder(page);
   const direction = await orbit(page);
   await previewViewport(page).scrollIntoViewIfNeeded();
-  for (const label of ['Вертикальний', 'Паралельно основам', 'Вертикальний', 'Без перерізу']) {
+  for (const label of ['Вертикальний', 'Похилий', 'Паралельно основам', 'Похилий', 'Без перерізу']) {
     expectSteadyTransition(await framesOf(page, () => cut(page, label)), direction);
   }
   expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(0);

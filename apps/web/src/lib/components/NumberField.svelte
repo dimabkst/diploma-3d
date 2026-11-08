@@ -13,6 +13,7 @@ let {
   error,
   describedBy,
   variant = 'slider',
+  disabled = false,
   onentryblur,
 }: {
   id: string;
@@ -34,6 +35,8 @@ let {
   describedBy?: string | undefined;
   /** `entry`: only the compact text entry, for a value typed rather than explored, such as a size in millimetres. */
   variant?: 'slider' | 'entry';
+  /** The value changes nothing now: every control is off, and `text` stays as it is. */
+  disabled?: boolean | undefined;
   /** Called when the text entry loses focus, so that a page can drop a draft it shows instead of a converted value. */
   onentryblur?: (() => void) | undefined;
 } = $props();
@@ -42,8 +45,8 @@ const description = $derived(
   [error === undefined ? undefined : `${id}-error`, describedBy].filter((part) => part !== undefined).join(' ') || undefined,
 );
 // Stepping starts only from a valid value; empty, partial or out-of-range text is never replaced by an invented one.
-const lower = $derived(value === undefined || range === undefined ? undefined : stepDecimal(value, -1, range));
-const higher = $derived(value === undefined || range === undefined ? undefined : stepDecimal(value, 1, range));
+const lower = $derived(value === undefined || range === undefined || disabled ? undefined : stepDecimal(value, -1, range));
+const higher = $derived(value === undefined || range === undefined || disabled ? undefined : stepDecimal(value, 1, range));
 
 // While the text is being corrected, the disabled slider stays where the last valid value put it.
 let lastValid = $state<number>();
@@ -113,6 +116,7 @@ function onsliderinput(event: Event & { currentTarget: HTMLInputElement }) {
         autocomplete="off"
         spellcheck="false"
         bind:value={text}
+        {disabled}
         onkeydown={onentrykeydown}
         onblur={onentryblur}
         aria-invalid={error !== undefined || undefined}
@@ -140,7 +144,7 @@ function onsliderinput(event: Event & { currentTarget: HTMLInputElement }) {
       step="any"
       value={sliderValue}
       style:--fill={range === undefined ? 0 : track.max > track.min ? (sliderValue - track.min) / (track.max - track.min) : 1}
-      disabled={value === undefined || range === undefined}
+      disabled={disabled || value === undefined || range === undefined}
       aria-label={`${label}: повзунок`}
       aria-valuetext={range === undefined ? 'немає допустимих значень' : formatSteppedDecimal(sliderValue)}
       aria-describedby={description}
@@ -190,8 +194,13 @@ function onsliderinput(event: Event & { currentTarget: HTMLInputElement }) {
     transition: border-color 200ms ease;
   }
 
-  .entry-input:hover:not(:focus-visible):not([aria-invalid="true"]) {
+  .entry-input:hover:not(:focus-visible):not(:disabled):not([aria-invalid="true"]) {
     border-color: var(--color-border-strong);
+  }
+
+  .entry-input:disabled {
+    color: var(--color-text-dim);
+    cursor: not-allowed;
   }
 
   .entry-input[aria-invalid="true"] {

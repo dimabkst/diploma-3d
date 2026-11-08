@@ -1,9 +1,11 @@
 <script lang="ts">
+import type { Section } from '@diploma-3d/schema';
 import { type ModelState, visibleArtifacts } from '../model/modelState.ts';
 import type { ParameterKey } from '../model/parameters.ts';
 import { formatSize } from '../shapes.ts';
 import Button from './Button.svelte';
 import ModelViewer from './ModelViewer.svelte';
+import SectionCompass from './SectionCompass.svelte';
 import StatusBadge from './StatusBadge.svelte';
 
 let {
@@ -33,6 +35,10 @@ let modelViewer = $state<ModelViewer>();
 let loadedGlb = $state.raw<Uint8Array<ArrayBuffer>>();
 let failedGlb = $state.raw<Uint8Array<ArrayBuffer>>();
 
+// The section of the model on screen: replaced together with its parts, once they have loaded.
+let shownSection = $state.raw<Section | undefined>();
+let cameraDirection = $state.raw({ theta: 0, phi: 0 });
+
 const artifacts = $derived(visibleArtifacts(model));
 // Either preview of a section is ready with the model, so toggling the separation only swaps them.
 const glb = $derived(separated ? (artifacts?.separatedPreviewGlb ?? artifacts?.previewGlb) : artifacts?.previewGlb);
@@ -41,8 +47,16 @@ const previewStatus = $derived(
 );
 // Without a GLB the viewer is removed; the next one starts empty.
 $effect.pre(() => {
-  if (glb === undefined) loadedGlb = undefined;
+  if (glb === undefined) {
+    loadedGlb = undefined;
+    shownSection = undefined;
+  }
 });
+
+function showLoaded(loaded: Uint8Array<ArrayBuffer>) {
+  loadedGlb = loaded;
+  shownSection = artifacts?.model.spec.section;
+}
 
 // Whether some earlier model is already on screen, so an update needs only a small indicator instead of an overlay.
 const showsPreview = $derived(glb !== undefined && loadedGlb !== undefined && failedGlb !== glb);
@@ -68,10 +82,14 @@ const assembled = $derived(shownArtifacts?.model.section !== undefined);
           {glb}
           viewKey={artifacts?.model.kind ?? ''}
           alt={`Інтерактивна 3D-модель: ${shapeName.toLowerCase()}${artifacts?.model.section === undefined ? '' : ', дві частини перерізу'}`}
-          onload={(loaded) => (loadedGlb = loaded)}
+          onload={showLoaded}
           onerror={(failed) => (failedGlb = failed)}
+          oncamerachange={(direction) => (cameraDirection = direction)}
         />
       </div>
+    {/if}
+    {#if shownSection?.type === 'oblique'}
+      <SectionCompass directionDeg={shownSection.directionDeg} camera={cameraDirection} />
     {/if}
 
     {#if (previewStatus === 'generating' || previewStatus === 'loading') && showsPreview}

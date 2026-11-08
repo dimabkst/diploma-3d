@@ -1,4 +1,10 @@
-import { DOVETAIL_PROPORTIONS, ROUND_CONNECTOR_PROPORTIONS, type TrapezoidKind, trapezoidKind } from '@diploma-3d/engine';
+import {
+  DOVETAIL_PROPORTIONS,
+  obliquePlaneContainsAxis,
+  ROUND_CONNECTOR_PROPORTIONS,
+  type TrapezoidKind,
+  trapezoidKind,
+} from '@diploma-3d/engine';
 import {
   BASE_ANGLE_LIMITS,
   BASE_SHIFT_LIMITS,
@@ -7,6 +13,8 @@ import {
   defaultModelSpecs,
   MAX_LONGEST_DIMENSION_MM,
   MIN_LONGEST_DIMENSION_MM,
+  OBLIQUE_DIRECTION_LIMITS,
+  OBLIQUE_INCLINATION_LIMITS,
   PRISM_BASE_SIDES,
   PRISM_BASE_TYPES,
   type PrismBaseSides,
@@ -15,6 +23,7 @@ import {
   RATIO_LIMITS,
   ROUND_HEIGHT_LIMITS,
   SECTION_POSITION_LIMITS,
+  type SectionType,
   type ShapeKind,
 } from '@diploma-3d/schema';
 import { formatDecimal, type StepRange } from './decimal.ts';
@@ -82,6 +91,10 @@ export type NumericField = {
    * entry, slider and range are then in millimetres, and what is typed is converted back.
    */
   readonly unit?: number;
+  /** The field changes nothing now: every control is off, and the value stays for when it does again. */
+  readonly disabled?: boolean;
+  /** The id of a note that explains why it is disabled. */
+  readonly describedBy?: string;
 };
 
 /** A parameter picked from fixed options, such as the base type or the regular polygon. */
@@ -514,11 +527,15 @@ const sideAMeaning = 'a — сторона основи.';
 // A cut's position and its distance from the axis move in steps of 5 percentage points; a typed value between them is kept.
 const SECTION_PERCENT_INCREMENT = 5;
 const sectionPositionRange: StepRange = { ...SECTION_POSITION_LIMITS, increment: SECTION_PERCENT_INCREMENT };
+const ANGLE_INCREMENT_DEG = 5;
+const obliqueInclinationRange: StepRange = { ...OBLIQUE_INCLINATION_LIMITS, increment: ANGLE_INCREMENT_DEG };
+const obliqueDirectionRange: StepRange = { ...OBLIQUE_DIRECTION_LIMITS, increment: ANGLE_INCREMENT_DEG };
 
 const sectionNames: Readonly<Record<SectionChoice, string>> = {
   none: 'Без перерізу',
   'parallel-to-bases': 'Паралельно основам',
   vertical: 'Вертикальний',
+  oblique: 'Похилий',
 };
 
 const parallelSectionHelp: Help = {
@@ -541,6 +558,20 @@ const verticalSectionHelp: Help = {
     'змінює лише перегляд. У файлі вони стоять на залишках своїх основ. Межі зміщення відсувають площину від бічної ' +
     'поверхні, але не гарантують, що тонку частину вдасться надрукувати.',
 };
+
+const obliqueSectionHelp: Help = {
+  label: 'Як задано переріз?',
+  text:
+    'Площина проходить через вибрану точку на осі циліндра: її положення задано у відсотках висоти h від нижньої основи. ' +
+    'Кут вимірюється відносно площини основи. Напрям показує, куди площина піднімається: 0° — уздовж осі X, 90° — уздовж ' +
+    'осі Y. Поворот камери його не змінює, а компас у перегляді показує осі й стрілку підйому.\n\n' +
+    'Поки площина не торкається основ, переріз прямого циліндра — еліпс. Якщо площина перетинає основу, частина межі ' +
+    'перерізу стає відрізком, і це вже не повний еліпс. Кріплення розміщуються за фактичною формою перерізу.\n\n' +
+    'Частини 1 і 2 лежать по різні боки площини й експортуються окремими об’єктами в одному масштабі; розсування змінює ' +
+    'лише перегляд. Межі кута є обмеженнями застосунку: точно горизонтальний і вертикальний перерізи мають окремі режими.',
+};
+
+const AXIS_IN_PLANE_NOTE = 'Площина містить усю вісь циліндра, тому положення точки за висотою не змінює переріз.';
 
 const connectorNames: Readonly<Record<ConnectorChoice, string>> = {
   none: 'Без кріплення',
@@ -610,7 +641,27 @@ const verticalDovetailHelp: Help = {
     BOUNDS_HELP,
 };
 
-const verticalPlugHelp: Help = {
+const OBLIQUE_PRINT_NOTE =
+  'Вісь кріплення перпендикулярна до нахиленої площини, а кожна частина у файлі стоїть на своїй плоскій грані, тому ' +
+  'виступи й отвори можуть потребувати підтримок або іншої орієнтації в слайсері.';
+
+const obliqueDovetailHelp: Help = {
+  label: 'Як працює кріплення?',
+  text:
+    'Виступ — на частині 1, паз — у частині 2. Паз відкритий угорі схилу площини й закінчується упором унизу. Щоб скласти ' +
+    'модель, насуньте частину 1 уздовж площини вниз по схилу до упора. Для розбирання утримуйте частину 2 й посуньте ' +
+    'частину 1 вгору по схилу.\n\n' +
+    'Рух іде вздовж нахиленої площини, а не обов’язково вертикально. Коли модель стоїть прямо, вага частини 1 має складову ' +
+    'вниз по схилу, але це не замок і не гарантія посадки без тертя. Похилі боки під кутом 45° утримують половинки від ' +
+    'роз’єднання перпендикулярно до перерізу.\n\n' +
+    'Висота визначає, наскільки виступ виходить за переріз. Довжина вимірюється вздовж паза. Зазор — заданий у моделі ' +
+    'проміжок між відповідними поверхнями виступу й паза.\n\n' +
+    OBLIQUE_PRINT_NOTE +
+    '\n\n' +
+    BOUNDS_HELP,
+};
+
+const numberedPlugHelp = (printNote: string): Help => ({
   label: 'Як працює кріплення?',
   text:
     'Виступ друкується разом із частиною 1 та входить в отвір частини 2. Частини з’єднують і розбирають рухом ' +
@@ -619,12 +670,12 @@ const verticalPlugHelp: Help = {
     'заважало зімкнути половинки.\n\n' +
     'Збільшення діаметра отвору визначає, наскільки отвір ширший за виступ. Наприклад, для виступу діаметром 5 мм ' +
     'значення 0,2 мм дає отвір діаметром 5,2 мм.\n\n' +
-    VERTICAL_PRINT_NOTE +
+    printNote +
     '\n\n' +
     BOUNDS_HELP,
-};
+});
 
-const verticalDowelHelp: Help = {
+const numberedDowelHelp = (printNote: string): Help => ({
   label: 'Як працює кріплення?',
   text:
     'Штифти друкуються окремо та вставляються в отвори обох половинок. Їх можна вийняти або замінити.\n\n' +
@@ -632,10 +683,10 @@ const verticalDowelHelp: Help = {
     'отвір має додаткові 0,3 мм глибини, тому штифт може трохи зміщуватися вздовж осі.\n\n' +
     'Розміри отворів частин 1 і 2 налаштовуються окремо. Наприклад, для штифта діаметром 5 мм збільшення діаметра ' +
     'отвору на 0,2 мм дає отвір діаметром 5,2 мм.\n\n' +
-    VERTICAL_PRINT_NOTE +
+    printNote +
     '\n\n' +
     BOUNDS_HELP,
-};
+});
 
 const SCALE_NOTE =
   'Показано фактичні розміри для поточного масштабу моделі. Розміри кріплення змінюються разом із найбільшим габаритом.';
@@ -665,8 +716,10 @@ function connectorSection(kind: 'cylinder', choices: ParameterChoices, context: 
     options: (['none', 'dovetail', 'plug', 'dowel'] as const).map((value) => ({ value, label: connectorNames[value] })),
   };
   const { dovetail, round } = keys;
-  const vertical = choices[keys.choice] === 'vertical';
-  const units = connectorUnits(scale, chosen === 'dowel' ? 'dowel' : 'plug', vertical ? 'vertical' : 'parallel-to-bases');
+  const cut = choices[keys.choice] as SectionType;
+  // Only a parallel cut has a lower and an upper part wherever it runs; the others number theirs.
+  const numbered = cut !== 'parallel-to-bases';
+  const units = connectorUnits(scale, chosen === 'dowel' ? 'dowel' : 'plug', cut);
   /** The feasible range that the request computed; the calibration window, or nothing, until it can. */
   const rangeOf = (key: ParameterKey, increment: number, fallback?: StepRange): StepRange | undefined => {
     const interval = context.sectionRanges?.[key];
@@ -746,25 +799,32 @@ function connectorSection(kind: 'cylinder', choices: ParameterChoices, context: 
       ]),
       clearanceField(
         round.dowelLowerClearance,
-        vertical ? 'Збільшення діаметра отворів частини 1, мм' : 'Збільшення діаметра нижніх отворів, мм',
+        numbered ? 'Збільшення діаметра отворів частини 1, мм' : 'Збільшення діаметра нижніх отворів, мм',
         diametralClearanceRange,
       ),
       clearanceField(
         round.dowelUpperClearance,
-        vertical ? 'Збільшення діаметра отворів частини 2, мм' : 'Збільшення діаметра верхніх отворів, мм',
+        numbered ? 'Збільшення діаметра отворів частини 2, мм' : 'Збільшення діаметра верхніх отворів, мм',
         diametralClearanceRange,
       ),
     ],
   };
-  const help: Record<ConnectorChoice, Help | undefined> = {
-    none: undefined,
-    dovetail: vertical ? verticalDovetailHelp : dovetailHelp,
-    plug: vertical ? verticalPlugHelp : plugHelp,
-    dowel: vertical ? verticalDowelHelp : dowelHelp,
+  const helps: Record<SectionType, Record<Exclude<ConnectorChoice, 'none'>, Help>> = {
+    'parallel-to-bases': { dovetail: dovetailHelp, plug: plugHelp, dowel: dowelHelp },
+    vertical: {
+      dovetail: verticalDovetailHelp,
+      plug: numberedPlugHelp(VERTICAL_PRINT_NOTE),
+      dowel: numberedDowelHelp(VERTICAL_PRINT_NOTE),
+    },
+    oblique: {
+      dovetail: obliqueDovetailHelp,
+      plug: numberedPlugHelp(OBLIQUE_PRINT_NOTE),
+      dowel: numberedDowelHelp(OBLIQUE_PRINT_NOTE),
+    },
   };
   return [
     section(`${kind}-connector`, 'Кріплення', [selector, ...fields[chosen]], {
-      help: help[chosen],
+      help: chosen === 'none' ? undefined : helps[cut][chosen],
       status: { text: chosen === 'none' ? 'немає' : connectorNames[chosen].toLowerCase(), highlighted: chosen !== 'none' },
     }),
   ];
@@ -772,6 +832,19 @@ function connectorSection(kind: 'cylinder', choices: ParameterChoices, context: 
 
 /** A dowel enters each part by half its whole length. */
 const shownHalf = (length: number | undefined) => (length === undefined ? undefined : length / 2);
+
+/** Whether the current valid plane contains the current valid cylinder's whole axis. */
+function obliqueContainsAxis(
+  values: ParameterValues | undefined,
+  inclinationKey: ParameterKey,
+  directionKey: ParameterKey,
+): boolean {
+  const [heightRatio, offsetRatio] = [values?.cylinderHeightRatio, values?.cylinderOffsetRatio];
+  const [inclination, direction] = [values?.[inclinationKey], values?.[directionKey]];
+  if (heightRatio === undefined || offsetRatio === undefined || inclination === undefined || direction === undefined)
+    return false;
+  return obliquePlaneContainsAxis({ kind: 'cylinder', heightRatio, offsetRatio }, inclination, direction);
+}
 
 /**
  * "Переріз": optional, so the group starts collapsed with the chosen section in its summary. The position and the
@@ -785,10 +858,16 @@ function planeSection(kind: 'cylinder', choices: ParameterChoices, context: Pane
     type: 'choice',
     key: keys.choice,
     label: 'Тип перерізу',
-    options: (['none', 'parallel-to-bases', 'vertical'] as const).map((value) => ({ value, label: sectionNames[value] })),
+    options: (['none', 'parallel-to-bases', 'vertical', 'oblique'] as const).map((value) => ({
+      value,
+      label: sectionNames[value],
+    })),
   };
   const interval = context.sectionRanges?.[keys.offset];
   const toggle: ToggleField = { type: 'toggle', key: keys.separated, label: 'Розсунути частини' };
+  const { oblique } = keys;
+  const noteId = `${kind}-oblique-axis-note`;
+  const containsAxis = obliqueContainsAxis(context.values, oblique.inclination, oblique.direction);
   const details: Record<SectionChoice, ParameterField[]> = {
     none: [],
     'parallel-to-bases': [
@@ -805,11 +884,26 @@ function planeSection(kind: 'cylinder', choices: ParameterChoices, context: Pane
       },
       toggle,
     ],
+    oblique: [
+      {
+        type: 'number',
+        key: oblique.position,
+        label: 'Точка на осі від нижньої основи',
+        suffix: '% h',
+        range: sectionPositionRange,
+        ...(containsAxis ? { disabled: true, describedBy: noteId } : {}),
+      },
+      ...(containsAxis ? [{ type: 'note' as const, key: noteId, text: AXIS_IN_PLANE_NOTE }] : []),
+      { type: 'number', key: oblique.inclination, label: 'Кут до площини основи', suffix: '°', range: obliqueInclinationRange },
+      { type: 'number', key: oblique.direction, label: 'Напрям нахилу', suffix: '°', range: obliqueDirectionRange },
+      toggle,
+    ],
   };
   const help: Record<SectionChoice, Help | undefined> = {
     none: undefined,
     'parallel-to-bases': parallelSectionHelp,
     vertical: verticalSectionHelp,
+    oblique: obliqueSectionHelp,
   };
   return section(`${kind}-section`, 'Переріз', [selector, ...details[chosen]], {
     initiallyOpen: false,

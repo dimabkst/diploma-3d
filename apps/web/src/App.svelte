@@ -64,16 +64,17 @@ const request = $derived(
         connectorScale: lastConnectorScale,
       }),
 );
-const connectorScale = $derived(cylinderConnectorScale(request?.values ?? {}) ?? lastConnectorScale);
+const connectorScale = $derived(cylinderConnectorScale(request?.values ?? {}, lastConnectorScale) ?? lastConnectorScale);
 $effect.pre(() => {
-  const current = cylinderConnectorScale(request?.values ?? {});
   // Only a different scale is stored: the request reads it, so storing an equal copy would recompute it in a loop.
   const last = untrack(() => lastConnectorScale);
+  const current = cylinderConnectorScale(request?.values ?? {}, last);
   if (
     current !== undefined &&
     (current.longestDimensionMm !== last?.longestDimensionMm ||
       current.radiusMm !== last?.radiusMm ||
-      current.heightMm !== last?.heightMm)
+      current.heightMm !== last?.heightMm ||
+      current.obliqueSpanMm !== last?.obliqueSpanMm)
   ) {
     lastConnectorScale = current;
   }

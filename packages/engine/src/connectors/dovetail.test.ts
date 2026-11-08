@@ -16,7 +16,7 @@ import { roundDimensionsMm } from '../shapes/round.ts';
 import {
   DOVETAIL_MINIMUMS_MM,
   dovetailProfileMm,
-  grooveCutterPoints,
+  grooveCutter,
   isStrictlyConvex,
   offsetConvexPolygon,
   planDovetail,
@@ -335,7 +335,7 @@ describe.each(joined)('a dovetail joining %s', (_, shape, position, connector) =
       expect(volumeOf(track, upperM.subtract(wholeM))).toBeLessThan(VOLUME_TOLERANCE);
       expect(volumeOf(track, lowerM.intersect(upperM))).toBeLessThan(VOLUME_TOLERANCE);
       const removed = track(track(wholeM.subtract(lowerM)).subtract(upperM));
-      const cutter = track(kernel.Manifold.hull(grooveCutterPoints(plan).map((point) => [...point] as KernelVec3)));
+      const cutter = grooveCutter(kernel, track, plan);
       expect(volumeOf(track, removed.subtract(cutter))).toBeLessThan(VOLUME_TOLERANCE);
       // The tongue adds what the lower part gains; the groove removes it and the clearance and entrance channel.
       const [smoothLower, smoothUpper] = smooth.solids.map((solid) => solid.measurements.volume) as [number, number];
