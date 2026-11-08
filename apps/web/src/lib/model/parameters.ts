@@ -158,6 +158,7 @@ export type ParameterKey =
   | 'coneOffsetRatio'
   | 'coneInclinationDeg'
   | 'coneSectionPercent'
+  | 'coneSectionOffsetPercent'
   | 'coneDovetailSize'
   | 'coneDovetailLengthPercent'
   | 'coneDovetailClearanceMm'
@@ -293,6 +294,7 @@ export const initialParameterTexts = (): ParameterTexts => ({
   cylinderDowelLowerClearanceMm: formatDecimal(DEFAULT_DOWEL_CLEARANCES_MM.lower),
   cylinderDowelUpperClearanceMm: formatDecimal(DEFAULT_DOWEL_CLEARANCES_MM.upper),
   coneSectionPercent: formatDecimal(DEFAULT_SECTION_POSITION_PERCENT),
+  coneSectionOffsetPercent: formatDecimal(DEFAULT_SECTION_OFFSET_PERCENT),
   coneDovetailSize: formatDecimal(DEFAULT_DOVETAIL.sizeFactor),
   coneDovetailLengthPercent: formatDecimal(DEFAULT_DOVETAIL.lengthPercent),
   coneDovetailClearanceMm: formatDecimal(DEFAULT_DOVETAIL.clearanceMm),
@@ -477,6 +479,7 @@ const validators: Readonly<Record<IndependentKey, (text: string, exact?: number)
   cylinderDowelLowerClearanceMm: validateDiametralClearance,
   cylinderDowelUpperClearanceMm: validateDiametralClearance,
   coneSectionPercent: validateSectionPosition,
+  coneSectionOffsetPercent: validateSectionOffset,
   coneDovetailSize: validateConnectorDimension,
   coneDovetailLengthPercent: validateConnectorDimension,
   coneDovetailClearanceMm: validateDovetailClearance,
@@ -690,9 +693,10 @@ function sectionChecks(
   const keys = sectionKeys[kind];
   if (keys === undefined || (shape.kind !== 'cylinder' && shape.kind !== 'cone')) return undefined;
   if (section.type === 'parallel-to-bases') return connectorChecks(keys, shape as RoundShape, longestDimensionMm, section);
-  const cylinder = shape as CylinderShape;
+  const solid = shape as RoundShape;
   const scale = { longestDimensionMm };
   if (section.type === 'oblique') {
+    const cylinder = shape as CylinderShape;
     const reach = obliqueSplitReach(cylinder, scale, section);
     if (satisfies(reach)) return connectorChecks(keys, cylinder, longestDimensionMm, section);
     const contained = obliquePlaneContainsAxis(cylinder, section.inclinationDeg, section.directionDeg);
@@ -706,16 +710,15 @@ function sectionChecks(
       ranges: {},
     };
   }
-  const limit = verticalOffsetLimitPercent(cylinder, scale);
-  const { offset: offsetKey } = cylinderSectionKeys;
-  const ranges: SectionRanges = { [offsetKey]: { min: -limit, max: limit } };
-  const { radius } = roundDimensionsMm(cylinder, scale);
+  const limit = verticalOffsetLimitPercent(solid, scale);
+  const ranges: SectionRanges = { [keys.offset]: { min: -limit, max: limit } };
+  const { radius } = roundDimensionsMm(solid, scale);
   if (Math.abs(sectionOffsetMm(section.offsetPercent, radius)) > sectionOffsetMm(limit, radius) + CONSTRAINT_ROUNDOFF_MM) {
     const shown = percentRange({ min: -limit, max: limit }, 1);
     const allowed = `Допустимі значення — від ${formatDecimal(shown.min)} % до ${formatDecimal(shown.max)} %: `;
-    return { errors: { [offsetKey]: `${allowed}обидві частини мають лишатися придатними до друку.` }, ranges };
+    return { errors: { [keys.offset]: `${allowed}обидві частини мають лишатися придатними до друку.` }, ranges };
   }
-  const connector = connectorChecks(keys, cylinder, longestDimensionMm, section);
+  const connector = connectorChecks(keys, solid, longestDimensionMm, section);
   return connector === undefined
     ? { errors: {}, ranges }
     : { errors: connector.errors, ranges: { ...ranges, ...connector.ranges } };
@@ -738,7 +741,7 @@ function connectorChecks(
   const feasibility = cachedFeasibility(shape, longestDimensionMm, section);
   if (feasibility === undefined) return undefined;
   const { dovetail, round } = keys;
-  const wording: CutWording = shape.kind === 'cone' ? 'cone' : section.type;
+  const wording: CutWording = shape.kind === 'cone' && section.type === 'parallel-to-bases' ? 'cone' : section.type;
   const fields: [ParameterKey, string][] =
     connector.type === 'dovetail'
       ? [
@@ -776,7 +779,7 @@ function connectorChecks(
   if (feasibility.unattributed.length > 0) {
     const cutField = {
       'parallel-to-bases': keys.position,
-      vertical: cylinderSectionKeys.offset,
+      vertical: keys.offset,
       oblique: cylinderSectionKeys.oblique.inclination,
     };
     errors[cutField[section.type]] = feasibility.unattributed.map(explain).join(' ');
@@ -800,7 +803,7 @@ function rangeSentence(bounds: ParameterBounds, shown: number): string {
   );
 }
 
-/** Which words a message uses: a cone's cut is parallel to the base, but what limits a connector there is its narrowing. */
+/** Which words a message uses: a cone's cut parallel to the base is limited by the narrowing above it, hence its own. */
 export type CutWording = SectionType | 'cone';
 
 /** A part as the messages name it: by its place in a parallel cut, by its number in the others, where it has no place. */
@@ -894,6 +897,7 @@ export function dovetailIssueMessage(issue: DovetailIssue, cut: CutWording = 'pa
         ? `За упором паза лишається ${shortfall}. Зменште довжину виступу чи зазор або опустіть переріз.`
         : `Під нижнім упором паза лишається ${shortfall}. Зменште довжину виступу або зазор.`;
     case 'backing-thin':
+      if (cut === 'vertical') return `За пазом у частині 2 лишається ${shortfall}. Зменште висоту виступу або зміщення від осі.`;
       return `Над пазом лишається ${shortfall} верхньої частини. Опустіть переріз або зменште висоту виступу.`;
     case 'base-thin':
       return {
@@ -908,6 +912,7 @@ export function dovetailIssueMessage(issue: DovetailIssue, cut: CutWording = 'pa
 type SectionKeys = {
   readonly choice: 'cylinderSection' | 'coneSection';
   readonly position: 'cylinderSectionPercent' | 'coneSectionPercent';
+  readonly offset: 'cylinderSectionOffsetPercent' | 'coneSectionOffsetPercent';
   readonly separated: ToggleKey;
   readonly connector: 'cylinderConnector' | 'coneConnector';
   readonly dovetail: {
@@ -956,9 +961,8 @@ function scaledError(key: ScaledConnectorKey, text: string, unit: number): strin
   return 'error' in read ? read.error : undefined;
 }
 
-/** The cylinder's fields of the cuts that only it offers. */
+/** The cylinder's fields of the cut that only it offers. */
 export const cylinderSectionKeys = {
-  offset: 'cylinderSectionOffsetPercent',
   oblique: {
     position: 'cylinderObliquePositionPercent',
     inclination: 'cylinderObliqueInclinationDeg',
@@ -971,6 +975,7 @@ export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys>>> = {
   cylinder: {
     choice: 'cylinderSection',
     position: 'cylinderSectionPercent',
+    offset: 'cylinderSectionOffsetPercent',
     separated: 'cylinderPartsSeparated',
     connector: 'cylinderConnector',
     dovetail: {
@@ -991,6 +996,7 @@ export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys>>> = {
   cone: {
     choice: 'coneSection',
     position: 'coneSectionPercent',
+    offset: 'coneSectionOffsetPercent',
     separated: 'conePartsSeparated',
     connector: 'coneConnector',
     dovetail: {
@@ -1090,9 +1096,7 @@ function resolveSection(
   // A plane parallel to the bases has a position along the height, a vertical one a distance from the axis, an oblique
   // one a point on the axis and two angles.
   const cutKeys: IndependentKey[] =
-    type === 'oblique'
-      ? Object.values(cylinderSectionKeys.oblique)
-      : [type === 'vertical' ? cylinderSectionKeys.offset : keys.position];
+    type === 'oblique' ? Object.values(cylinderSectionKeys.oblique) : [type === 'vertical' ? keys.offset : keys.position];
   const { values, errors } = validateFields([...cutKeys, ...fields], texts, exact);
   // The fields show millimetres: their errors name millimetres too.
   const units = connectorUnits(scale, connectorType === 'dowel' ? 'dowel' : 'plug', type);
@@ -1146,7 +1150,7 @@ function resolveSection(
   const sectionOf = (): Section => {
     switch (type) {
       case 'vertical':
-        return { type, offsetPercent: read(cylinderSectionKeys.offset), ...joining };
+        return { type, offsetPercent: read(keys.offset), ...joining };
       case 'parallel-to-bases':
         return { type, positionPercent: read(keys.position), ...joining };
       case 'oblique':
@@ -1386,6 +1390,7 @@ export const shapeParameterKeys: Readonly<
       'coneOffsetRatio',
       'coneInclinationDeg',
       'coneSectionPercent',
+      'coneSectionOffsetPercent',
       'coneDovetailSize',
       'coneDovetailLengthPercent',
       'coneDovetailClearanceMm',
@@ -1451,9 +1456,9 @@ function inactiveSectionKeys(kind: ShapeKind, choices: ParameterChoices): (keyof
   const connectorFields: (keyof ParameterChoices | ParameterKey)[] = connectorTextKeys(keys).filter((key) => !active.has(key));
   if (connector !== 'plug' && connector !== 'dowel') connectorFields.push(keys.round.count);
   const section = activeSection(kind, choices);
-  const { offset, oblique } = cylinderSectionKeys;
-  const obliqueFields = Object.values(oblique);
-  // A cone has none of the cylinder's other cuts among its own fields, so listing them changes nothing for it.
+  const { offset } = keys;
+  // A cone has none of the oblique cut's fields among its own, so listing them changes nothing for it.
+  const obliqueFields = Object.values(cylinderSectionKeys.oblique);
   switch (section) {
     case 'vertical':
       return [keys.position, ...obliqueFields, ...connectorFields];

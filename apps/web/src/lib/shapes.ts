@@ -584,6 +584,18 @@ const coneSectionHelp: Help = {
     'площину від основи й вершини, але не гарантують, що тонку частину вдасться надрукувати.',
 };
 
+const coneVerticalSectionHelp: Help = {
+  label: 'Як задано переріз?',
+  text:
+    'Площина вертикальна й паралельна осі конуса — відрізку від центра основи до вершини. 0% — осьовий переріз. Значення ' +
+    '50% зміщує площину на половину радіуса основи. Знак визначає бік зміщення.\n\n' +
+    'Осьовий переріз — трикутник; у похилого конуса він не обов’язково рівнобедрений. Зі зміщенням площина перетинає бічну ' +
+    'поверхню по кривій і не доходить до вершини: чим більше зміщення, тим нижчий переріз.\n\n' +
+    'Частини 1 і 2 лежать по різні боки площини й експортуються окремими об’єктами в одному масштабі; розсування змінює ' +
+    'лише перегляд. У файлі вони стоять на залишках основи. Межі зміщення відсувають площину від бічної поверхні, але не ' +
+    'гарантують, що тонку частину вдасться надрукувати.',
+};
+
 const AXIS_IN_PLANE_NOTE = 'Площина містить усю вісь циліндра, тому положення точки за висотою не змінює переріз.';
 
 const connectorNames: Readonly<Record<ConnectorChoice, string>> = {
@@ -708,6 +720,23 @@ const CONE_PRINT_NOTE =
   'орієнтації в слайсері.';
 
 const withConeNote = (help: Help): Help => ({ ...help, text: `${help.text}\n\n${CONE_PRINT_NOTE}` });
+
+const coneVerticalDovetailHelp: Help = {
+  label: 'Як працює кріплення?',
+  text:
+    'Щоб скласти модель, опустіть частину з виступом уздовж паза до упора. Для розбирання утримуйте частину з пазом і ' +
+    'підніміть частину з виступом. Паз відкритий угорі, упор — унизу; рух вертикальний, також у похилого конуса.\n\n' +
+    'У звуженій верхній частині може бути помітна виїмка для входу в паз.\n\n' +
+    'Виступ — на частині 1, паз — у частині 2. Похилі боки під кутом 45° утримують половинки від роз’єднання ' +
+    'перпендикулярно до перерізу, але це не замок: половинки роз’єднаються, якщо утримувати іншу або перевернути модель.\n\n' +
+    'Висота визначає, наскільки виступ виходить за переріз. Довжина вимірюється вертикально, вздовж паза. Зазор — ' +
+    'заданий у моделі проміжок між відповідними поверхнями виступу й паза.\n\n' +
+    BOUNDS_HELP,
+};
+
+const CONE_VERTICAL_NOTE =
+  'Конус звужується догори, а порожнина перетинає різні висоти й іде до вигнутої поверхні, тому повзунки враховують ' +
+  'увесь її об’єм, а не лише вхід. ';
 
 const SCALE_NOTE =
   'Показано фактичні розміри для поточного масштабу моделі. Розміри кріплення змінюються разом із найбільшим габаритом.';
@@ -843,9 +872,16 @@ function connectorSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, 
       dowel: numberedDowelHelp(OBLIQUE_PRINT_NOTE),
     },
   };
+  const helpOf = (type: Exclude<ConnectorChoice, 'none'>): Help => {
+    if (kind !== 'cone') return helps[cut][type];
+    if (cut !== 'vertical') return withConeNote(helps[cut][type]);
+    return type === 'dovetail'
+      ? coneVerticalDovetailHelp
+      : (type === 'plug' ? numberedPlugHelp : numberedDowelHelp)(CONE_VERTICAL_NOTE + VERTICAL_PRINT_NOTE);
+  };
   return [
     section(`${kind}-connector`, 'Кріплення', [selector, ...fields[chosen]], {
-      help: chosen === 'none' ? undefined : kind === 'cone' ? withConeNote(helps[cut][chosen]) : helps[cut][chosen],
+      help: chosen === 'none' ? undefined : helpOf(chosen),
       status: { text: chosen === 'none' ? 'немає' : connectorNames[chosen].toLowerCase(), highlighted: chosen !== 'none' },
     }),
   ];
@@ -883,11 +919,12 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
     key: keys.choice,
     label: 'Тип перерізу',
     options: (kind === 'cone'
-      ? (['none', 'parallel-to-bases'] as const)
+      ? (['none', 'parallel-to-bases', 'vertical'] as const)
       : (['none', 'parallel-to-bases', 'vertical', 'oblique'] as const)
     ).map((value) => ({ value, label: namesOf(value) })),
   };
-  const { offset, oblique } = cylinderSectionKeys;
+  const { offset } = keys;
+  const { oblique } = cylinderSectionKeys;
   const interval = context.sectionRanges?.[offset];
   const toggle: ToggleField = { type: 'toggle', key: keys.separated, label: 'Розсунути частини' };
   const noteId = `${kind}-oblique-axis-note`;
@@ -932,7 +969,7 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
   const help: Record<SectionChoice, Help | undefined> = {
     none: undefined,
     'parallel-to-bases': kind === 'cone' ? coneSectionHelp : parallelSectionHelp,
-    vertical: verticalSectionHelp,
+    vertical: kind === 'cone' ? coneVerticalSectionHelp : verticalSectionHelp,
     oblique: obliqueSectionHelp,
   };
   return section(`${kind}-section`, 'Переріз', [selector, ...details[chosen]], {

@@ -218,6 +218,64 @@ test('oblique plane: dragging through angles ends on the last one, whatever fini
   expect(size.x).toBeLessThan(0.085);
 });
 
+for (const [name, oblique] of [
+  ['right', false],
+  ['oblique', true],
+] as const) {
+  test(`${name} cone: its sections, offset and connectors never turn the camera`, async ({ page }) => {
+    await installRecorder(page);
+    await page.goto('/');
+    await shapeSelect(page).selectOption({ label: 'Конус' });
+    if (oblique) {
+      await openSection(page, 'Нахил');
+      // A lean that every connector's defaults fit: at 1 × r the default tongue is 1,4 mm too long, and refused.
+      await page.getByLabel('Зміщення вершини', { exact: true }).fill('0,5');
+    }
+    await openSection(page, 'Переріз');
+    await expect(page.getByText(/^Габарити: /)).toBeVisible({ timeout: 30_000 });
+    await expectLoaded(page);
+    await turnCamera(page);
+    const direction = await orbit(page);
+    for (const label of ['Вертикальний', 'Паралельно основі', 'Вертикальний', 'Без перерізу', 'Вертикальний']) {
+      expectSteadyTransition(await framesOf(page, () => cut(page, label)), direction);
+    }
+    const offset = page.getByLabel('Зміщення від осі', { exact: true });
+    for (const value of ['25', '-25', '0']) expectSteadyTransition(await framesOf(page, () => offset.fill(value)), direction);
+    for (const label of ['Ластівчин хвіст', 'Виступ і отвір', 'Знімні штифти', 'Без кріплення']) {
+      expectSteadyTransition(await framesOf(page, () => connector(page, label)), direction);
+    }
+    const separation = page.getByRole('checkbox', { name: 'Розсунути частини', exact: true });
+    expectSteadyTransition(await framesOf(page, () => separation.uncheck()), direction);
+    expectSteadyTransition(await framesOf(page, () => separation.check()), direction);
+  });
+}
+
+test('rapid offsets of a cone end on the last one, whatever finished in between', async ({ page }) => {
+  await installRecorder(page);
+  await page.goto('/');
+  await shapeSelect(page).selectOption({ label: 'Конус' });
+  await openSection(page, 'Переріз');
+  await expect(page.getByText(/^Габарити: /)).toBeVisible({ timeout: 30_000 });
+  await expectLoaded(page);
+  await cut(page, 'Вертикальний');
+  await page.waitForTimeout(300);
+  await expectLoaded(page);
+  const direction = await orbit(page);
+  const offset = page.getByLabel('Зміщення від осі', { exact: true });
+  const frames = await framesOf(page, async () => {
+    for (const value of ['10', '20', '30', '40', '50', '60']) {
+      await offset.fill(value);
+      await page.waitForTimeout(40);
+    }
+    await expect(page.getByRole('button', { name: 'Завантажити частини · 3MF', exact: true })).toBeEnabled({ timeout: 30_000 });
+  });
+  for (const frame of frames) {
+    expect(frame.theta).toBeCloseTo(direction.theta, 6);
+    expect(frame.phi).toBeCloseTo(direction.phi, 6);
+  }
+  await expect(offset).toHaveValue('60');
+});
+
 test('section change: the shown parts keep their placement until the new parts arrive together with theirs', async ({ page }) => {
   await openCylinder(page);
   await cut(page, 'Паралельно основам');

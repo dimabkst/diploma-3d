@@ -235,6 +235,21 @@ describe('connector settings on a cone', () => {
     expect(connectorScaleOf('cube', values)).toBeUndefined();
   });
 
+  it('measures a vertical cut on the actual section’s height, which falls with the distance from the axis', () => {
+    const [axial, off] = [0, 50].map((coneSectionOffsetPercent) => coneConnectorScale({ ...values, coneSectionOffsetPercent }));
+    expect(axial?.verticalSpanMm).toBeCloseTo(80, 9);
+    expect(off?.verticalSpanMm).toBeCloseTo(40, 1);
+    const units = connectorUnits(off as NonNullable<typeof off>, 'plug', 'vertical');
+    expect(units.coneDovetailLengthPercent).toBeCloseTo((off?.verticalSpanMm as number) / 100, 12);
+    expect(units.coneRoundSpacingPercent).toBeCloseTo((off?.verticalSpanMm as number) / 200, 12);
+    expect(units.coneRoundDiameter).toBe(5);
+    // Beyond the limit there is no usable section: the last span stays, nothing is computed from it.
+    expect(coneConnectorScale({ ...values, coneSectionOffsetPercent: 100 }, off)?.verticalSpanMm).toBe(off?.verticalSpanMm);
+    expect(coneConnectorScale(values, off)?.verticalSpanMm).toBe(off?.verticalSpanMm);
+    // A cylinder's stays its height.
+    expect(connectorUnits(scaleOf(80), 'plug', 'vertical').cylinderDovetailLengthPercent).toBeCloseTo(0.8, 12);
+  });
+
   it('leaves a cylinder’s parallel cut on its diameter', () => {
     expect(connectorUnits(scaleOf(80), 'plug').cylinderDovetailLengthPercent).toBeCloseTo(0.8, 12);
   });

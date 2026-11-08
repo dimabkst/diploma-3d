@@ -10,11 +10,13 @@ import { type ConnectorFeasibility, connectorFeasibility } from './bounds.ts';
 import {
   CONNECTOR_MIN_WALL_MM,
   type ConeParallelSection,
+  type ConeVerticalSection,
   connectorVolumeTolerance,
   type FacetedSection,
   facesOfPart,
   framePoint,
   insideEnvelope,
+  isFaceted,
   lateralWall,
   type ObliqueCylinderSection,
   type ParallelCylinderSection,
@@ -228,7 +230,9 @@ function wallsOf(
     case 'oblique':
       return obliqueWalls(section, dimensions, groove);
     case 'cone-parallel':
-      return coneWalls(section, dimensions, groove);
+      return coneWalls(section, dimensions, groove, 1);
+    case 'cone-vertical':
+      return coneWalls(section, dimensions, groove, -1);
   }
 }
 
@@ -326,23 +330,29 @@ function obliqueWalls(
 }
 
 /**
- * The upper cone narrows above the cut, so the expanded groove can run out of material although the tongue's footprint
- * fits in the section. The engaged groove is a convex prism along u, so that its corners at the closed end and at the
- * seated tongue's end towards the entrance bound it: at its top they measure the roof, at the cut the side walls, and
- * ahead of the closed end the stop. An oblique cone is not symmetric across the groove, so that both sides count. Towards
- * the entrance the channel leaves the cone beyond the tongue, the one opening meant to exist.
+ * The cone narrows above the cut, or upwards along a vertical one, so the expanded groove can run out of material although
+ * the tongue's footprint fits in the section. The engaged groove is a convex prism along u, so that its corners at the
+ * closed end and at the seated tongue's end towards the entrance bound it: at its top they measure the material behind
+ * it, at the cut the side walls, and ahead of the closed end the stop. An oblique cone is not symmetric across the groove,
+ * so that both sides count. `towardsStop` is the sign of the stop along the section's u.
+ *
+ * Towards the entrance the channel leaves the cone beyond the tongue, the one opening meant to exist, which a vertical cut
+ * shows as a notch where the narrowing cone gets thinner than the groove. That leaves nothing floating: what remains of
+ * the convex part is the union of the convex pieces beyond the groove's flanks, beyond its top and beyond its closed end,
+ * and the first three each meet the last at the closed end's corners, which these walls keep inside the part.
  */
 function coneWalls(
-  section: ConeParallelSection,
+  section: ConeParallelSection | ConeVerticalSection,
   { height, length, clearance }: DovetailDimensions,
   groove: ReturnType<typeof grooveExtent>,
+  towardsStop: 1 | -1,
 ): DovetailIssue[] {
   const { wall } = DOVETAIL_MINIMUMS_MM;
-  const closedEnd = length / 2 + clearance;
-  const openEnd = -length / 2;
+  const closedEnd = towardsStop * (length / 2 + clearance);
+  const openEnd = -towardsStop * (length / 2);
   const faces = facesOfPart(section, 'positive');
-  const ahead = faces.filter((face) => face.alongU > 0);
-  const beside = faces.filter((face) => face.alongU <= 0);
+  const ahead = faces.filter((face) => towardsStop * face.alongU > 0);
+  const beside = faces.filter((face) => towardsStop * face.alongU <= 0);
   return [
     {
       code: 'groove-wall-thin',
@@ -425,7 +435,8 @@ function dovetailFrame({ type, frame }: SolidSection): DovetailFrame {
  * off by moving straight up, and is seated by moving down until the tongue meets the stop. The section reaches H/2
  * above the centroid, where a right cylinder's channel opens through the upper base.
  *
- * A cone's cut parallel to its base slides like a cylinder's parallel cut, with the stop at +u and the entrance at −u.
+ * A cone's cut parallel to its base slides like a cylinder's parallel cut, with the stop at +u and the entrance at −u; its
+ * vertical cut like a cylinder's, with part A coming off straight up, whatever the cone's lean.
  *
  * An oblique cut does the same along the plane: part A comes off uphill and is seated downhill, the entrance uphill and
  * the stop downhill, whatever the plane's direction. See `dovetailChecks` for the constraints.
@@ -459,9 +470,7 @@ export function planDovetail(shape: RoundShape, scale: PhysicalScale, cut: Solid
  * the span in a symmetric section of a cylinder; otherwise the part's actual extent within the groove's depth.
  */
 function grooveReach(section: SolidSection, dimensions: DovetailDimensions): number {
-  return section.type === 'oblique' || section.type === 'cone-parallel'
-    ? section.entranceReachWithin(grooveExtent(dimensions).top)
-    : section.span / 2;
+  return isFaceted(section) ? section.entranceReachWithin(grooveExtent(dimensions).top) : section.span / 2;
 }
 
 /** The dovetail's dimensions in millimetres, each solved for with the others fixed. */

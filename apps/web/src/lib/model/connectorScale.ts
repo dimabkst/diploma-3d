@@ -1,11 +1,13 @@
 import {
   coneSection,
+  coneVerticalSection,
   DOVETAIL_PROPORTIONS,
   obliqueCylinderSection,
   ROUND_CONNECTOR_PROPORTIONS,
   roundDimensionsMm,
+  verticalOffsetLimitPercent,
 } from '@diploma-3d/engine';
-import type { SectionType, ShapeKind } from '@diploma-3d/schema';
+import type { ConeShape, PhysicalScale, SectionType, ShapeKind } from '@diploma-3d/schema';
 import { formatDecimal, formatSteppedDecimal, parseDecimal, type StepRange } from '../decimal.ts';
 
 /** What turns the connector settings into millimetres: the assembled model's longest side M and the solid's size. */
@@ -17,6 +19,8 @@ export type ConnectorScale = {
   readonly obliqueSpanMm?: number | undefined;
   /** The actual section's extent along u of a cone's current or last valid cut; a cylinder's is its diameter. */
   readonly parallelSpanMm?: number | undefined;
+  /** The same of a cone's vertical cut; a cylinder's is its height. */
+  readonly verticalSpanMm?: number | undefined;
 };
 
 /** The fields whose stored value is a multiplier or a percentage, shown in millimetres. */
@@ -41,12 +45,16 @@ export type ScaledConnectorKey =
  * scales every connector as before and a new radius, height or plane keeps the proportions.
  */
 export function connectorUnits(
-  { longestDimensionMm: m, radiusMm: r, heightMm, obliqueSpanMm, parallelSpanMm }: ConnectorScale,
+  { longestDimensionMm: m, radiusMm: r, heightMm, obliqueSpanMm, parallelSpanMm, verticalSpanMm }: ConnectorScale,
   roundType: 'plug' | 'dowel',
   sectionType: SectionType = 'parallel-to-bases',
 ): Readonly<Record<ScaledConnectorKey, number>> {
   const span =
-    sectionType === 'vertical' ? heightMm : sectionType === 'oblique' ? (obliqueSpanMm ?? 2 * r) : (parallelSpanMm ?? 2 * r);
+    sectionType === 'vertical'
+      ? (verticalSpanMm ?? heightMm)
+      : sectionType === 'oblique'
+        ? (obliqueSpanMm ?? 2 * r)
+        : (parallelSpanMm ?? 2 * r);
   const size = DOVETAIL_PROPORTIONS.height * m;
   const length = span / 100;
   const diameter = ROUND_CONNECTOR_PROPORTIONS.diameter * m;
@@ -98,9 +106,20 @@ export function cylinderConnectorScale(
   return { longestDimensionMm: printSizeMm, radiusMm: radius, heightMm: height, obliqueSpanMm };
 }
 
+/** The span of a vertical cut within its limit; a plane beyond that has no usable section, and keeps the last span. */
+function verticalSpanOf(
+  shape: ConeShape,
+  scale: PhysicalScale,
+  offsetPercent: number | undefined,
+  previous: number | undefined,
+): number | undefined {
+  if (offsetPercent === undefined || Math.abs(offsetPercent) > verticalOffsetLimitPercent(shape, scale)) return previous;
+  return coneVerticalSection(shape, scale, offsetPercent).span;
+}
+
 /**
- * The cone's scale from valid values: its radius and height as the engine builds it, and the actual span of a valid cut;
- * while the position is being corrected, `previous` keeps the last span.
+ * The cone's scale from valid values: its radius and height as the engine builds it, and the actual spans of its valid
+ * cuts; while a cut is being corrected, `previous` keeps the last span.
  */
 export function coneConnectorScale(
   values: {
@@ -108,17 +127,19 @@ export function coneConnectorScale(
     readonly coneHeightRatio?: number | undefined;
     readonly coneOffsetRatio?: number | undefined;
     readonly coneSectionPercent?: number | undefined;
+    readonly coneSectionOffsetPercent?: number | undefined;
   },
   previous?: ConnectorScale,
 ): ConnectorScale | undefined {
-  const { printSizeMm, coneHeightRatio, coneOffsetRatio, coneSectionPercent } = values;
+  const { printSizeMm, coneHeightRatio, coneOffsetRatio, coneSectionPercent, coneSectionOffsetPercent } = values;
   if (printSizeMm === undefined || coneHeightRatio === undefined || coneOffsetRatio === undefined) return undefined;
   const shape = { kind: 'cone', heightRatio: coneHeightRatio, offsetRatio: coneOffsetRatio } as const;
   const scale = { longestDimensionMm: printSizeMm };
   const { radius, height } = roundDimensionsMm(shape, scale);
   const parallelSpanMm =
     coneSectionPercent === undefined ? previous?.parallelSpanMm : coneSection(shape, scale, coneSectionPercent).span;
-  return { longestDimensionMm: printSizeMm, radiusMm: radius, heightMm: height, parallelSpanMm };
+  const verticalSpanMm = verticalSpanOf(shape, scale, coneSectionOffsetPercent, previous?.verticalSpanMm);
+  return { longestDimensionMm: printSizeMm, radiusMm: radius, heightMm: height, parallelSpanMm, verticalSpanMm };
 }
 
 /** The scale of the solid's connector settings; undefined for a solid without them, or while a value it needs is invalid. */

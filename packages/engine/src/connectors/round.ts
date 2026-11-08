@@ -16,6 +16,7 @@ import {
   frameMatrix,
   framePoint,
   insideEnvelope,
+  isFaceted,
   lateralWall,
   type SectionFrame,
   type SolidCut,
@@ -243,7 +244,7 @@ function holeWalls(section: SolidSection, part: Part, hole: HoleExtent, holeDept
       bottom: (part === 'upper' ? upperThickness : lowerThickness) - holeDepth,
     };
   }
-  if (section.type === 'oblique' || section.type === 'cone-parallel') return facetedHoleWalls(section, part, hole, holeDepth);
+  if (isFaceted(section)) return facetedHoleWalls(section, part, hole, holeDepth);
   const { offset, lean, stretch, height } = section;
   const towards = part === 'upper' ? 1 : -1;
   const reachOf = (radius: number) => lean * Math.abs(along) + radius * stretch;
@@ -262,7 +263,7 @@ function holeWalls(section: SolidSection, part: Part, hole: HoleExtent, holeDept
  * A hole measured on the actual faces: it is a cone and a cylinder, both convex, so that its circles at the entrance, at
  * the end of the chamfer and at the bottom bound every point of it, and a circle's wall to a face follows from the face's
  * plane. The whole cavity is measured, with its bottom apart, because a part may thin out behind a mouth that fits with
- * room to spare: an upper cone narrows above the cut, and an oblique one moves away from the hole's fixed axis.
+ * room to spare: a cone narrows and its curved side recedes along a hole's axis, and an oblique one moves away from it.
  */
 function facetedHoleWalls(section: FacetedSection, part: Part, hole: HoleExtent, holeDepth: number) {
   const { along, chamfer, straight, opening } = hole;
@@ -276,7 +277,7 @@ function facetedHoleWalls(section: FacetedSection, part: Part, hole: HoleExtent,
 /** What remains behind the root overlap of the plugs in the part that carries them. */
 function plugBacking(section: SolidSection, sites: readonly { along: number; pinDiameter: number }[]): number {
   if (section.type === 'parallel-to-bases') return section.lowerThickness - PLUG_ROOT_OVERLAP_MM;
-  if (section.type === 'oblique' || section.type === 'cone-parallel') {
+  if (isFaceted(section)) {
     const faces = facesOfPart(section, 'negative');
     return Math.min(
       ...sites.flatMap(({ along, pinDiameter }) =>

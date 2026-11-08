@@ -11,6 +11,7 @@ import type { Manifold } from 'manifold-3d';
 import { buildDovetail, type DovetailPlan, planDovetail, verifyDovetail } from './connectors/dovetail.ts';
 import {
   CONSTRAINT_ROUNDOFF_MM,
+  coneVerticalSection,
   cutOfSection,
   obliqueCylinderSection,
   obliqueSplitReach,
@@ -215,17 +216,19 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
   };
 }
 
-/** The plane of a vertical or oblique section, which only a cylinder offers. */
+/** The plane of a section read off a round solid: a cylinder's or a cone's vertical one, or a cylinder's oblique one. */
 function cutPlaneOf({ shape, scale, section }: ModelSpec): Plane {
-  if (shape.kind !== 'cylinder') throw new GeometryError('Expected a cut of a cylinder.');
-  if (section?.type === 'vertical') return verticalCylinderSection(shape, scale, section.offsetPercent).plane;
-  if (section?.type === 'oblique') return obliqueCylinderSection(shape, scale, section).plane;
-  throw new GeometryError('Expected a vertical or oblique cut.');
+  if (section?.type === 'vertical' && shape.kind === 'cylinder')
+    return verticalCylinderSection(shape, scale, section.offsetPercent).plane;
+  if (section?.type === 'vertical' && shape.kind === 'cone')
+    return coneVerticalSection(shape, scale, section.offsetPercent).plane;
+  if (section?.type === 'oblique' && shape.kind === 'cylinder') return obliqueCylinderSection(shape, scale, section).plane;
+  throw new GeometryError('Expected a vertical or oblique cut of a round solid.');
 }
 
 /** A vertical plane within the distance from the axis that leaves both parts usable; see `verticalOffsetLimitMm`. */
 function assertVerticalOffset({ shape, scale, section }: ModelSpec): void {
-  if (section?.type !== 'vertical' || shape.kind !== 'cylinder') return;
+  if (section?.type !== 'vertical' || (shape.kind !== 'cylinder' && shape.kind !== 'cone')) return;
   const offset = sectionOffsetMm(section.offsetPercent, roundDimensionsMm(shape, scale).radius);
   const limit = verticalOffsetLimitMm(shape, scale);
   if (Math.abs(offset) > limit + CONSTRAINT_ROUNDOFF_MM) {

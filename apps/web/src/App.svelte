@@ -83,7 +83,8 @@ $effect.pre(() => {
       current.radiusMm !== last?.radiusMm ||
       current.heightMm !== last?.heightMm ||
       current.obliqueSpanMm !== last?.obliqueSpanMm ||
-      current.parallelSpanMm !== last?.parallelSpanMm)
+      current.parallelSpanMm !== last?.parallelSpanMm ||
+      current.verticalSpanMm !== last?.verticalSpanMm)
   ) {
     lastConnectorScales = { ...untrack(() => lastConnectorScales), [selectedKind]: current };
   }

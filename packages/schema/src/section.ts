@@ -128,7 +128,7 @@ export const parallelSectionSchema = z.strictObject({
 export type ParallelSection = z.infer<typeof parallelSectionSchema>;
 
 /**
- * A vertical plane parallel to the cylinder's axis, at a signed distance from it along the plane's normal: at zero it
+ * A vertical plane parallel to the axis of a cylinder or cone, at a signed distance from it along the plane's normal: at zero it
  * contains the whole axis, an axial section.
  */
 export const verticalSectionSchema = z.strictObject({

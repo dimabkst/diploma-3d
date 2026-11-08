@@ -744,7 +744,10 @@ describe('plane sections', () => {
   });
 
   it('offers parallel sections for the cylinder and the cone, and the other planes for the cylinder alone', () => {
-    expect(SECTIONS_BY_SHAPE).toEqual({ cylinder: ['parallel-to-bases', 'vertical', 'oblique'], cone: ['parallel-to-bases'] });
+    expect(SECTIONS_BY_SHAPE).toEqual({
+      cylinder: ['parallel-to-bases', 'vertical', 'oblique'],
+      cone: ['parallel-to-bases', 'vertical'],
+    });
     const shape = { kind: 'cone', heightRatio: 2 };
     const cone = modelSpecSchema.safeParse({ shape, scale, section: at(50) });
     expect(cone.success).toBe(true);
@@ -771,12 +774,13 @@ describe('a vertical section', () => {
     }
   });
 
-  it('takes every connector, and belongs to the cylinder', () => {
+  it('takes every connector, and belongs to the round solids', () => {
     const plug = { type: 'plug', count: 1, diameterFactor: 1, depthFactor: 1, holeClearanceMm: 0.2 };
     expect(parse({ connector: plug }).success).toBe(true);
     expect(parse({ connector: { type: 'dovetail', ...DEFAULT_DOVETAIL } }).success).toBe(true);
     expect(parse({ positionPercent: 50 }).success).toBe(false);
-    expect(parse({}, { kind: 'cone', heightRatio: 2 }).success).toBe(false);
+    expect(parse({}, { kind: 'cone', heightRatio: 2 }).success).toBe(true);
+    expect(parse({}, { kind: 'cube' }).success).toBe(false);
   });
 });
 

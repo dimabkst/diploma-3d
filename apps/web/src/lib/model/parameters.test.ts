@@ -174,6 +174,7 @@ describe('resolveModelRequest', () => {
       coneOffsetRatio: '0',
       coneInclinationDeg: '90',
       coneSectionPercent: '50',
+      coneSectionOffsetPercent: '0',
       coneDovetailSize: '1',
       coneDovetailLengthPercent: '50',
       coneDovetailClearanceMm: '0,2',
@@ -2307,6 +2308,7 @@ describe('a section of the cone parallel to its base', () => {
       options: [
         { value: 'none', label: 'Без перерізу' },
         { value: 'parallel-to-bases', label: 'Паралельно основі' },
+        { value: 'vertical', label: 'Вертикальний' },
       ],
     });
     expect(sectionNumberFields(cut)).toMatchObject([
@@ -2435,5 +2437,155 @@ describe('a section of the cone parallel to its base', () => {
     expect(canResetShapeParameters('cone', hidden)).toBe(false);
     expect(activeConnector('cone', choose('plug'))).toBe('plug');
     expect(shapeParameterKeys.cone.choices).toContain('coneSection');
+  });
+});
+
+describe('a vertical section of the cone', () => {
+  const sectioned = { ...triangle, coneSection: 'vertical' } as const;
+  const choose = (coneConnector: 'dovetail' | 'plug' | 'dowel', coneRoundCount: 1 | 2 = 1) =>
+    ({ ...sectioned, coneConnector, coneRoundCount }) as const;
+  const request = (overrides: Partial<ParameterTexts> = {}, choices: typeof triangle = sectioned) =>
+    resolveModelRequest('cone', texts(overrides), choices);
+  const group = (choices: typeof triangle, title: string, overrides: Partial<ParameterTexts> = {}) => {
+    const { values, sectionRanges } = request(overrides, choices);
+    const panel = shapePanel('cone', choices, { values, sectionRanges });
+    const found = (panel.type === 'parameters' ? panel.sections : []).find((part) => part.title === title);
+    if (found === undefined) throw new Error(`No group ${title}`);
+    return found;
+  };
+
+  it('starts axial, with the offset in percent of r, the same field as a cylinder’s, and the connectors below', () => {
+    const result = request();
+    expect(result.errors).toEqual({});
+    expect(result.spec?.section).toEqual({ type: 'vertical', offsetPercent: 0 });
+    const cut = group(sectioned, 'Переріз');
+    expect(cut.status).toEqual({ text: 'вертикальний', highlighted: true });
+    expect(cut.fields[0]).toMatchObject({
+      options: [
+        { value: 'none', label: 'Без перерізу' },
+        { value: 'parallel-to-bases', label: 'Паралельно основі' },
+        { value: 'vertical', label: 'Вертикальний' },
+      ],
+    });
+    expect(sectionNumberFields(cut)).toMatchObject([
+      { key: 'coneSectionOffsetPercent', label: 'Зміщення від осі', suffix: '% r', range: { min: -80, max: 80, increment: 5 } },
+    ]);
+    expect(sectionNumberFields(cut)[0]?.unit).toBeUndefined();
+    expect(cut.help?.label).toBe('Як задано переріз?');
+    expect(cut.help?.text).toMatch(/трикутник/);
+    expect(cut.help?.text).toMatch(/не доходить до вершини/);
+    expect(cut.help?.text).toContain('0% — осьовий переріз. Значення 50% зміщує площину на половину радіуса основи.');
+  });
+
+  it('holds typed offsets to the limits, which a tangent or thin cut never passes', () => {
+    expect(request({ coneSectionOffsetPercent: '80' }).spec?.section).toMatchObject({ offsetPercent: 80 });
+    expect(request({ coneSectionOffsetPercent: '-80' }).spec?.section).toMatchObject({ offsetPercent: -80 });
+    expect(request({ coneSectionOffsetPercent: '80,5' }).errors.coneSectionOffsetPercent).toMatch(/від -80 % до 80 %/);
+    expect(request({ coneSectionOffsetPercent: '100' }).spec).toBeUndefined();
+    expect(request({ coneSectionOffsetPercent: '' }).errors.coneSectionOffsetPercent).toBe('Введіть значення.');
+    // A small model's wall narrows the limit: M = 10 mm leaves ±76 %.
+    const small = request({ printSizeMm: '10', coneSectionOffsetPercent: '77' });
+    expect(small.errors.coneSectionOffsetPercent).toMatch(/від -76 % до 76 %/);
+  });
+
+  it('keeps the percentage when the model is scaled, and its own value apart from the cylinder’s', () => {
+    const [small, large] = [
+      request({ coneSectionOffsetPercent: '25' }),
+      request({ coneSectionOffsetPercent: '25', printSizeMm: '160' }),
+    ];
+    expect(large.spec?.section).toEqual(small.spec?.section);
+    const cylinderChosen = { ...triangle, cylinderSection: 'vertical' } as const;
+    const edited = texts({ cylinderSectionOffsetPercent: '30', coneSectionOffsetPercent: '-40' });
+    expect(resolveModelRequest('cone', edited, sectioned).spec?.section).toMatchObject({ offsetPercent: -40 });
+    expect(resolveModelRequest('cylinder', edited, cylinderChosen).spec?.section).toMatchObject({ offsetPercent: 30 });
+    // Another cut's hidden draft blocks nothing.
+    expect(request({ coneSectionPercent: '' }).errors).toEqual({});
+  });
+
+  it.each([
+    ['dovetail', 1],
+    ['plug', 1],
+    ['plug', 2],
+    ['dowel', 1],
+    ['dowel', 2],
+  ] as const)('takes a %s × %d at its defaults, with the parts by number', (connector, count) => {
+    const result = request({}, choose(connector, count));
+    expect(result.errors).toEqual({});
+    expect(result.spec?.section?.connector?.type).toBe(connector);
+    for (const range of Object.values(result.sectionRanges ?? {})) expect(range).not.toBeNull();
+    const labels = sectionNumberFields(group(choose(connector, count), 'Кріплення')).map(({ label }) => label);
+    expect(labels.join(' ')).not.toMatch(/нижніх|верхніх/);
+  });
+
+  it('names part 1 and part 2 for dowels', () => {
+    const labels = sectionNumberFields(group(choose('dowel'), 'Кріплення')).map(({ label }) => label);
+    expect(labels).toContain('Збільшення діаметра отворів частини 1, мм');
+    expect(labels).toContain('Збільшення діаметра отворів частини 2, мм');
+  });
+
+  it('explains the dovetail’s motion as asked, the notch, and no lock', () => {
+    const help = group(choose('dovetail'), 'Кріплення').help?.text;
+    expect(help).toContain(
+      'Щоб скласти модель, опустіть частину з виступом уздовж паза до упора. Для розбирання утримуйте частину з пазом і підніміть частину з виступом.',
+    );
+    expect(help).toContain('У звуженій верхній частині може бути помітна виїмка для входу в паз.');
+    expect(help).toMatch(/це не замок/);
+    expect(help).toMatch(/вертикальний, також у похилого конуса/);
+  });
+
+  it('does not reuse the horizontal cut’s print note, and promises no print without supports', () => {
+    for (const connector of ['plug', 'dowel'] as const) {
+      const help = group(choose(connector), 'Кріплення').help?.text;
+      expect(help).not.toMatch(/вершиною догори/);
+      expect(help).toMatch(/можуть потребувати підтримок/);
+      expect(help).toMatch(/увесь її об’єм/);
+    }
+  });
+
+  it('explains a hole that breaks through deeper in, keeping the settings and blocking the model', () => {
+    const result = request({ coneRoundDepth: '7' }, choose('plug'));
+    expect(result.spec).toBeUndefined();
+    expect(result.errors.coneRoundDepth).toMatch(/Під дном отвору у частині 2/);
+    expect(result.errors.coneRoundDepth).toMatch(/зміщення від осі/);
+    expect(result.errors.coneRoundDepth).toMatch(/Зараз допустимо/);
+    expect(result.values.coneRoundDepth).toBe(7);
+  });
+
+  it('explains a dovetail’s walls in terms of this cut', () => {
+    const behind = request(
+      { coneSectionOffsetPercent: '60', coneDovetailSize: '3', coneDovetailLengthPercent: '30' },
+      choose('dovetail'),
+    );
+    expect(behind.spec).toBeUndefined();
+    expect(behind.errors.coneDovetailSize).toMatch(/За пазом у частині 2/);
+    expect(behind.errors.coneDovetailSize).not.toMatch(/верхньої частини/);
+    const stop = request({ coneDovetailLengthPercent: '99' }, choose('dovetail'));
+    expect(stop.errors.coneDovetailLengthPercent).toMatch(/Під нижнім упором/);
+  });
+
+  it('reports no value at all where the thin part has no room, without reversed bounds', () => {
+    const result = request({ printSizeMm: '20', coneSectionOffsetPercent: '80' }, choose('plug'));
+    expect(result.spec).toBeUndefined();
+    expect(result.sectionRanges?.coneRoundDepth).toBeNull();
+    const field = sectionNumberFields(
+      group(choose('plug'), 'Кріплення', { printSizeMm: '20', coneSectionOffsetPercent: '80' }),
+    ).find(({ key }) => key === 'coneRoundDepth');
+    expect(field?.range).toBeUndefined();
+    expect(request({ printSizeMm: '20', coneSectionOffsetPercent: '80' }).spec).toBeDefined();
+  });
+
+  it('resets its offset to 0 and keeps the print size', () => {
+    const edited: ParameterState = { texts: texts({ printSizeMm: '120', coneSectionOffsetPercent: '40' }), choices: sectioned };
+    expect(canResetShapeParameters('cone', edited)).toBe(true);
+    const reset = resetShapeParameters('cone', edited);
+    expect(reset.texts).toEqual(texts({ printSizeMm: '120' }));
+    expect(reset.choices.coneSection).toBe('none');
+    // A hidden offset shapes nothing.
+    const hidden = {
+      texts: texts({ coneSectionOffsetPercent: '40' }),
+      choices: { ...triangle, coneSection: 'parallel-to-bases' },
+    } as const;
+    expect(canResetShapeParameters('cone', hidden)).toBe(true);
+    expect(canResetShapeParameters('cone', { texts: hidden.texts, choices: triangle })).toBe(false);
   });
 });

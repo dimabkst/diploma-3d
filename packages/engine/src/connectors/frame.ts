@@ -123,7 +123,27 @@ export interface ConeParallelSection extends FacetedSection {
   readonly type: 'cone-parallel';
 }
 
-export type SolidSection = ParallelCylinderSection | VerticalCylinderSection | ObliqueCylinderSection | ConeParallelSection;
+/**
+ * A cone's vertical cut, on the normal and with the part roles of a cylinder's: u is +Z, part A lies on the negative side,
+ * part B on the positive one. Through the axis the section is a triangle; off it, a curved shape that stops below the
+ * apex. The parts narrow upwards and an oblique cone's sections move with the height, so nothing is read off a radius.
+ */
+export interface ConeVerticalSection extends FacetedSection {
+  readonly type: 'cone-vertical';
+  /** The signed distance of the plane from the axis along n, in millimetres. */
+  readonly offset: number;
+}
+
+export type SolidSection =
+  | ParallelCylinderSection
+  | VerticalCylinderSection
+  | ObliqueCylinderSection
+  | ConeParallelSection
+  | ConeVerticalSection;
+
+/** Whether the section was read off the actual solid's faces. */
+export const isFaceted = (section: SolidSection): section is ObliqueCylinderSection | ConeParallelSection | ConeVerticalSection =>
+  'faces' in section;
 
 /** A vertical cut's position: the signed distance from the axis in percent of the radius. */
 export interface VerticalCut {
@@ -212,9 +232,10 @@ export const sectionOffsetPercent = (offsetMm: number, radiusMm: number): number
  * The largest distance of a vertical cut from the axis: the thinner part keeps the share of the solid's extent across
  * the plane that a parallel cut keeps of its height, SECTION_POSITION_LIMITS.min, and at least one minimum wall, which
  * excludes tangent cuts and slivers. Only zero remains for a solid too small for that wall. An application restriction
- * like the parallel cut's: it does not make every thin part printable.
+ * like the parallel cut's: it does not make every thin part printable. A cone reaches across the plane exactly as far as
+ * its base does, as its apex lies on the axis's plane, so the same limit holds for it and keeps a section above the base.
  */
-export function verticalOffsetLimitMm(shape: CylinderShape, scale: PhysicalScale): number {
+export function verticalOffsetLimitMm(shape: RoundShape, scale: PhysicalScale): number {
   const { radius } = roundDimensionsMm(shape, scale);
   const reach = polygonReach(radius);
   const extent = reach.negative + reach.positive;
@@ -223,8 +244,14 @@ export function verticalOffsetLimitMm(shape: CylinderShape, scale: PhysicalScale
 }
 
 /** `verticalOffsetLimitMm` in percent of the radius, as the specification and the interface give the distance. */
-export function verticalOffsetLimitPercent(shape: CylinderShape, scale: PhysicalScale): number {
+export function verticalOffsetLimitPercent(shape: RoundShape, scale: PhysicalScale): number {
   return sectionOffsetPercent(verticalOffsetLimitMm(shape, scale), roundDimensionsMm(shape, scale).radius);
+}
+
+/** The vertical cut's normal: horizontal and perpendicular to an axis that leans by d along +X, or +Y without a lean. */
+function verticalNormal(d: number): Vec3 {
+  const across: Vec3 = d === 0 ? [1, 0, 0] : normalised([d, 0, 0]);
+  return normalised(cross([0, 0, 1], across));
 }
 
 /**
@@ -243,8 +270,7 @@ export function verticalCylinderSection(
 ): VerticalCylinderSection {
   const { radius, height, offset: d } = roundDimensionsMm(shape, scale);
   const up: Vec3 = [0, 0, 1];
-  const across: Vec3 = d === 0 ? [1, 0, 0] : normalised([d, 0, 0]);
-  const n = normalised(cross(up, across));
+  const n = verticalNormal(d);
   const offset = sectionOffsetMm(offsetPercent, radius);
   const chord = polygonChord(radius, offset);
   if (!(chord.min < chord.max)) throw new GeometryError(`The vertical plane at ${offset} mm misses the cylinder.`);
@@ -500,6 +526,19 @@ export function coneSection(shape: ConeShape, scale: PhysicalScale, positionPerc
   };
 }
 
+/** A cone's vertical cut at n·x = offset, with C0 at the origin; the groove's entrance lies above, at +u. */
+export function coneVerticalSection(shape: ConeShape, scale: PhysicalScale, offsetPercent: number): ConeVerticalSection {
+  const dimensions = roundDimensionsMm(shape, scale);
+  const u: Vec3 = [0, 0, 1];
+  const n = verticalNormal(dimensions.offset);
+  const offset = sectionOffsetMm(offsetPercent, dimensions.radius);
+  return {
+    ...facetedSection(conePolyhedron(dimensions), { n, u, v: cross(u, n) }, offset, dimensions.radius, 1),
+    type: 'cone-vertical',
+    offset,
+  };
+}
+
 /**
  * The least distance each part must keep from the plane along the normal for a usable part, in millimetres: the rule of
  * a vertical cut, at least one wall and a tenth of the solid's extent. The position's limits already keep that share,
@@ -551,8 +590,9 @@ export const cutOfSection = (section: Section): SolidCut => {
 /** The geometry of the cut. */
 export function solidCut(shape: RoundShape, scale: PhysicalScale, cut: SolidCut): SolidSection {
   if (shape.kind === 'cone') {
-    if (typeof cut !== 'number') throw new GeometryError('A cone offers only a cut parallel to its base.');
-    return coneSection(shape, scale, cut);
+    if (typeof cut === 'number') return coneSection(shape, scale, cut);
+    if ('offsetPercent' in cut) return coneVerticalSection(shape, scale, cut.offsetPercent);
+    throw new GeometryError('A cone offers no oblique cut.');
   }
   if (typeof cut === 'number') return cylinderSection(shape, scale, cut);
   return 'offsetPercent' in cut
