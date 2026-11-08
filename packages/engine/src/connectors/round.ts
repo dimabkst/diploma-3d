@@ -1,26 +1,27 @@
-import { type CylinderShape, DIAMETRAL_CLEARANCE_LIMITS, type PhysicalScale, type RoundConnector } from '@diploma-3d/schema';
+import { DIAMETRAL_CLEARANCE_LIMITS, type PhysicalScale, type RoundConnector } from '@diploma-3d/schema';
 import type { Vec2 as KernelVec2, Manifold, Mat4 } from 'manifold-3d';
 import { ConnectorVerificationError } from '../errors.ts';
 import type { GeometryKernel } from '../kernel.ts';
 import type { Vec3 } from '../mesh.ts';
 import type { Track } from '../scope.ts';
 import type { Vec2 } from '../shapes/polygon.ts';
-import { circularSegments } from '../shapes/round.ts';
+import { circularSegments, type RoundShape } from '../shapes/round.ts';
 import { type ConnectorFeasibility, connectorFeasibility, type ParameterSpec } from './bounds.ts';
 import {
   CONNECTOR_MIN_WALL_MM,
-  type CylinderCut,
-  type CylinderSection,
   connectorVolumeTolerance,
-  cylinderCut,
   discWall,
+  type FacetedSection,
   facesOfPart,
   frameMatrix,
   framePoint,
+  insideEnvelope,
   lateralWall,
-  type ObliqueCylinderSection,
   type SectionFrame,
+  type SolidCut,
+  type SolidSection,
   satisfies,
+  solidCut,
 } from './frame.ts';
 
 /**
@@ -165,7 +166,7 @@ function siteLayout({ count, diameter, insertion, spacing }: RoundConnectorDimen
  * Each value is monotone in d, e, s and each clearance, which the bounds rely on: a larger d widens holes and
  * chamfers, a larger e deepens holes and may lengthen chamfers, a larger s moves holes apart and outwards.
  */
-export function roundConnectorChecks(section: CylinderSection, dimensions: RoundConnectorDimensions): RoundConnectorIssue[] {
+export function roundConnectorChecks(section: SolidSection, dimensions: RoundConnectorDimensions): RoundConnectorIssue[] {
   const { type, insertion, clearance } = dimensions;
   const sites = siteLayout(dimensions);
   const holeDepth = insertion + ROUND_CONNECTOR_DEPTH_ALLOWANCE_MM;
@@ -230,9 +231,9 @@ interface HoleExtent {
  * material, so the farther of its entrance and bottom from the axis plane counts; on the way there the entrance is the
  * thinner anyway. The bases are the planes z = 0 and z = H, at H/2 from the centroid.
  *
- * In an oblique cut they are measured to the actual faces that bound the part, see `obliqueHoleWalls`.
+ * In an oblique cut and in a cone they are measured to the actual faces that bound the part, see `facetedHoleWalls`.
  */
-function holeWalls(section: CylinderSection, part: Part, hole: HoleExtent, holeDepth: number) {
+function holeWalls(section: SolidSection, part: Part, hole: HoleExtent, holeDepth: number) {
   const { along, chamfer, straight, opening } = hole;
   if (section.type === 'parallel-to-bases') {
     const { inradius, leanAcross, lowerThickness, upperThickness } = section;
@@ -242,7 +243,7 @@ function holeWalls(section: CylinderSection, part: Part, hole: HoleExtent, holeD
       bottom: (part === 'upper' ? upperThickness : lowerThickness) - holeDepth,
     };
   }
-  if (section.type === 'oblique') return obliqueHoleWalls(section, part, hole, holeDepth);
+  if (section.type === 'oblique' || section.type === 'cone-parallel') return facetedHoleWalls(section, part, hole, holeDepth);
   const { offset, lean, stretch, height } = section;
   const towards = part === 'upper' ? 1 : -1;
   const reachOf = (radius: number) => lean * Math.abs(along) + radius * stretch;
@@ -258,12 +259,12 @@ function holeWalls(section: CylinderSection, part: Part, hole: HoleExtent, holeD
 }
 
 /**
- * A hole of an oblique cut, wherever the plane leaves the bases and the lateral side: it is a cone and a cylinder, both
- * convex, so that its circles at the entrance, at the end of the chamfer and at the bottom bound every point of it, and a
- * circle's wall to a face follows from the face's plane. The whole cavity is measured, with its bottom apart, because
- * a part may thin out behind a mouth that fits with room to spare.
+ * A hole measured on the actual faces: it is a cone and a cylinder, both convex, so that its circles at the entrance, at
+ * the end of the chamfer and at the bottom bound every point of it, and a circle's wall to a face follows from the face's
+ * plane. The whole cavity is measured, with its bottom apart, because a part may thin out behind a mouth that fits with
+ * room to spare: an upper cone narrows above the cut, and an oblique one moves away from the hole's fixed axis.
  */
-function obliqueHoleWalls(section: ObliqueCylinderSection, part: Part, hole: HoleExtent, holeDepth: number) {
+function facetedHoleWalls(section: FacetedSection, part: Part, hole: HoleExtent, holeDepth: number) {
   const { along, chamfer, straight, opening } = hole;
   const towards = part === 'upper' ? 1 : -1;
   const faces = facesOfPart(section, part === 'upper' ? 'positive' : 'negative');
@@ -273,9 +274,9 @@ function obliqueHoleWalls(section: ObliqueCylinderSection, part: Part, hole: Hol
 }
 
 /** What remains behind the root overlap of the plugs in the part that carries them. */
-function plugBacking(section: CylinderSection, sites: readonly { along: number; pinDiameter: number }[]): number {
+function plugBacking(section: SolidSection, sites: readonly { along: number; pinDiameter: number }[]): number {
   if (section.type === 'parallel-to-bases') return section.lowerThickness - PLUG_ROOT_OVERLAP_MM;
-  if (section.type === 'oblique') {
+  if (section.type === 'oblique' || section.type === 'cone-parallel') {
     const faces = facesOfPart(section, 'negative');
     return Math.min(
       ...sites.flatMap(({ along, pinDiameter }) =>
@@ -297,12 +298,12 @@ function plugBacking(section: CylinderSection, sites: readonly { along: number; 
  * `roundConnectorChecks` for the constraints.
  */
 export function planRoundConnectors(
-  shape: CylinderShape,
+  shape: RoundShape,
   scale: PhysicalScale,
-  cut: CylinderCut,
+  cut: SolidCut,
   connector: RoundConnector,
 ): RoundConnectorPlan {
-  const section = cylinderCut(shape, scale, cut);
+  const section = solidCut(shape, scale, cut);
   const dimensions = roundConnectorDimensions(connector, scale.longestDimensionMm, section.span / 2);
   const { frame } = section;
   const { insertion, clearance } = dimensions;
@@ -330,12 +331,12 @@ export type RoundConnectorParameter = 'diameter' | 'insertion' | 'spacing' | 'lo
  * policy for print trials rather than a geometric limit. A pair has a spacing, dowels a lower clearance.
  */
 export function roundConnectorFeasibility(
-  shape: CylinderShape,
+  shape: RoundShape,
   scale: PhysicalScale,
-  cut: CylinderCut,
+  cut: SolidCut,
   connector: RoundConnector,
 ): ConnectorFeasibility<RoundConnectorParameter, RoundConnectorIssue> {
-  const section = cylinderCut(shape, scale, cut);
+  const section = solidCut(shape, scale, cut);
   const dimensions = roundConnectorDimensions(connector, scale.longestDimensionMm, section.span / 2);
   const { radius, span, depthExtent } = section;
   const parameters: ParameterSpec<RoundConnectorParameter, RoundConnectorDimensions>[] = [
@@ -547,15 +548,16 @@ export function verifyRoundConnectors(
     for (const piece of pieces) track(piece);
     if (pieces.length !== 1) fail('connected');
   }
-  if (volume(built.lower.subtract(whole)) > tolerance) fail('lower-inside-envelope');
-  if (volume(built.upper.subtract(whole)) > tolerance) fail('upper-inside-envelope');
+  const envelope = insideEnvelope(track, whole, plan.frame);
+  if (volume(built.lower.subtract(envelope)) > tolerance) fail('lower-inside-envelope');
+  if (volume(built.upper.subtract(envelope)) > tolerance) fail('upper-inside-envelope');
   const cutOffset = n[0] * origin[0] + n[1] * origin[1] + n[2] * origin[2];
   for (const { cutters } of built.sites) {
     const inside = [
       ...(cutters.upper === undefined ? [] : [cutters.upper.trimByPlane([n[0], n[1], n[2]], cutOffset)]),
       ...(cutters.lower === undefined ? [] : [cutters.lower.trimByPlane([-n[0], -n[1], -n[2]], -cutOffset)]),
     ];
-    for (const cutter of inside) if (volume(track(cutter).subtract(whole)) > tolerance) fail('no-breakthrough');
+    for (const cutter of inside) if (volume(track(cutter).subtract(envelope)) > tolerance) fail('no-breakthrough');
   }
   if (volume(built.lower.intersect(built.upper)) > tolerance) fail('no-overlap');
   built.pins.forEach((pin, index) => {

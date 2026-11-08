@@ -1,14 +1,22 @@
-import { DOVETAIL_PROPORTIONS, obliqueCylinderSection, ROUND_CONNECTOR_PROPORTIONS, roundDimensionsMm } from '@diploma-3d/engine';
-import type { SectionType } from '@diploma-3d/schema';
+import {
+  coneSection,
+  DOVETAIL_PROPORTIONS,
+  obliqueCylinderSection,
+  ROUND_CONNECTOR_PROPORTIONS,
+  roundDimensionsMm,
+} from '@diploma-3d/engine';
+import type { SectionType, ShapeKind } from '@diploma-3d/schema';
 import { formatDecimal, formatSteppedDecimal, parseDecimal, type StepRange } from '../decimal.ts';
 
-/** What turns the connector settings into millimetres: the assembled model's longest side M and the cylinder's size. */
+/** What turns the connector settings into millimetres: the assembled model's longest side M and the solid's size. */
 export type ConnectorScale = {
   readonly longestDimensionMm: number;
   readonly radiusMm: number;
   readonly heightMm: number;
   /** The actual section's extent along u of the current or last valid oblique plane. */
   readonly obliqueSpanMm?: number | undefined;
+  /** The actual section's extent along u of a cone's current or last valid cut; a cylinder's is its diameter. */
+  readonly parallelSpanMm?: number | undefined;
 };
 
 /** The fields whose stored value is a multiplier or a percentage, shown in millimetres. */
@@ -17,28 +25,44 @@ export type ScaledConnectorKey =
   | 'cylinderDovetailLengthPercent'
   | 'cylinderRoundDiameter'
   | 'cylinderRoundDepth'
-  | 'cylinderRoundSpacingPercent';
+  | 'cylinderRoundSpacingPercent'
+  | 'coneDovetailSize'
+  | 'coneDovetailLengthPercent'
+  | 'coneRoundDiameter'
+  | 'coneRoundDepth'
+  | 'coneRoundSpacingPercent';
 
 /**
  * Millimetres per unit of each stored setting, following the engine's formulas: the dovetail's height h = 0,025·M·k and
  * its length L = (p/100)·S along the section's span S; the
  * round connectors' diameter d = 0,0625·M·k_d, a plug's height e = 0,05·M·k_e or a dowel's whole length 2e, and a pair's
- * distance from the centre s = (p/100)·S/2. The span is the diameter 2r in a parallel cut, the height H in a vertical
- * one and the actual section's extent along u in an oblique one. The stored values stay the source of truth, so a new M
+ * distance from the centre s = (p/100)·S/2. The span is the diameter 2r in a cylinder's parallel cut, the height H in a
+ * vertical one and the actual section's extent along u in an oblique one and in a cone. The stored values stay the source of truth, so a new M
  * scales every connector as before and a new radius, height or plane keeps the proportions.
  */
 export function connectorUnits(
-  { longestDimensionMm: m, radiusMm: r, heightMm, obliqueSpanMm }: ConnectorScale,
+  { longestDimensionMm: m, radiusMm: r, heightMm, obliqueSpanMm, parallelSpanMm }: ConnectorScale,
   roundType: 'plug' | 'dowel',
   sectionType: SectionType = 'parallel-to-bases',
 ): Readonly<Record<ScaledConnectorKey, number>> {
-  const span = sectionType === 'vertical' ? heightMm : sectionType === 'oblique' ? (obliqueSpanMm ?? 2 * r) : 2 * r;
+  const span =
+    sectionType === 'vertical' ? heightMm : sectionType === 'oblique' ? (obliqueSpanMm ?? 2 * r) : (parallelSpanMm ?? 2 * r);
+  const size = DOVETAIL_PROPORTIONS.height * m;
+  const length = span / 100;
+  const diameter = ROUND_CONNECTOR_PROPORTIONS.diameter * m;
+  const depth = ROUND_CONNECTOR_PROPORTIONS.insertion * m * (roundType === 'dowel' ? 2 : 1);
+  const spacing = span / 2 / 100;
   return {
-    cylinderDovetailSize: DOVETAIL_PROPORTIONS.height * m,
-    cylinderDovetailLengthPercent: span / 100,
-    cylinderRoundDiameter: ROUND_CONNECTOR_PROPORTIONS.diameter * m,
-    cylinderRoundDepth: ROUND_CONNECTOR_PROPORTIONS.insertion * m * (roundType === 'dowel' ? 2 : 1),
-    cylinderRoundSpacingPercent: span / 2 / 100,
+    cylinderDovetailSize: size,
+    cylinderDovetailLengthPercent: length,
+    cylinderRoundDiameter: diameter,
+    cylinderRoundDepth: depth,
+    cylinderRoundSpacingPercent: spacing,
+    coneDovetailSize: size,
+    coneDovetailLengthPercent: length,
+    coneRoundDiameter: diameter,
+    coneRoundDepth: depth,
+    coneRoundSpacingPercent: spacing,
   };
 }
 
@@ -72,6 +96,39 @@ export function cylinderConnectorScale(
       ? previous?.obliqueSpanMm
       : obliqueCylinderSection(shape, scale, { positionPercent, inclinationDeg, directionDeg }).span;
   return { longestDimensionMm: printSizeMm, radiusMm: radius, heightMm: height, obliqueSpanMm };
+}
+
+/**
+ * The cone's scale from valid values: its radius and height as the engine builds it, and the actual span of a valid cut;
+ * while the position is being corrected, `previous` keeps the last span.
+ */
+export function coneConnectorScale(
+  values: {
+    readonly printSizeMm?: number | undefined;
+    readonly coneHeightRatio?: number | undefined;
+    readonly coneOffsetRatio?: number | undefined;
+    readonly coneSectionPercent?: number | undefined;
+  },
+  previous?: ConnectorScale,
+): ConnectorScale | undefined {
+  const { printSizeMm, coneHeightRatio, coneOffsetRatio, coneSectionPercent } = values;
+  if (printSizeMm === undefined || coneHeightRatio === undefined || coneOffsetRatio === undefined) return undefined;
+  const shape = { kind: 'cone', heightRatio: coneHeightRatio, offsetRatio: coneOffsetRatio } as const;
+  const scale = { longestDimensionMm: printSizeMm };
+  const { radius, height } = roundDimensionsMm(shape, scale);
+  const parallelSpanMm =
+    coneSectionPercent === undefined ? previous?.parallelSpanMm : coneSection(shape, scale, coneSectionPercent).span;
+  return { longestDimensionMm: printSizeMm, radiusMm: radius, heightMm: height, parallelSpanMm };
+}
+
+/** The scale of the solid's connector settings; undefined for a solid without them, or while a value it needs is invalid. */
+export function connectorScaleOf(
+  kind: ShapeKind,
+  values: Parameters<typeof cylinderConnectorScale>[0] & Parameters<typeof coneConnectorScale>[0],
+  previous?: ConnectorScale,
+): ConnectorScale | undefined {
+  if (kind === 'cylinder') return cylinderConnectorScale(values, previous);
+  return kind === 'cone' ? coneConnectorScale(values, previous) : undefined;
 }
 
 // Display and slider precision: a thousandth of a millimetre.

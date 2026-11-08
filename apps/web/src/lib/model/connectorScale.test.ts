@@ -1,6 +1,8 @@
 import { dovetailProfileMm, planDovetail, planRoundConnectors, roundDimensionsMm } from '@diploma-3d/engine';
 import { describe, expect, it } from 'vitest';
 import {
+  coneConnectorScale,
+  connectorScaleOf,
   connectorUnits,
   cylinderConnectorScale,
   formatPhysical,
@@ -35,7 +37,7 @@ describe('connector settings in millimetres', () => {
     const scale = scaleOf(80);
     const plug = connectorUnits(scale, 'plug');
     const dowel = connectorUnits(scale, 'dowel');
-    expect(plug).toEqual({
+    expect(plug).toMatchObject({
       cylinderDovetailSize: 2,
       cylinderDovetailLengthPercent: 0.8,
       cylinderRoundDiameter: 5,
@@ -206,5 +208,34 @@ describe('connector settings on an oblique plane', () => {
       0.8,
       12,
     );
+  });
+});
+
+describe('connector settings on a cone', () => {
+  const values = { printSizeMm: 80, coneHeightRatio: 2, coneOffsetRatio: 0 };
+
+  it('measures lengths on the actual section, which narrows towards the apex, and the profile and pins on M', () => {
+    const [low, high] = [20, 60].map((coneSectionPercent) => coneConnectorScale({ ...values, coneSectionPercent }));
+    expect(low?.parallelSpanMm).toBeCloseTo(64, 9);
+    expect(high?.parallelSpanMm).toBeCloseTo(32, 9);
+    const [lowUnits, highUnits] = [low, high].map((scale) => connectorUnits(scale as NonNullable<typeof scale>, 'plug'));
+    expect(lowUnits?.coneDovetailLengthPercent).toBeCloseTo(0.64, 9);
+    expect(highUnits?.coneRoundSpacingPercent).toBeCloseTo(0.16, 9);
+    expect(lowUnits?.coneRoundDiameter).toBe(5);
+    expect(highUnits?.coneRoundDiameter).toBe(5);
+    expect(highUnits?.coneDovetailSize).toBe(2);
+    expect(connectorUnits(high as NonNullable<typeof high>, 'dowel').coneRoundDepth).toBe(8);
+  });
+
+  it('keeps the last span while the position is being corrected, and needs the solid’s values', () => {
+    const last = coneConnectorScale({ ...values, coneSectionPercent: 60 });
+    expect(coneConnectorScale(values, last)?.parallelSpanMm).toBe(last?.parallelSpanMm);
+    expect(coneConnectorScale({ printSizeMm: 80 })).toBeUndefined();
+    expect(connectorScaleOf('cone', values)?.radiusMm).toBe(40);
+    expect(connectorScaleOf('cube', values)).toBeUndefined();
+  });
+
+  it('leaves a cylinder’s parallel cut on its diameter', () => {
+    expect(connectorUnits(scaleOf(80), 'plug').cylinderDovetailLengthPercent).toBeCloseTo(0.8, 12);
   });
 });

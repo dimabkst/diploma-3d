@@ -22,7 +22,7 @@ import {
   dovetailFeasibility,
   planDovetail,
 } from './dovetail.ts';
-import { type CylinderSection, cylinderSection, satisfies } from './frame.ts';
+import { cylinderSection, type SolidSection, satisfies } from './frame.ts';
 import {
   planRoundConnectors,
   ROUND_CONNECTOR_PROPORTIONS,
@@ -249,7 +249,7 @@ describe('the dovetail', () => {
 type Probe<Key extends string> = (key: Key, value: number) => readonly { valueMm: number; minimumMm: number }[];
 
 const roundProbe =
-  (section: CylinderSection, dimensions: RoundConnectorDimensions): Probe<RoundConnectorParameter> =>
+  (section: SolidSection, dimensions: RoundConnectorDimensions): Probe<RoundConnectorParameter> =>
   (key, value) => {
     const clearance = { ...dimensions.clearance };
     if (key === 'lowerClearance') clearance.lower = value;
@@ -259,7 +259,7 @@ const roundProbe =
   };
 
 const dovetailProbe =
-  (section: CylinderSection, dimensions: DovetailDimensions): Probe<DovetailParameter> =>
+  (section: SolidSection, dimensions: DovetailDimensions): Probe<DovetailParameter> =>
   (key, value) =>
     dovetailChecks(section, { ...dimensions, [key]: value });
 

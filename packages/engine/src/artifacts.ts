@@ -102,7 +102,9 @@ const scaled = (a: Vec3, factor: number): Vec3 => [a[0] * factor, a[1] * factor,
 /**
  * The print file's objects, side by side on the build plate. Flat cut faces keep the parts as they are. With a parallel
  * cut's connector both connector faces print upwards: the lower part stands on its lower base, and the upper part is
- * turned half a turn about u onto its upper base, which also keeps a dovetail groove's flanks at 45° overhangs. A
+ * turned half a turn about u onto its upper base, which also keeps a dovetail groove's flanks at 45° overhangs. An upper
+ * cone has an apex instead of that base: it stays upright on its cut face, with its holes or groove opening towards the
+ * bed, which they may need supports for. A
  * vertical cut's parts stay upright on what remains of their bases, by translation only; their connector faces stand
  * upright too, so a connector along them may need another orientation in the slicer. An oblique cut's parts each choose
  * their own resting face, see `restOnFlatFace`. Removable dowels stand upright on an end face.
@@ -127,7 +129,7 @@ function printObjects({ solids, section, spec }: GeneratedModel): readonly Three
   return arrangeInRow(
     solids.map((solid) => {
       if (solid.part === 'dowel') return { ...solid, mesh: rotateOntoZ(solid.mesh, n) };
-      return solid.part === 'upper' ? { ...solid, mesh: rotateHalfTurn(solid.mesh, u) } : solid;
+      return solid.part === 'upper' && spec.shape.kind !== 'cone' ? { ...solid, mesh: rotateHalfTurn(solid.mesh, u) } : solid;
     }),
   );
 }

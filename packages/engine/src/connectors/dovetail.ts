@@ -1,25 +1,30 @@
-import { type CylinderShape, DOVETAIL_CLEARANCE_LIMITS, type DovetailConnector, type PhysicalScale } from '@diploma-3d/schema';
+import { DOVETAIL_CLEARANCE_LIMITS, type DovetailConnector, type PhysicalScale } from '@diploma-3d/schema';
 import type { Vec2 as KernelVec2, Vec3 as KernelVec3, Manifold, Mat4 } from 'manifold-3d';
 import { ConnectorVerificationError, GeometryError } from '../errors.ts';
 import type { GeometryKernel } from '../kernel.ts';
 import type { Vec3 } from '../mesh.ts';
 import type { Track } from '../scope.ts';
 import type { Vec2 } from '../shapes/polygon.ts';
+import type { RoundShape } from '../shapes/round.ts';
 import { type ConnectorFeasibility, connectorFeasibility } from './bounds.ts';
 import {
   CONNECTOR_MIN_WALL_MM,
-  type CylinderCut,
-  type CylinderSection,
+  type ConeParallelSection,
   connectorVolumeTolerance,
-  cylinderCut,
+  type FacetedSection,
   facesOfPart,
   framePoint,
+  insideEnvelope,
   lateralWall,
   type ObliqueCylinderSection,
   type ParallelCylinderSection,
   pointWall,
   type SectionFrame,
+  type SolidCut,
+  type SolidFace,
+  type SolidSection,
   satisfies,
+  solidCut,
   type VerticalCylinderSection,
 } from './frame.ts';
 
@@ -192,11 +197,11 @@ function grooveExtent({ height, clearance }: DovetailDimensions) {
  * - The tongue is at least 1,2 mm high and 2,4 mm wide at its neck.
  * - The undercut B/2 − (b/2 + c·√2) = h − c·√2 keeps at least 0,4 mm on each side once the clearance is taken up.
  * - After its lead-in chamfer the tongue keeps a straight working length L − 0,25·h of at least 1,2 mm.
- * - The walls around the groove keep 1,2 mm, see `parallelWalls`, `verticalWalls` and `obliqueWalls`.
+ * - The walls around the groove keep 1,2 mm, see `parallelWalls`, `verticalWalls`, `obliqueWalls` and `coneWalls`.
  *
  * Each value is concave in h, L and c, which the bounds rely on.
  */
-export function dovetailChecks(section: CylinderSection, dimensions: DovetailDimensions): DovetailIssue[] {
+export function dovetailChecks(section: SolidSection, dimensions: DovetailDimensions): DovetailIssue[] {
   const { height, length } = dimensions;
   const { rootWidth, headWidth } = dovetailProfileOfHeight(height);
   const groove = grooveExtent(dimensions);
@@ -211,7 +216,7 @@ export function dovetailChecks(section: CylinderSection, dimensions: DovetailDim
 }
 
 function wallsOf(
-  section: CylinderSection,
+  section: SolidSection,
   dimensions: DovetailDimensions,
   groove: ReturnType<typeof grooveExtent>,
 ): DovetailIssue[] {
@@ -222,6 +227,8 @@ function wallsOf(
       return verticalWalls(section, dimensions, groove);
     case 'oblique':
       return obliqueWalls(section, dimensions, groove);
+    case 'cone-parallel':
+      return coneWalls(section, dimensions, groove);
   }
 }
 
@@ -303,23 +310,10 @@ function obliqueWalls(
   const { wall } = DOVETAIL_MINIMUMS_MM;
   const closedEnd = -(length / 2 + clearance);
   const uphillEnd = length / 2;
-  const corners = (along: number): [number, number, number][] => [
-    [along, groove.neckHalfWidth, 0],
-    [along, -groove.neckHalfWidth, 0],
-    [along, groove.halfWidth, groove.top],
-    [along, -groove.halfWidth, groove.top],
-  ];
+  const corners = (along: number) => [...neckCorners(along, groove), ...topCorners(along, groove)];
   const faces = facesOfPart(section, 'positive');
-  const wallOf = (points: readonly [number, number, number][], of: typeof faces) =>
-    Math.min(...of.flatMap((face) => points.map(([along, across, normal]) => pointWall(face, along, across, normal))));
   const ahead = faces.filter((face) => face.alongU < 0);
   const beside = faces.filter((face) => face.alongU >= 0);
-  const { rootWidth } = dovetailProfileOfHeight(height);
-  const root = rootWidth / 2 - DOVETAIL_ROOT_OVERLAP_MM;
-  const rootCorners = [length / 2, -length / 2].flatMap((along) => [
-    [along, root, -DOVETAIL_ROOT_OVERLAP_MM] as [number, number, number],
-    [along, -root, -DOVETAIL_ROOT_OVERLAP_MM] as [number, number, number],
-  ]);
   return [
     {
       code: 'groove-wall-thin',
@@ -327,8 +321,74 @@ function obliqueWalls(
       minimumMm: wall,
     },
     { code: 'stop-thin', valueMm: wallOf(corners(closedEnd), ahead), minimumMm: wall },
-    { code: 'base-thin', valueMm: wallOf(rootCorners, facesOfPart(section, 'negative')), minimumMm: wall },
+    { code: 'base-thin', valueMm: rootWall(section, length, height), minimumMm: wall },
   ];
+}
+
+/**
+ * The upper cone narrows above the cut, so the expanded groove can run out of material although the tongue's footprint
+ * fits in the section. The engaged groove is a convex prism along u, so that its corners at the closed end and at the
+ * seated tongue's end towards the entrance bound it: at its top they measure the roof, at the cut the side walls, and
+ * ahead of the closed end the stop. An oblique cone is not symmetric across the groove, so that both sides count. Towards
+ * the entrance the channel leaves the cone beyond the tongue, the one opening meant to exist.
+ */
+function coneWalls(
+  section: ConeParallelSection,
+  { height, length, clearance }: DovetailDimensions,
+  groove: ReturnType<typeof grooveExtent>,
+): DovetailIssue[] {
+  const { wall } = DOVETAIL_MINIMUMS_MM;
+  const closedEnd = length / 2 + clearance;
+  const openEnd = -length / 2;
+  const faces = facesOfPart(section, 'positive');
+  const ahead = faces.filter((face) => face.alongU > 0);
+  const beside = faces.filter((face) => face.alongU <= 0);
+  return [
+    {
+      code: 'groove-wall-thin',
+      valueMm: Math.min(wallOf(neckCorners(openEnd, groove), faces), wallOf(neckCorners(closedEnd, groove), beside)),
+      minimumMm: wall,
+    },
+    {
+      code: 'stop-thin',
+      valueMm: wallOf([...neckCorners(closedEnd, groove), ...topCorners(closedEnd, groove)], ahead),
+      minimumMm: wall,
+    },
+    {
+      code: 'backing-thin',
+      valueMm: Math.min(wallOf(topCorners(openEnd, groove), faces), wallOf(topCorners(closedEnd, groove), beside)),
+      minimumMm: wall,
+    },
+    { code: 'base-thin', valueMm: rootWall(section, length, height), minimumMm: wall },
+  ];
+}
+
+type FramePosition = readonly [along: number, across: number, normal: number];
+
+/** The groove's corners at the cut, at this position along u. */
+const neckCorners = (along: number, { neckHalfWidth }: ReturnType<typeof grooveExtent>): FramePosition[] => [
+  [along, neckHalfWidth, 0],
+  [along, -neckHalfWidth, 0],
+];
+
+/** The groove's corners at its top, at this position along u. */
+const topCorners = (along: number, { halfWidth, top }: ReturnType<typeof grooveExtent>): FramePosition[] => [
+  [along, halfWidth, top],
+  [along, -halfWidth, top],
+];
+
+/** The least wall from these points to these faces. */
+const wallOf = (points: readonly FramePosition[], faces: readonly SolidFace[]): number =>
+  Math.min(...faces.flatMap((face) => points.map(([along, across, normal]) => pointWall(face, along, across, normal))));
+
+/** What the part under the tongue keeps behind its root overlap, at both ends of the tongue, to that part's own faces. */
+function rootWall(section: FacetedSection, length: number, height: number): number {
+  const root = dovetailProfileOfHeight(height).rootWidth / 2 - DOVETAIL_ROOT_OVERLAP_MM;
+  const corners = [length / 2, -length / 2].flatMap((along): FramePosition[] => [
+    [along, root, -DOVETAIL_ROOT_OVERLAP_MM],
+    [along, -root, -DOVETAIL_ROOT_OVERLAP_MM],
+  ]);
+  return wallOf(corners, facesOfPart(section, 'negative'));
 }
 
 /** The settings in millimetres: h from M, and L as its percentage of the section's span 2·halfSpan along u. */
@@ -345,8 +405,8 @@ export function dovetailDimensions(
 }
 
 /** The frame the dovetail is built in: the u of a vertical or oblique cut turned downhill, see `DovetailFrame`. */
-function dovetailFrame({ type, frame }: CylinderSection): DovetailFrame {
-  if (type === 'parallel-to-bases') return frame;
+function dovetailFrame({ type, frame }: SolidSection): DovetailFrame {
+  if (type === 'parallel-to-bases' || type === 'cone-parallel') return frame;
   const [u, v]: Vec3[] = [scaleVec(frame.u, -1), scaleVec(frame.v, -1)];
   return { ...frame, u: u as Vec3, v: v as Vec3 };
 }
@@ -365,16 +425,13 @@ function dovetailFrame({ type, frame }: CylinderSection): DovetailFrame {
  * off by moving straight up, and is seated by moving down until the tongue meets the stop. The section reaches H/2
  * above the centroid, where a right cylinder's channel opens through the upper base.
  *
+ * A cone's cut parallel to its base slides like a cylinder's parallel cut, with the stop at +u and the entrance at −u.
+ *
  * An oblique cut does the same along the plane: part A comes off uphill and is seated downhill, the entrance uphill and
  * the stop downhill, whatever the plane's direction. See `dovetailChecks` for the constraints.
  */
-export function planDovetail(
-  shape: CylinderShape,
-  scale: PhysicalScale,
-  cut: CylinderCut,
-  connector: DovetailConnector,
-): DovetailPlan {
-  const section = cylinderCut(shape, scale, cut);
+export function planDovetail(shape: RoundShape, scale: PhysicalScale, cut: SolidCut, connector: DovetailConnector): DovetailPlan {
+  const section = solidCut(shape, scale, cut);
   const dimensions = dovetailDimensions(connector, scale.longestDimensionMm, section.span / 2);
   const { height, length: tongueLength, clearance } = dimensions;
   const { rootWidth, headWidth } = dovetailProfileOfHeight(height);
@@ -399,10 +456,12 @@ export function planDovetail(
 
 /**
  * How far the part with the groove reaches from the section's centre towards the entrance, where the tongue slides: half
- * the span in a symmetric section; in an oblique one, the part's actual extent within the groove's depth.
+ * the span in a symmetric section of a cylinder; otherwise the part's actual extent within the groove's depth.
  */
-function grooveReach(section: CylinderSection, dimensions: DovetailDimensions): number {
-  return section.type === 'oblique' ? section.uphillReachWithin(grooveExtent(dimensions).top) : section.span / 2;
+function grooveReach(section: SolidSection, dimensions: DovetailDimensions): number {
+  return section.type === 'oblique' || section.type === 'cone-parallel'
+    ? section.entranceReachWithin(grooveExtent(dimensions).top)
+    : section.span / 2;
 }
 
 /** The dovetail's dimensions in millimetres, each solved for with the others fixed. */
@@ -415,12 +474,12 @@ export type DovetailParameter = 'height' | 'length' | 'clearance';
  * within its calibration window, a policy for print trials rather than a geometric limit.
  */
 export function dovetailFeasibility(
-  shape: CylinderShape,
+  shape: RoundShape,
   scale: PhysicalScale,
-  cut: CylinderCut,
+  cut: SolidCut,
   connector: DovetailConnector,
 ): ConnectorFeasibility<DovetailParameter, DovetailIssue> {
-  const section = cylinderCut(shape, scale, cut);
+  const section = solidCut(shape, scale, cut);
   const dimensions = dovetailDimensions(connector, scale.longestDimensionMm, section.span / 2);
   const lowest = DOVETAIL_MINIMUMS_MM.tongueHeight / 2;
   return connectorFeasibility((current) => dovetailChecks(section, current), dimensions, [
@@ -530,6 +589,7 @@ const RETENTION_PROBE_MM = 0.05;
  * - Each part is one connected solid.
  * - Neither part leaves the uncut cylinder: the tongue adds material only inside it.
  * - The assembled parts do not overlap.
+ * - The groove has no opening but its entrance: up to the seated tongue's end it stays inside the uncut solid.
  * - The insertion path is clear: the tongue's full profile swept along −u over the whole exit distance, a prism that
  *   holds the chamfered end as well, does not meet the upper part; its end position lies outside the uncut upper part,
  *   so the entrance opens to the outside.
@@ -555,9 +615,12 @@ export function verifyDovetail(
     for (const piece of pieces) track(piece);
     if (pieces.length !== 1) fail('connected');
   }
-  if (volume(built.lower.subtract(original.whole)) > tolerance) fail('lower-inside-envelope');
-  if (volume(built.upper.subtract(original.whole)) > tolerance) fail('upper-inside-envelope');
+  const envelope = insideEnvelope(track, original.whole, plan.frame);
+  if (volume(built.lower.subtract(envelope)) > tolerance) fail('lower-inside-envelope');
+  if (volume(built.upper.subtract(envelope)) > tolerance) fail('upper-inside-envelope');
   if (volume(built.lower.intersect(built.upper)) > tolerance) fail('no-overlap');
+  const engaged = prismAlongU(kernel, track, plan.frame, plan.grooveProfile, plan.length / 2 + plan.clearance, -plan.length / 2);
+  if (volume(engaged.subtract(envelope)) > tolerance) fail('single-entrance');
   const sweep = prismAlongU(kernel, track, plan.frame, plan.tongueProfile, plan.length / 2, -plan.length / 2 - plan.exitDistance);
   if (volume(sweep.intersect(built.upper)) > tolerance) fail('clear-path');
   const outside = track(built.tongue.translate(scaleVec(u, -plan.exitDistance)));

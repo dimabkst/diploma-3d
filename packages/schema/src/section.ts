@@ -117,7 +117,7 @@ export const CONNECTOR_TYPES = ['dovetail', 'plug', 'dowel'] as const;
 
 export type ConnectorType = (typeof CONNECTOR_TYPES)[number];
 
-/** The plane z = zBottom + t·h with t = positionPercent/100: parallel to the bases, also of an oblique solid. */
+/** The plane z = zBottom + t·h with t = positionPercent/100: parallel to the base or bases, also of an oblique solid. */
 export const parallelSectionSchema = z.strictObject({
   type: z.literal('parallel-to-bases'),
   positionPercent: sectionPositionSchema,

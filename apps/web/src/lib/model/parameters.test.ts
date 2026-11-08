@@ -173,6 +173,16 @@ describe('resolveModelRequest', () => {
       coneHeightRatio: '2',
       coneOffsetRatio: '0',
       coneInclinationDeg: '90',
+      coneSectionPercent: '50',
+      coneDovetailSize: '1',
+      coneDovetailLengthPercent: '50',
+      coneDovetailClearanceMm: '0,2',
+      coneRoundSpacingPercent: '45',
+      coneRoundDiameter: '1',
+      coneRoundDepth: '1',
+      conePlugClearanceMm: '0,2',
+      coneDowelLowerClearanceMm: '0,1',
+      coneDowelUpperClearanceMm: '0,2',
       cylinderSectionPercent: '50',
       cylinderSectionOffsetPercent: '0',
       cylinderObliquePositionPercent: '50',
@@ -197,6 +207,10 @@ describe('resolveModelRequest', () => {
       cylinderPartsSeparated: true,
       cylinderConnector: 'none',
       cylinderRoundCount: 1,
+      coneSection: 'none',
+      conePartsSeparated: true,
+      coneConnector: 'none',
+      coneRoundCount: 1,
     });
     expect(resolveModelRequest('cuboid', initialParameterTexts(), triangle).spec).toEqual({
       shape: { kind: 'cuboid', widthRatio: 1.5, heightRatio: 2 },
@@ -1297,14 +1311,15 @@ describe('a cylinder section parallel to the bases', () => {
     });
   });
 
-  it('belongs to the cylinder only', () => {
+  it('is chosen per solid, and not offered by solids without sections', () => {
     for (const kind of ['cone', 'prism', 'cube'] as const) {
       expect(resolveModelRequest(kind, texts({}), parallel).spec).not.toHaveProperty('section');
       expect(activeSection(kind, parallel)).toBeUndefined();
-      expect(partsSeparated(kind, parallel)).toBe(false);
     }
+    for (const kind of ['prism', 'cube'] as const) expect(partsSeparated(kind, parallel)).toBe(false);
     const cone = shapePanel('cone', parallel);
-    expect(cone.type === 'parameters' && cone.sections.map((part) => part.title)).toEqual(['Висота', 'Нахил']);
+    // The cone's own choice is still "no section": no connector group.
+    expect(cone.type === 'parameters' && cone.sections.map((part) => part.title)).toEqual(['Висота', 'Нахил', 'Переріз']);
   });
 
   it('resets to no section at 50 % with the parts apart, keeping the print size and the other shapes', () => {
@@ -2262,5 +2277,163 @@ describe('an oblique section of the cylinder', () => {
     ).toBe(true);
     expect(activeSection('cylinder', sectioned)).toBe('oblique');
     expect(activeConnector('cylinder', choose('plug'))).toBe('plug');
+  });
+});
+
+describe('a section of the cone parallel to its base', () => {
+  const sectioned = { ...triangle, coneSection: 'parallel-to-bases' } as const;
+  const choose = (coneConnector: 'dovetail' | 'plug' | 'dowel', coneRoundCount: 1 | 2 = 1) =>
+    ({ ...sectioned, coneConnector, coneRoundCount }) as const;
+  const request = (overrides: Partial<ParameterTexts> = {}, choices: typeof triangle = sectioned) =>
+    resolveModelRequest('cone', texts(overrides), choices);
+  const groupsOf = (choices: typeof triangle, overrides: Partial<ParameterTexts> = {}) => {
+    const { values, sectionRanges } = request(overrides, choices);
+    const panel = shapePanel('cone', choices, { values, sectionRanges });
+    return panel.type === 'parameters' ? panel.sections : [];
+  };
+  const group = (choices: typeof triangle, title: string, overrides: Partial<ParameterTexts> = {}) => {
+    const found = groupsOf(choices, overrides).find((part) => part.title === title);
+    if (found === undefined) throw new Error(`No group ${title}`);
+    return found;
+  };
+
+  it('offers only that cut, with the position’s label, unit, range and step, starting at 50 %', () => {
+    const result = request();
+    expect(result.errors).toEqual({});
+    expect(result.spec?.section).toEqual({ type: 'parallel-to-bases', positionPercent: 50 });
+    const cut = group(sectioned, 'Переріз');
+    expect(cut.status).toEqual({ text: 'паралельно основі', highlighted: true });
+    expect(cut.fields[0]).toMatchObject({
+      options: [
+        { value: 'none', label: 'Без перерізу' },
+        { value: 'parallel-to-bases', label: 'Паралельно основі' },
+      ],
+    });
+    expect(sectionNumberFields(cut)).toMatchObject([
+      { key: 'coneSectionPercent', label: 'Від основи', suffix: '% h', range: { min: 10, max: 90, increment: 5 } },
+    ]);
+    expect(cut.fields.at(-1)).toMatchObject({ type: 'toggle', key: 'conePartsSeparated' });
+  });
+
+  it('explains itself as asked, with the connectors below that explanation', () => {
+    const { help } = group(sectioned, 'Переріз');
+    expect(help?.label).toBe('Як задано переріз?');
+    expect(help?.text).toContain(
+      'Площина перерізу паралельна основі. Положення задається у відсотках від висоти конуса: 50% — на половині висоти. ' +
+        'Нижня частина є зрізаним конусом, верхня — меншим конусом. Ближче до вершини переріз стає меншим.',
+    );
+    const titles = groupsOf(choose('plug')).map(({ title }) => title);
+    expect(titles).toEqual(['Висота', 'Нахил', 'Переріз', 'Кріплення']);
+  });
+
+  it('holds typed positions to the slider’s bounds', () => {
+    expect(request({ coneSectionPercent: '9,9' }).errors.coneSectionPercent).toBe('Допустимі значення — від 10 % до 90 %.');
+    expect(request({ coneSectionPercent: '90,1' }).spec).toBeUndefined();
+    expect(request({ coneSectionPercent: '' }).errors.coneSectionPercent).toBe('Введіть значення.');
+    expect(request({ coneSectionPercent: '37,5' }).spec?.section).toMatchObject({ positionPercent: 37.5 });
+  });
+
+  it('keeps its own values, apart from the cylinder’s', () => {
+    const cylinderChosen = { ...triangle, cylinderSection: 'parallel-to-bases' } as const;
+    const edited = texts({ cylinderSectionPercent: '70', coneSectionPercent: '20', cylinderRoundDiameter: '2' });
+    expect(resolveModelRequest('cone', edited, sectioned).spec?.section).toMatchObject({ positionPercent: 20 });
+    expect(resolveModelRequest('cylinder', edited, cylinderChosen).spec?.section).toMatchObject({ positionPercent: 70 });
+    expect(activeSection('cone', cylinderChosen)).toBeUndefined();
+    expect(activeSection('cylinder', sectioned)).toBeUndefined();
+    expect(partsSeparated('cone', { ...sectioned, conePartsSeparated: false })).toBe(false);
+    expect(partsSeparated('cone', sectioned)).toBe(true);
+  });
+
+  it.each([
+    ['dovetail', 1],
+    ['plug', 1],
+    ['plug', 2],
+    ['dowel', 1],
+    ['dowel', 2],
+  ] as const)('takes a %s × %d in the specification, at its defaults', (connector, count) => {
+    const result = request({}, choose(connector, count));
+    expect(result.errors).toEqual({});
+    expect(result.spec?.section?.connector?.type).toBe(connector);
+    expect(result.sectionRanges).toBeDefined();
+    for (const range of Object.values(result.sectionRanges ?? {})) expect(range).not.toBeNull();
+  });
+
+  it('shows connectors in millimetres, with lower and upper parts named as in a parallel cut', () => {
+    const { values, sectionRanges } = request({}, choose('dowel', 2));
+    const panel = shapePanel('cone', choose('dowel', 2), {
+      values,
+      sectionRanges,
+      connectorScale: { longestDimensionMm: 80, radiusMm: 40, heightMm: 80, parallelSpanMm: 40 },
+    });
+    const fields = panel.type === 'parameters' ? panel.sections.flatMap(sectionNumberFields) : [];
+    const field = (key: string) => fields.find((candidate) => candidate.key === key);
+    expect(field('coneRoundDiameter')?.unit).toBe(5);
+    expect(field('coneRoundDepth')?.unit).toBe(8);
+    expect(field('coneRoundSpacingPercent')?.unit).toBeCloseTo(0.2, 9);
+    expect(field('coneDowelLowerClearanceMm')?.label).toBe('Збільшення діаметра нижніх отворів, мм');
+    expect(field('coneDowelUpperClearanceMm')?.label).toBe('Збільшення діаметра верхніх отворів, мм');
+  });
+
+  it('explains a hole that the narrowing cone cuts short, keeps the settings, and blocks the model', () => {
+    const edited = { coneSectionPercent: '80', coneRoundDepth: '3' };
+    const result = request(edited, choose('plug'));
+    expect(result.spec).toBeUndefined();
+    expect(result.errors.coneRoundDepth).toMatch(/конус звужується/);
+    expect(result.errors.coneRoundDepth).toMatch(/у верхній частині/);
+    expect(result.errors.coneRoundDepth).toMatch(/опустіть переріз/);
+    expect(result.errors.coneRoundDepth).toMatch(/Зараз допустимо/);
+    expect(result.values.coneRoundDepth).toBe(3);
+  });
+
+  it('reports an empty interval near the apex as no value, without reversed bounds', () => {
+    const result = request({ coneSectionPercent: '90' }, choose('plug'));
+    expect(result.spec).toBeUndefined();
+    expect(result.sectionRanges?.coneRoundDiameter).toBeNull();
+    const fields = sectionNumberFields(group(choose('plug'), 'Кріплення', { coneSectionPercent: '90' }));
+    expect(fields.find(({ key }) => key === 'coneRoundDiameter')?.range).toBeUndefined();
+    expect(result.errors.coneRoundDiameter).toMatch(/жодне значення/);
+    // Smooth surfaces stay available there.
+    expect(request({ coneSectionPercent: '90' }).spec).toBeDefined();
+  });
+
+  it('explains what limits a dovetail near the apex in terms of the groove', () => {
+    const roof = request(
+      { coneSectionPercent: '80', coneDovetailSize: '2', coneDovetailLengthPercent: '18,75' },
+      choose('dovetail'),
+    );
+    expect(roof.spec).toBeUndefined();
+    expect(roof.errors.coneDovetailSize).toMatch(/Над пазом лишається/);
+    const stop = request({ coneDovetailLengthPercent: '95' }, choose('dovetail'));
+    expect(stop.errors.coneDovetailLengthPercent).toMatch(/За упором паза лишається/);
+  });
+
+  it('notes the print placement and supports without promising anything', () => {
+    for (const connector of ['dovetail', 'plug', 'dowel'] as const) {
+      const help = group(choose(connector), 'Кріплення').help?.text;
+      expect(help).toMatch(/вершиною догори/);
+      expect(help).toMatch(/можуть потребувати підтримок/);
+    }
+  });
+
+  it('resets its own fields and keeps the print size and the cylinder’s', () => {
+    const edited: ParameterState = {
+      texts: texts({ printSizeMm: '120', coneSectionPercent: '20', coneRoundDiameter: '2', cylinderSectionPercent: '70' }),
+      choices: { ...choose('plug', 2), conePartsSeparated: false, cylinderSection: 'parallel-to-bases' },
+    };
+    expect(canResetShapeParameters('cone', edited)).toBe(true);
+    const reset = resetShapeParameters('cone', edited);
+    expect(reset.texts).toEqual(texts({ printSizeMm: '120', cylinderSectionPercent: '70' }));
+    expect(reset.choices).toMatchObject({
+      coneSection: 'none',
+      coneConnector: 'none',
+      coneRoundCount: 1,
+      conePartsSeparated: true,
+      cylinderSection: 'parallel-to-bases',
+    });
+    // Without a section its settings shape nothing.
+    const hidden: ParameterState = { texts: texts({ coneSectionPercent: '20', coneRoundDiameter: '2' }), choices: triangle };
+    expect(canResetShapeParameters('cone', hidden)).toBe(false);
+    expect(activeConnector('cone', choose('plug'))).toBe('plug');
+    expect(shapeParameterKeys.cone.choices).toContain('coneSection');
   });
 });

@@ -743,11 +743,17 @@ describe('plane sections', () => {
     expect(modelSpecSchema.safeParse({ shape: cylinder, scale, section: { ...at(50), extra: 1 } }).success).toBe(false);
   });
 
-  it('offers the section only for the cylinder so far', () => {
-    expect(SECTIONS_BY_SHAPE).toEqual({ cylinder: ['parallel-to-bases', 'vertical', 'oblique'] });
-    const cone = modelSpecSchema.safeParse({ shape: { kind: 'cone', heightRatio: 2 }, scale, section: at(50) });
-    expect(cone.success).toBe(false);
-    expect(cone.error?.issues[0]?.path).toEqual(['section']);
+  it('offers parallel sections for the cylinder and the cone, and the other planes for the cylinder alone', () => {
+    expect(SECTIONS_BY_SHAPE).toEqual({ cylinder: ['parallel-to-bases', 'vertical', 'oblique'], cone: ['parallel-to-bases'] });
+    const shape = { kind: 'cone', heightRatio: 2 };
+    const cone = modelSpecSchema.safeParse({ shape, scale, section: at(50) });
+    expect(cone.success).toBe(true);
+    for (const positionPercent of [9.9, 90.1, Number.NaN]) {
+      expect(modelSpecSchema.safeParse({ shape, scale, section: at(positionPercent) }).success).toBe(false);
+    }
+    const oblique = modelSpecSchema.safeParse({ shape, scale, section: { type: 'oblique' } });
+    expect(oblique.success).toBe(false);
+    expect(oblique.error?.issues[0]?.path).toEqual(['section']);
     expect(modelSpecSchema.safeParse({ shape: { kind: 'cube' }, scale, section: at(50) }).success).toBe(false);
   });
 });

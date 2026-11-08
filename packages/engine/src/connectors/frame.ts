@@ -1,9 +1,15 @@
-import { type CylinderShape, type PhysicalScale, SECTION_POSITION_LIMITS, type Section } from '@diploma-3d/schema';
-import type { Mat4 } from 'manifold-3d';
+import {
+  type ConeShape,
+  type CylinderShape,
+  type PhysicalScale,
+  SECTION_POSITION_LIMITS,
+  type Section,
+} from '@diploma-3d/schema';
+import type { Manifold, Mat4 } from 'manifold-3d';
 import { GeometryError } from '../errors.ts';
 import { cross, dot, length, type Vec3 } from '../mesh.ts';
 import { cosSinDeg } from '../shapes/angle.ts';
-import { circularSegments, roundDimensionsMm } from '../shapes/round.ts';
+import { circularSegments, type RoundShape, roundDimensionsMm } from '../shapes/round.ts';
 
 /**
  * An orthonormal frame at the centre of the section: n is the cut's normal from the lower part into the upper one, u
@@ -77,29 +83,47 @@ export interface SolidFace {
 }
 
 /**
- * A cylinder's oblique cut: part A (`negative`) lies on the negative side of the normal, part B (`positive`) on the
- * positive one. The section is the actual polygonal solid's convex `contour`, which either base may clip, and
- * `frame.origin` is its area centroid: u points uphill within the plane, v = u × n is horizontal.
+ * A cut read off the actual polygonal solid rather than from a formula of its ideal shape. The solid is convex, so its
+ * section is the convex `contour` with `frame.origin` at the contour's area centroid, and an interior point is exactly
+ * as far from its surface as from the nearest of `faces`.
  */
-export interface ObliqueCylinderSection extends CutGeometry {
-  readonly type: 'oblique';
+export interface FacetedSection extends CutGeometry {
   /** The plane itself: its unit normal, and the distance of the plane along it from the world's origin. */
   readonly plane: { readonly normal: Vec3; readonly offset: number };
-  /** P = C0 + t·(C1 − C0), through which the plane passes. */
-  readonly axisPoint: Vec3;
   /** The section's corners, counter-clockwise seen along −n. */
   readonly contour: readonly Vec3[];
   readonly area: number;
-  /** Whether the whole axis lies in the plane, so that the position along it changes nothing. */
-  readonly containsAxis: boolean;
   readonly faces: readonly SolidFace[];
   /** How far each part reaches from the plane along the normal. */
   readonly reach: { readonly negative: number; readonly positive: number };
-  /** The farthest point along +u of the part on the positive side within this distance above the plane. */
-  readonly uphillReachWithin: (thickness: number) => number;
+  /**
+   * How far from the centroid the part on the positive side reaches towards a dovetail's entrance, within this distance
+   * above the plane: where a tongue that slides off has left that part.
+   */
+  readonly entranceReachWithin: (thickness: number) => number;
 }
 
-export type CylinderSection = ParallelCylinderSection | VerticalCylinderSection | ObliqueCylinderSection;
+/**
+ * A cylinder's oblique cut: part A (`negative`) lies on the negative side of the normal, part B (`positive`) on the
+ * positive one. Either base may clip the contour; u points uphill within the plane, v = u × n is horizontal.
+ */
+export interface ObliqueCylinderSection extends FacetedSection {
+  readonly type: 'oblique';
+  /** P = C0 + t·(C1 − C0), through which the plane passes. */
+  readonly axisPoint: Vec3;
+  /** Whether the whole axis lies in the plane, so that the position along it changes nothing. */
+  readonly containsAxis: boolean;
+}
+
+/**
+ * A cone's cut parallel to its base: the frustum lies below the plane, the smaller cone with the apex above it. The upper
+ * part narrows and, in an oblique cone, leans over the section, so nothing above the cut can be read off its radius.
+ */
+export interface ConeParallelSection extends FacetedSection {
+  readonly type: 'cone-parallel';
+}
+
+export type SolidSection = ParallelCylinderSection | VerticalCylinderSection | ObliqueCylinderSection | ConeParallelSection;
 
 /** A vertical cut's position: the signed distance from the axis in percent of the radius. */
 export interface VerticalCut {
@@ -113,8 +137,8 @@ export interface ObliqueCut {
   readonly directionDeg: number;
 }
 
-/** Where a cylinder is cut: a plane parallel to the bases at this percentage of the height, or another plane. */
-export type CylinderCut = number | VerticalCut | ObliqueCut;
+/** Where a round solid is cut: a plane parallel to the base at this percentage of the height, or another plane. */
+export type SolidCut = number | VerticalCut | ObliqueCut;
 
 const normalised = (a: Vec3): Vec3 => {
   const norm = length(a);
@@ -330,85 +354,149 @@ function polygonCentroid(corners: readonly Vec3[], u: Vec3, v: Vec3): { readonly
   return { area, centroid: [origin[0] + sum[0] / area, origin[1] + sum[1] / area, origin[2] + sum[2] / area] };
 }
 
-/**
- * The oblique cut of the cylinder as it is built: P = t·C1 with C0 at the origin, whatever the lean, and the plane
- * n·x = n·P. The solid is a convex polyhedron, the base polygon sheared along X, so its section is the convex polygon
- * where the plane crosses its edges, clipped by a base wherever it reaches one; no ellipse is assumed.
- *
- * A convex body's interior point is exactly as far from its surface as from the nearest face's plane, so the faces below
- * measure every wall of a part. Only faces with a corner strictly on a part's side bound that part.
- */
-export function obliqueCylinderSection(shape: CylinderShape, scale: PhysicalScale, cut: ObliqueCut): ObliqueCylinderSection {
-  const { radius, height, offset: d } = roundDimensionsMm(shape, scale);
-  const axes = obliqueAxes(cut.inclinationDeg, cut.directionDeg);
-  const { n, u, v } = axes;
-  const t = cut.positionPercent / 100;
-  const axisPoint: Vec3 = [t * d, 0, t * height];
-  const offset = dot(n, axisPoint);
+/** The polygonal solid as manifold-3d builds it: its corners, its edges, and its faces with their corners. */
+interface Polyhedron {
+  readonly vertices: readonly Vec3[];
+  readonly edges: readonly (readonly [number, number])[];
+  readonly faces: readonly { readonly normal: Vec3; readonly offset: number; readonly corners: readonly number[] }[];
+  /** The number of sides of the base polygon. */
+  readonly sides: number;
+}
+
+/** The base polygon's edges, and its face on z = 0; the rest of a round solid follows from these. */
+function baseOf(radius: number) {
   const polygon = basePolygon(radius);
-  const count = polygon.length;
-  const vertices: Vec3[] = [...polygon.map(([x, y]): Vec3 => [x, y, 0]), ...polygon.map(([x, y]): Vec3 => [x + d, y, height])];
-  const edges: (readonly [number, number])[] = polygon.flatMap((_, index) => {
-    const next = (index + 1) % count;
-    return [
-      [index, next],
-      [count + index, count + next],
-      [index, count + index],
-    ] as const;
-  });
+  const indices = polygon.map((_, index) => index);
+  const baseFace = { normal: [0, 0, -1] as Vec3, offset: 0, corners: indices };
+  return { polygon, indices, baseFace, sides: polygon.length };
+}
+
+/** The base polygon, the same polygon at z = H moved by d along X, and the sides between them. */
+function cylinderPolyhedron({ radius, height, offset: d }: { radius: number; height: number; offset: number }): Polyhedron {
+  const { polygon, indices, baseFace, sides } = baseOf(radius);
+  const shear = d / height;
+  return {
+    vertices: [...polygon.map(([x, y]): Vec3 => [x, y, 0]), ...polygon.map(([x, y]): Vec3 => [x + d, y, height])],
+    edges: indices.flatMap((index) => {
+      const next = (index + 1) % sides;
+      return [
+        [index, next],
+        [sides + index, sides + next],
+        [index, sides + index],
+      ] as const;
+    }),
+    faces: [
+      baseFace,
+      { normal: [0, 0, 1], offset: height, corners: indices.map((index) => sides + index) },
+      ...indices.map((index) => {
+        const next = (index + 1) % sides;
+        const [[x0, y0], [x1, y1]] = [polygon[index] as [number, number], polygon[next] as [number, number]];
+        // The right prism's side (a, b, 0)·p = c becomes (a, b, −a·d/H) under the shear x' = x + (d/H)·z.
+        const [a, b] = [y1 - y0, x0 - x1];
+        const norm = Math.hypot(a, b, a * shear);
+        const normal: Vec3 = [a / norm, b / norm, (-a * shear) / norm];
+        return { normal, offset: dot(normal, [x0, y0, 0]), corners: [index, next, sides + index, sides + next] };
+      }),
+    ],
+    sides,
+  };
+}
+
+/** The base polygon and the triangles from each of its sides to the apex at (d, 0, H). */
+function conePolyhedron({ radius, height, offset: d }: { radius: number; height: number; offset: number }): Polyhedron {
+  const { polygon, indices, baseFace, sides } = baseOf(radius);
+  const apex: Vec3 = [d, 0, height];
+  return {
+    vertices: [...polygon.map(([x, y]): Vec3 => [x, y, 0]), apex],
+    edges: indices.flatMap((index) => [[index, (index + 1) % sides] as const, [index, sides] as const]),
+    faces: [
+      baseFace,
+      ...indices.map((index) => {
+        const next = (index + 1) % sides;
+        const [[x0, y0], [x1, y1]] = [polygon[index] as [number, number], polygon[next] as [number, number]];
+        // Edge × (apex − corner) points outwards, as the polygon runs counter-clockwise under the apex.
+        const outward = cross([x1 - x0, y1 - y0, 0], [d - x0, -y0, height]);
+        const normal = normalised(outward);
+        return { normal, offset: dot(normal, [x0, y0, 0]), corners: [index, next, sides] };
+      }),
+    ],
+    sides,
+  };
+}
+
+/**
+ * Reads a plane's section off the polyhedron: the convex polygon where the plane crosses its edges, clipped by a base
+ * wherever it reaches one; no ellipse or circle is assumed. Only faces with a corner strictly on a part's side bound that
+ * part. `towardsEntrance` is +1 or −1 along u.
+ */
+function facetedSection(
+  { vertices, edges, faces, sides }: Polyhedron,
+  axes: { readonly n: Vec3; readonly u: Vec3; readonly v: Vec3 },
+  offset: number,
+  radius: number,
+  towardsEntrance: 1 | -1,
+): FacetedSection {
+  const { n, u, v } = axes;
   const contour = planeContour(vertices, edges, axes, offset);
-  if (contour.length < 3) throw new GeometryError('The oblique plane does not cut the cylinder.');
+  if (contour.length < 3) throw new GeometryError('The plane does not cut the solid.');
   const { area, centroid } = polygonCentroid(contour, u, v);
   const alongPlane = contour.map((corner) => dot(corner, u));
   const across = vertices.map((vertex) => dot(n, vertex) - offset);
-  const frame: SectionFrame = { origin: centroid, u, v, n };
-  const faceOf = (normal: Vec3, planeOffset: number, corners: readonly number[]): SolidFace => ({
-    clearance: planeOffset - dot(normal, centroid),
-    alongU: dot(normal, u),
-    alongV: dot(normal, v),
-    alongN: dot(normal, n),
-    boundsNegative: corners.some((corner) => (across[corner] as number) < -CONTOUR_MERGE_MM),
-    boundsPositive: corners.some((corner) => (across[corner] as number) > CONTOUR_MERGE_MM),
-  });
-  const indices = polygon.map((_, index) => index);
-  const shear = d / height;
-  const faces: SolidFace[] = [
-    faceOf([0, 0, -1], 0, indices),
-    faceOf(
-      [0, 0, 1],
-      height,
-      indices.map((index) => count + index),
-    ),
-    ...indices.map((index) => {
-      const next = (index + 1) % count;
-      const [[x0, y0], [x1, y1]] = [polygon[index] as [number, number], polygon[next] as [number, number]];
-      // The right prism's side (a, b, 0)·p = c becomes (a, b, −a·d/H) under the shear x' = x + (d/H)·z.
-      const [a, b] = [y1 - y0, x0 - x1];
-      const norm = Math.hypot(a, b, a * shear);
-      const normal: Vec3 = [a / norm, b / norm, (-a * shear) / norm];
-      return faceOf(normal, dot(normal, [x0, y0, 0]), [index, next, count + index, count + next]);
-    }),
-  ];
   return {
-    type: 'oblique',
-    frame,
+    frame: { origin: centroid, u, v, n },
     radius,
-    inradius: radius * Math.cos(Math.PI / count),
+    inradius: radius * Math.cos(Math.PI / sides),
     span: Math.max(...alongPlane) - Math.min(...alongPlane),
     depthExtent: Math.max(...across) - Math.min(...across),
     plane: { normal: n, offset },
-    axisPoint,
     contour,
     area,
-    containsAxis: obliquePlaneContainsAxis(shape, cut.inclinationDeg, cut.directionDeg),
-    faces,
+    faces: faces.map(({ normal, offset: faceOffset, corners }) => ({
+      clearance: faceOffset - dot(normal, centroid),
+      alongU: dot(normal, u),
+      alongV: dot(normal, v),
+      alongN: dot(normal, n),
+      boundsNegative: corners.some((corner) => (across[corner] as number) < -CONTOUR_MERGE_MM),
+      boundsPositive: corners.some((corner) => (across[corner] as number) > CONTOUR_MERGE_MM),
+    })),
     reach: { negative: -Math.min(...across), positive: Math.max(...across) },
-    uphillReachWithin: (thickness) => {
+    entranceReachWithin: (thickness) => {
       // The layer's farthest point lies on one of its two planes or at a corner of the solid between them.
       const inLayer = vertices.filter((_, index) => (across[index] as number) >= 0 && (across[index] as number) <= thickness);
       const candidates = [...contour, ...planeContour(vertices, edges, axes, offset + thickness), ...inLayer];
-      return Math.max(...candidates.map((point) => dot(point, u))) - dot(centroid, u);
+      return Math.max(...candidates.map((point) => towardsEntrance * (dot(point, u) - dot(centroid, u))));
     },
+  };
+}
+
+/** The oblique cut of the cylinder as it is built: P = t·C1 with C0 at the origin, whatever the lean, and n·x = n·P. */
+export function obliqueCylinderSection(shape: CylinderShape, scale: PhysicalScale, cut: ObliqueCut): ObliqueCylinderSection {
+  const dimensions = roundDimensionsMm(shape, scale);
+  const axes = obliqueAxes(cut.inclinationDeg, cut.directionDeg);
+  const t = cut.positionPercent / 100;
+  const axisPoint: Vec3 = [t * dimensions.offset, 0, t * dimensions.height];
+  return {
+    ...facetedSection(cylinderPolyhedron(dimensions), axes, dot(axes.n, axisPoint), dimensions.radius, 1),
+    type: 'oblique',
+    axisPoint,
+    containsAxis: obliquePlaneContainsAxis(shape, cut.inclinationDeg, cut.directionDeg),
+  };
+}
+
+/**
+ * A cone's cut at z = t·H, with the frame of a cylinder's parallel cut: u is perpendicular to the lean, +Y for every cone,
+ * and the groove's entrance lies at −u. The section is the base polygon scaled by 1 − t about the apex, centred on
+ * C0 + t·(A − C0), which the tests compare with its contour; the walls come from the faces alone.
+ */
+export function coneSection(shape: ConeShape, scale: PhysicalScale, positionPercent: number): ConeParallelSection {
+  const dimensions = roundDimensionsMm(shape, scale);
+  const n: Vec3 = [0, 0, 1];
+  const u: Vec3 = [0, 1, 0];
+  const v = cross(u, n);
+  const offset = (positionPercent / 100) * dimensions.height;
+  return {
+    ...facetedSection(conePolyhedron(dimensions), { n, u, v }, offset, dimensions.radius, -1),
+    type: 'cone-parallel',
   };
 }
 
@@ -440,12 +528,12 @@ export const discWall = (face: SolidFace, along: number, normal: number, radius:
 export const pointWall = (face: SolidFace, along: number, across: number, normal: number): number =>
   face.clearance - along * face.alongU - across * face.alongV - normal * face.alongN;
 
-/** The faces that bound the part on one side of an oblique plane. */
-export const facesOfPart = ({ faces }: ObliqueCylinderSection, part: 'negative' | 'positive'): readonly SolidFace[] =>
+/** The faces that bound the part on one side of the plane. */
+export const facesOfPart = ({ faces }: FacetedSection, part: 'negative' | 'positive'): readonly SolidFace[] =>
   faces.filter((face) => (part === 'negative' ? face.boundsNegative : face.boundsPositive));
 
 /** Where the specification's section cuts the cylinder. */
-export const cutOfSection = (section: Section): CylinderCut => {
+export const cutOfSection = (section: Section): SolidCut => {
   switch (section.type) {
     case 'vertical':
       return { offsetPercent: section.offsetPercent };
@@ -461,7 +549,11 @@ export const cutOfSection = (section: Section): CylinderCut => {
 };
 
 /** The geometry of the cut. */
-export function cylinderCut(shape: CylinderShape, scale: PhysicalScale, cut: CylinderCut): CylinderSection {
+export function solidCut(shape: RoundShape, scale: PhysicalScale, cut: SolidCut): SolidSection {
+  if (shape.kind === 'cone') {
+    if (typeof cut !== 'number') throw new GeometryError('A cone offers only a cut parallel to its base.');
+    return coneSection(shape, scale, cut);
+  }
   if (typeof cut === 'number') return cylinderSection(shape, scale, cut);
   return 'offsetPercent' in cut
     ? verticalCylinderSection(shape, scale, cut.offsetPercent)
@@ -550,6 +642,16 @@ export interface Measurement {
 
 /** Whether the measured value reaches its minimum; NaN never does. */
 export const satisfies = ({ valueMm, minimumMm }: Measurement): boolean => valueMm >= minimumMm - CONSTRAINT_ROUNDOFF_MM;
+
+/**
+ * The uncut solid for "stays inside it" checks: grown about the section's centre by a millionth, which moves its faces by
+ * far less than any print can show. A part's own surface coincides with the solid's, and exactly coincident surfaces are
+ * where a Boolean operation can leave a sliver of volume that is not there; what really leaves the solid still shows.
+ */
+export function insideEnvelope(track: (manifold: Manifold) => Manifold, whole: Manifold, { origin }: SectionFrame): Manifold {
+  const centred = track(whole.translate([-origin[0], -origin[1], -origin[2]]));
+  return track(track(centred.scale(1 + 1e-6)).translate([origin[0], origin[1], origin[2]]));
+}
 
 /** Below this volume, in mm³ for M = 80 mm and scaled with M³, an intersection is Boolean roundoff, not contact. */
 const VOLUME_TOLERANCE_AT_80_MM = 1e-3;

@@ -1,5 +1,6 @@
 <script lang="ts">
 import { THREE_MF_MEDIA_TYPE } from '@diploma-3d/engine';
+import type { ShapeKind } from '@diploma-3d/schema';
 import { untrack } from 'svelte';
 import AppHeader from './lib/components/AppHeader.svelte';
 import Button from './lib/components/Button.svelte';
@@ -9,7 +10,7 @@ import PreviewPanel from './lib/components/PreviewPanel.svelte';
 import Select from './lib/components/Select.svelte';
 import { saveFile } from './lib/download.ts';
 import { buildModel } from './lib/model/buildModel.ts';
-import { type ConnectorScale, cylinderConnectorScale } from './lib/model/connectorScale.ts';
+import { type ConnectorScale, connectorScaleOf } from './lib/model/connectorScale.ts';
 import { describeModelError, type ModelState, visibleArtifacts } from './lib/model/modelState.ts';
 import {
   activeConnector,
@@ -23,6 +24,7 @@ import {
   resetShapeParameters,
   resolveModelRequest,
   type SectionRanges,
+  sectionKeys,
   switchTiltMode,
 } from './lib/model/parameters.ts';
 import { loadPrintSizeText, savePrintSize } from './lib/model/printSize.ts';
@@ -52,9 +54,10 @@ const parameterState = $derived<ParameterState>({
   exact: parameterExact,
   tiltModes,
 });
-// The last valid scale of the cylinder, so that its connector settings stay in millimetres while the print size or the
-// cylinder is being corrected.
-let lastConnectorScale = $state.raw<ConnectorScale | undefined>();
+// The last valid scale of each solid with connectors, so that its settings stay in millimetres while the print size or
+// the solid is being corrected.
+let lastConnectorScales = $state.raw<Partial<Record<ShapeKind, ConnectorScale>>>({});
+const lastConnectorScale = $derived(selectedKind === undefined ? undefined : lastConnectorScales[selectedKind]);
 const request = $derived(
   selectedKind === undefined
     ? undefined
@@ -64,19 +67,25 @@ const request = $derived(
         connectorScale: lastConnectorScale,
       }),
 );
-const connectorScale = $derived(cylinderConnectorScale(request?.values ?? {}, lastConnectorScale) ?? lastConnectorScale);
+const connectorScale = $derived(
+  selectedKind === undefined
+    ? undefined
+    : (connectorScaleOf(selectedKind, request?.values ?? {}, lastConnectorScale) ?? lastConnectorScale),
+);
 $effect.pre(() => {
+  if (selectedKind === undefined) return;
   // Only a different scale is stored: the request reads it, so storing an equal copy would recompute it in a loop.
-  const last = untrack(() => lastConnectorScale);
-  const current = cylinderConnectorScale(request?.values ?? {}, last);
+  const last = untrack(() => lastConnectorScales[selectedKind]);
+  const current = connectorScaleOf(selectedKind, request?.values ?? {}, last);
   if (
     current !== undefined &&
     (current.longestDimensionMm !== last?.longestDimensionMm ||
       current.radiusMm !== last?.radiusMm ||
       current.heightMm !== last?.heightMm ||
-      current.obliqueSpanMm !== last?.obliqueSpanMm)
+      current.obliqueSpanMm !== last?.obliqueSpanMm ||
+      current.parallelSpanMm !== last?.parallelSpanMm)
   ) {
-    lastConnectorScale = current;
+    lastConnectorScales = { ...untrack(() => lastConnectorScales), [selectedKind]: current };
   }
 });
 // The last feasible ranges of the chosen cut and connector, so that their sliders keep their ranges while one of their
@@ -89,7 +98,7 @@ const connectorContext = $derived(
         selectedKind,
         activeSection(selectedKind, parameterChoices) ?? 'none',
         activeConnector(selectedKind, parameterChoices) ?? 'none',
-        parameterChoices.cylinderRoundCount,
+        parameterChoices[sectionKeys[selectedKind]?.round.count ?? 'cylinderRoundCount'],
       ].join(':'),
 );
 $effect.pre(() => {

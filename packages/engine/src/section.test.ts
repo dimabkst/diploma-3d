@@ -206,11 +206,7 @@ describe('a section of a cylinder parallel to its bases', () => {
 
   it('refuses the section for solids that do not offer it yet, and unknown section types', () => {
     const section = { type: 'parallel-to-bases', positionPercent: 50 } as const;
-    for (const shape of [
-      { kind: 'cone', heightRatio: 2, offsetRatio: 0 },
-      { kind: 'prism', baseSides: 4, heightRatio: 1 },
-      { kind: 'cube' },
-    ] as const) {
+    for (const shape of [{ kind: 'prism', baseSides: 4, heightRatio: 1 }, { kind: 'cube' }] as const) {
       expect(() => generateModel(kernel, { shape, scale: { longestDimensionMm: L }, section })).toThrow(InvalidModelSpecError);
     }
     const axial = { type: 'axial', positionPercent: 50 } as unknown as typeof section;

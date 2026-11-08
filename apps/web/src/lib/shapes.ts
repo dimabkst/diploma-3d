@@ -29,8 +29,8 @@ import {
 import { formatDecimal, type StepRange } from './decimal.ts';
 import {
   type ConnectorScale,
+  connectorScaleOf,
   connectorUnits,
-  cylinderConnectorScale,
   percentRange,
   physicalRange,
   type ScaledConnectorKey,
@@ -40,6 +40,7 @@ import {
   type ChoiceKey,
   type ConnectorChoice,
   canSwitchTiltMode,
+  cylinderSectionKeys,
   type ParameterChoices,
   type ParameterKey,
   type ParameterValues,
@@ -571,6 +572,18 @@ const obliqueSectionHelp: Help = {
     'лише перегляд. Межі кута є обмеженнями застосунку: точно горизонтальний і вертикальний перерізи мають окремі режими.',
 };
 
+const coneSectionHelp: Help = {
+  label: 'Як задано переріз?',
+  text:
+    'Площина перерізу паралельна основі. Положення задається у відсотках від висоти конуса: 50% — на половині висоти. ' +
+    'Нижня частина є зрізаним конусом, верхня — меншим конусом. Ближче до вершини переріз стає меншим.\n\n' +
+    'Висота h — відстань від вершини до площини основи, також у похилого конуса; центр перерізу зміщується разом із ' +
+    'відрізком від центра основи до вершини. Однакові висоти не означають однакових об’ємів: на половині висоти верхня ' +
+    'частина має 1/8 об’єму конуса.\n\n' +
+    'Частини експортуються окремими об’єктами в одному масштабі; розсування змінює лише перегляд. Межі 10–90 % відсувають ' +
+    'площину від основи й вершини, але не гарантують, що тонку частину вдасться надрукувати.',
+};
+
 const AXIS_IN_PLANE_NOTE = 'Площина містить усю вісь циліндра, тому положення точки за висотою не змінює переріз.';
 
 const connectorNames: Readonly<Record<ConnectorChoice, string>> = {
@@ -688,6 +701,14 @@ const numberedDowelHelp = (printNote: string): Help => ({
     BOUNDS_HELP,
 });
 
+const CONE_PRINT_NOTE =
+  'Верхня частина звужується, тому ближче до вершини кріплення вміщується гірше: повзунки враховують усю глибину отвору ' +
+  'чи паза, а не лише переріз. У файлі зрізаний конус стоїть на основі, а менший конус — на площині перерізу, вершиною ' +
+  'догори, тому його отвори й паз відкриваються до столу. Їхні склепіння можуть потребувати підтримок або іншої ' +
+  'орієнтації в слайсері.';
+
+const withConeNote = (help: Help): Help => ({ ...help, text: `${help.text}\n\n${CONE_PRINT_NOTE}` });
+
 const SCALE_NOTE =
   'Показано фактичні розміри для поточного масштабу моделі. Розміри кріплення змінюються разом із найбільшим габаритом.';
 const COUNT_NOTE =
@@ -703,9 +724,9 @@ const millimetres = (value: number | undefined): string =>
  * line each: the dovetail's widths, a pair's second diameter, a dowel's insertion into each part. Shown while a section
  * is chosen; a connector is optional, so its state is summarised.
  */
-function connectorSection(kind: 'cylinder', choices: ParameterChoices, context: PanelContext): ParameterSection[] {
+function connectorSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, context: PanelContext): ParameterSection[] {
   const keys = sectionKeys[kind];
-  const scale = context.connectorScale ?? cylinderConnectorScale(context.values ?? {});
+  const scale = context.connectorScale ?? connectorScaleOf(kind, context.values ?? {});
   if (keys === undefined || scale === undefined || activeSection(kind, choices) === undefined) return [];
   const chosen = choices[keys.connector];
   const values = context.values ?? {};
@@ -824,7 +845,7 @@ function connectorSection(kind: 'cylinder', choices: ParameterChoices, context: 
   };
   return [
     section(`${kind}-connector`, 'Кріплення', [selector, ...fields[chosen]], {
-      help: chosen === 'none' ? undefined : helps[cut][chosen],
+      help: chosen === 'none' ? undefined : kind === 'cone' ? withConeNote(helps[cut][chosen]) : helps[cut][chosen],
       status: { text: chosen === 'none' ? 'немає' : connectorNames[chosen].toLowerCase(), highlighted: chosen !== 'none' },
     }),
   ];
@@ -850,34 +871,43 @@ function obliqueContainsAxis(
  * "Переріз": optional, so the group starts collapsed with the chosen section in its summary. The position and the
  * separation are shown only while a section is chosen.
  */
-function planeSection(kind: 'cylinder', choices: ParameterChoices, context: PanelContext): ParameterSection {
+function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, context: PanelContext): ParameterSection {
   const keys = sectionKeys[kind];
   if (keys === undefined) throw new Error(`No section fields for ${kind}.`);
   const chosen = choices[keys.choice];
+  // A cone has one base to be parallel to.
+  const namesOf = (choice: SectionChoice) =>
+    kind === 'cone' && choice === 'parallel-to-bases' ? 'Паралельно основі' : sectionNames[choice];
   const selector: ChoiceField = {
     type: 'choice',
     key: keys.choice,
     label: 'Тип перерізу',
-    options: (['none', 'parallel-to-bases', 'vertical', 'oblique'] as const).map((value) => ({
-      value,
-      label: sectionNames[value],
-    })),
+    options: (kind === 'cone'
+      ? (['none', 'parallel-to-bases'] as const)
+      : (['none', 'parallel-to-bases', 'vertical', 'oblique'] as const)
+    ).map((value) => ({ value, label: namesOf(value) })),
   };
-  const interval = context.sectionRanges?.[keys.offset];
+  const { offset, oblique } = cylinderSectionKeys;
+  const interval = context.sectionRanges?.[offset];
   const toggle: ToggleField = { type: 'toggle', key: keys.separated, label: 'Розсунути частини' };
-  const { oblique } = keys;
   const noteId = `${kind}-oblique-axis-note`;
   const containsAxis = obliqueContainsAxis(context.values, oblique.inclination, oblique.direction);
   const details: Record<SectionChoice, ParameterField[]> = {
     none: [],
     'parallel-to-bases': [
-      { type: 'number', key: keys.position, label: 'Від нижньої основи', suffix: '% h', range: sectionPositionRange },
+      {
+        type: 'number',
+        key: keys.position,
+        label: kind === 'cone' ? 'Від основи' : 'Від нижньої основи',
+        suffix: '% h',
+        range: sectionPositionRange,
+      },
       toggle,
     ],
     vertical: [
       {
         type: 'number',
-        key: keys.offset,
+        key: offset,
         label: 'Зміщення від осі',
         suffix: '% r',
         range: interval === undefined || interval === null ? undefined : percentRange(interval, SECTION_PERCENT_INCREMENT),
@@ -901,14 +931,14 @@ function planeSection(kind: 'cylinder', choices: ParameterChoices, context: Pane
   };
   const help: Record<SectionChoice, Help | undefined> = {
     none: undefined,
-    'parallel-to-bases': parallelSectionHelp,
+    'parallel-to-bases': kind === 'cone' ? coneSectionHelp : parallelSectionHelp,
     vertical: verticalSectionHelp,
     oblique: obliqueSectionHelp,
   };
   return section(`${kind}-section`, 'Переріз', [selector, ...details[chosen]], {
     initiallyOpen: false,
     help: help[chosen],
-    status: { text: chosen === 'none' ? 'немає' : sectionNames[chosen].toLowerCase(), highlighted: chosen !== 'none' },
+    status: { text: chosen === 'none' ? 'немає' : namesOf(chosen).toLowerCase(), highlighted: chosen !== 'none' },
   });
 }
 
@@ -1034,7 +1064,8 @@ export function shapePanel(kind: ShapeKind, choices: ParameterChoices, context: 
             },
             context,
           ),
-          ...(kind === 'cylinder' ? [planeSection(kind, choices, context), ...connectorSection(kind, choices, context)] : []),
+          planeSection(kind, choices, context),
+          ...connectorSection(kind, choices, context),
         ],
       };
     }

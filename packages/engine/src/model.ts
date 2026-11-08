@@ -249,7 +249,7 @@ function assertObliqueSplit({ shape, scale, section }: ModelSpec): void {
 /** The connector's plan; refuses the specification before any geometry is built when the connector does not fit. */
 function planConnector({ shape, scale, section }: ModelSpec): ConnectorPlan | undefined {
   if (section?.connector === undefined) return undefined;
-  if (shape.kind !== 'cylinder') throw new ConnectorUnsuitableError([{ code: 'unsupported-shape' }]);
+  if (shape.kind !== 'cylinder' && shape.kind !== 'cone') throw new ConnectorUnsuitableError([{ code: 'unsupported-shape' }]);
   const { connector } = section;
   const cut = cutOfSection(section);
   const plan =
