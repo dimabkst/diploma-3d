@@ -88,7 +88,7 @@ const assembled = $derived(shownArtifacts?.model.section !== undefined);
         />
       </div>
     {/if}
-    {#if shownSection?.type === 'oblique'}
+    {#if shownSection?.type === 'oblique' || shownSection?.type === 'oblique-apex'}
       <SectionCompass directionDeg={shownSection.directionDeg} camera={cameraDirection} />
     {/if}
 

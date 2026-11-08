@@ -250,6 +250,40 @@ for (const [name, oblique] of [
   });
 }
 
+for (const [name, oblique] of [
+  ['right', false],
+  ['oblique', true],
+] as const) {
+  test(`${name} cone: an oblique plane, also through the apex, never turns the camera`, async ({ page }) => {
+    await installRecorder(page);
+    await page.goto('/');
+    await shapeSelect(page).selectOption({ label: 'Конус' });
+    if (oblique) {
+      await openSection(page, 'Нахил');
+      await page.getByLabel('Зміщення вершини', { exact: true }).fill('0,5');
+    }
+    await openSection(page, 'Переріз');
+    await expect(page.getByText(/^Габарити: /)).toBeVisible({ timeout: 30_000 });
+    await expectLoaded(page);
+    await turnCamera(page);
+    const direction = await orbit(page);
+    const field = (label: string) => page.getByLabel(label, { exact: true });
+    const through = (label: string) => field('Площина проходить через').selectOption({ label });
+    expectSteadyTransition(await framesOf(page, () => cut(page, 'Похилий')), direction);
+    expectSteadyTransition(await framesOf(page, () => through('Вершину')), direction);
+    expectSteadyTransition(await framesOf(page, () => field('Кут до площини основи').fill('85')), direction);
+    expectSteadyTransition(await framesOf(page, () => field('Напрям нахилу').fill('60')), direction);
+    for (const label of ['Ластівчин хвіст', 'Виступ і отвір', 'Знімні штифти', 'Без кріплення']) {
+      expectSteadyTransition(await framesOf(page, () => connector(page, label)), direction);
+    }
+    const separation = page.getByRole('checkbox', { name: 'Розсунути частини', exact: true });
+    expectSteadyTransition(await framesOf(page, () => separation.uncheck()), direction);
+    expectSteadyTransition(await framesOf(page, () => separation.check()), direction);
+    expectSteadyTransition(await framesOf(page, () => through('Точку на осі')), direction);
+    expectSteadyTransition(await framesOf(page, () => cut(page, 'Вертикальний')), direction);
+  });
+}
+
 test('rapid offsets of a cone end on the last one, whatever finished in between', async ({ page }) => {
   await installRecorder(page);
   await page.goto('/');

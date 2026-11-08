@@ -121,12 +121,19 @@ function flatFace(mesh: TriangleMesh, outward: Vec3, planeOffset: number, point:
  * Turns a cut part onto a flat face for printing, without assuming which one it has: each part of a plane through the
  * axis keeps at least half of a base. The larger remaining base that carries the part's centre of mass goes down; the
  * lower base as it is, the upper one by a half turn about the horizontal `turnAxis`, which keeps a connector on the cut
- * face pointing up. A leaning part may balance on neither: it then rests on its flat cut face, if it has one to spare
- * in `cutFaceOutward`, or otherwise on its larger base, as an uncut leaning solid does. Rotations only: the size stays.
+ * face pointing up. A leaning part may balance on neither, and a cone's tip has neither: it then rests on its flat cut
+ * face, if it has one to spare in `cutFaceOutward`, or otherwise on its larger base, as an uncut leaning solid does. A part
+ * with no flat face at all, whose cut carries a protruding connector, turns `connectorFace` upwards and touches the bed
+ * with its tip. Rotations only: the size stays.
  */
 export function restOnFlatFace(
   mesh: TriangleMesh,
-  { baseHeight, turnAxis, cutFaceOutward }: { baseHeight: number; turnAxis: Vec3; cutFaceOutward?: Vec3 },
+  {
+    baseHeight,
+    turnAxis,
+    cutFaceOutward,
+    connectorFace,
+  }: { baseHeight: number; turnAxis: Vec3; cutFaceOutward?: Vec3; connectorFace?: Vec3 },
 ): TriangleMesh {
   const centre = centreOfMass(mesh);
   const lower = flatFace(mesh, [0, 0, -1], 0, centre);
@@ -136,12 +143,15 @@ export function restOnFlatFace(
   const larger = upper.area > lower.area * LARGER_FACE_RELATIVE ? 'upper' : 'lower';
   if (lower.carries && (!upper.carries || larger === 'lower')) return onLower;
   if (upper.carries) return onUpper();
+  const hasBase = lower.area > 0 || upper.area > 0;
   if (cutFaceOutward !== undefined) {
     const planeOffset = maxAlong(mesh, cutFaceOutward);
-    if (flatFace(mesh, cutFaceOutward, planeOffset, centre).carries) {
+    if (!hasBase || flatFace(mesh, cutFaceOutward, planeOffset, centre).carries) {
       return rotateOntoZ(mesh, [-cutFaceOutward[0], -cutFaceOutward[1], -cutFaceOutward[2]]);
     }
   }
+  // With no flat face to spare, as a cone's tip that carries a plug has none, the connector at least points up.
+  if (!hasBase && connectorFace !== undefined) return rotateOntoZ(mesh, connectorFace);
   return larger === 'lower' ? onLower : onUpper();
 }
 

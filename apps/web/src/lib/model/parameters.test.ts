@@ -18,9 +18,11 @@ import {
   resetShapeParameters,
   resolveModelRequest,
   shapeParameterKeys,
+  startApexSection,
   switchTiltMode,
   validateAngle,
   validateApex,
+  validateApexInclination,
   validateDirection,
   validateObliqueDirection,
   validateObliqueInclination,
@@ -175,6 +177,11 @@ describe('resolveModelRequest', () => {
       coneInclinationDeg: '90',
       coneSectionPercent: '50',
       coneSectionOffsetPercent: '0',
+      coneObliquePositionPercent: '50',
+      coneObliqueInclinationDeg: '45',
+      coneObliqueDirectionDeg: '0',
+      coneApexInclinationDeg: '90',
+      coneApexDirectionDeg: '0',
       coneDovetailSize: '1',
       coneDovetailLengthPercent: '50',
       coneDovetailClearanceMm: '0,2',
@@ -212,6 +219,8 @@ describe('resolveModelRequest', () => {
       conePartsSeparated: true,
       coneConnector: 'none',
       coneRoundCount: 1,
+      coneObliqueThrough: 'axis',
+      coneApexStarted: false,
     });
     expect(resolveModelRequest('cuboid', initialParameterTexts(), triangle).spec).toEqual({
       shape: { kind: 'cuboid', widthRatio: 1.5, heightRatio: 2 },
@@ -2309,6 +2318,7 @@ describe('a section of the cone parallel to its base', () => {
         { value: 'none', label: 'Без перерізу' },
         { value: 'parallel-to-bases', label: 'Паралельно основі' },
         { value: 'vertical', label: 'Вертикальний' },
+        { value: 'oblique', label: 'Похилий' },
       ],
     });
     expect(sectionNumberFields(cut)).toMatchObject([
@@ -2465,6 +2475,7 @@ describe('a vertical section of the cone', () => {
         { value: 'none', label: 'Без перерізу' },
         { value: 'parallel-to-bases', label: 'Паралельно основі' },
         { value: 'vertical', label: 'Вертикальний' },
+        { value: 'oblique', label: 'Похилий' },
       ],
     });
     expect(sectionNumberFields(cut)).toMatchObject([
@@ -2587,5 +2598,229 @@ describe('a vertical section of the cone', () => {
     } as const;
     expect(canResetShapeParameters('cone', hidden)).toBe(true);
     expect(canResetShapeParameters('cone', { texts: hidden.texts, choices: triangle })).toBe(false);
+  });
+});
+
+describe('an oblique section of the cone', () => {
+  const sectioned = { ...triangle, coneSection: 'oblique' } as const;
+  const throughApex = { ...sectioned, coneObliqueThrough: 'apex', coneApexStarted: true } as const;
+  const choose = (coneConnector: 'dovetail' | 'plug' | 'dowel', base: typeof triangle = throughApex, coneRoundCount: 1 | 2 = 1) =>
+    ({ ...base, coneConnector, coneRoundCount }) as const;
+  const request = (overrides: Partial<ParameterTexts> = {}, choices: typeof triangle = sectioned) =>
+    resolveModelRequest('cone', texts(overrides), choices);
+  const group = (choices: typeof triangle, title: string, overrides: Partial<ParameterTexts> = {}) => {
+    const { values, sectionRanges } = request(overrides, choices);
+    const panel = shapePanel('cone', choices, { values, sectionRanges });
+    const found = (panel.type === 'parameters' ? panel.sections : []).find((part) => part.title === title);
+    if (found === undefined) throw new Error(`No group ${title}`);
+    return found;
+  };
+
+  it('starts through a point on the axis, with the oblique cylinder’s fields, and offers the apex alongside', () => {
+    const result = request();
+    expect(result.errors).toEqual({});
+    expect(result.spec?.section).toEqual({ type: 'oblique', positionPercent: 50, inclinationDeg: 45, directionDeg: 0 });
+    const cut = group(sectioned, 'Переріз');
+    expect(cut.status).toEqual({ text: 'похилий', highlighted: true });
+    expect(cut.fields[1]).toMatchObject({
+      type: 'choice',
+      key: 'coneObliqueThrough',
+      label: 'Площина проходить через',
+      options: [
+        { value: 'axis', label: 'Точку на осі' },
+        { value: 'apex', label: 'Вершину' },
+      ],
+    });
+    expect(sectionNumberFields(cut)).toMatchObject([
+      { key: 'coneObliquePositionPercent', suffix: '% h', range: { min: 10, max: 90, increment: 5 } },
+      { key: 'coneObliqueInclinationDeg', label: 'Кут до площини основи', suffix: '°', range: { min: 5, max: 85, increment: 5 } },
+      { key: 'coneObliqueDirectionDeg', label: 'Напрям нахилу', suffix: '°', range: { min: 0, max: 360, increment: 5 } },
+    ]);
+    expect(cut.help?.text).toMatch(/через вибрану точку на осі конуса/);
+  });
+
+  it('hides the position through the apex, and bounds the angle by the cone and the direction, with 90° reachable', () => {
+    const result = request({ coneApexInclinationDeg: '75' }, throughApex);
+    expect(result.errors).toEqual({});
+    expect(result.spec?.section).toEqual({ type: 'oblique-apex', inclinationDeg: 75, directionDeg: 0 });
+    const cut = group(throughApex, 'Переріз', { coneApexInclinationDeg: '75' });
+    expect(sectionNumberFields(cut)).toMatchObject([
+      { key: 'coneApexInclinationDeg', label: 'Кут до площини основи', suffix: '°', range: { min: 68.2, max: 90, increment: 5 } },
+      { key: 'coneApexDirectionDeg', label: 'Напрям нахилу', suffix: '°', range: { min: 0, max: 360, increment: 5 } },
+    ]);
+    expect(cut.help?.text).toContain(
+      'У режимі «Через вершину» площина проходить точно через вершину конуса та перетинає його основу. Переріз є трикутником. Допустимі кути залежать від форми конуса й напряму нахилу площини.',
+    );
+    const range = sectionNumberFields(cut)[0]?.range as { min: number; max: number; increment: number };
+    expect(stepDecimal(85, 1, range)).toBe(90);
+    expect(stepDecimal(70, -1, range)).toBe(68.2);
+    expect(snapDecimal(68.3, range)).toBe(68.2);
+    expect(request({ coneApexInclinationDeg: '90' }, throughApex).spec?.section).toMatchObject({ inclinationDeg: 90 });
+  });
+
+  it('keeps separate settings for the two placements, so that switching destroys nothing', () => {
+    const edited = {
+      coneObliquePositionPercent: '30',
+      coneObliqueInclinationDeg: '20',
+      coneObliqueDirectionDeg: '40',
+      coneApexInclinationDeg: '80',
+      coneApexDirectionDeg: '100',
+    };
+    expect(request(edited, sectioned).spec?.section).toEqual({
+      type: 'oblique',
+      positionPercent: 30,
+      inclinationDeg: 20,
+      directionDeg: 40,
+    });
+    expect(request(edited, throughApex).spec?.section).toEqual({ type: 'oblique-apex', inclinationDeg: 80, directionDeg: 100 });
+    expect(activeSection('cone', throughApex)).toBe('oblique-apex');
+    expect(activeSection('cone', sectioned)).toBe('oblique');
+    // A hidden draft of the other placement blocks nothing, and neither does the cylinder's choice.
+    expect(request({ coneObliquePositionPercent: '' }, throughApex).errors).toEqual({});
+    expect(request({ coneApexInclinationDeg: '' }, sectioned).errors).toEqual({});
+    expect(activeSection('cylinder', { ...triangle, cylinderSection: 'oblique', coneObliqueThrough: 'apex' })).toBe('oblique');
+  });
+
+  describe('on first entry through the apex', () => {
+    const state = (
+      overrides: Partial<ParameterTexts> = {},
+      choices: typeof triangle = { ...sectioned, coneObliqueThrough: 'apex' },
+    ) => ({ texts: texts(overrides), choices }) as ParameterState;
+    const values = (heightRatio: number, offsetRatio = 0) => ({
+      printSizeMm: 80,
+      coneHeightRatio: heightRatio,
+      coneOffsetRatio: offsetRatio,
+    });
+
+    it('takes a valid angle in the middle of the interval, rising along the lean', () => {
+      const right = startApexSection(state(), values(2));
+      expect(right?.texts.coneApexInclinationDeg).toBe('80');
+      expect(right?.texts.coneApexDirectionDeg).toBe('0');
+      expect(right?.choices.coneApexStarted).toBe(true);
+      const oblique = startApexSection(state({ coneOffsetRatio: '1' }), values(2, 1));
+      expect(oblique?.texts.coneApexInclinationDeg).toBe('65');
+      expect(oblique?.texts.coneApexDirectionDeg).toBe('0');
+      const started = oblique as ParameterState;
+      const resolved = resolveModelRequest('cone', started.texts, started.choices);
+      expect(resolved.errors).toEqual({});
+      expect(resolved.spec?.section).toMatchObject({ type: 'oblique-apex', inclinationDeg: 65, directionDeg: 0 });
+    });
+
+    it('happens once: nothing changes on its own afterwards, even for a plane that has become invalid', () => {
+      const started = startApexSection(state(), values(2)) as ParameterState;
+      expect(startApexSection(started, values(2, 3))).toBeUndefined();
+      const invalid = resolveModelRequest('cone', texts({ ...started.texts, coneOffsetRatio: '3' }), started.choices);
+      expect(invalid.spec).toBeUndefined();
+      expect(invalid.errors.coneApexInclinationDeg).toMatch(/Допустимі значення за цього напряму/);
+      expect(invalid.values.coneApexInclinationDeg).toBe(80);
+    });
+
+    it('waits for a valid cone, and for the apex to be chosen', () => {
+      expect(startApexSection(state(), { printSizeMm: 80 })).toBeUndefined();
+      expect(startApexSection(state({}, sectioned), values(2))).toBeUndefined();
+      // Too small for any plane: nothing to pick, and it does not try again.
+      const tiny = startApexSection(state(), { printSizeMm: 2, coneHeightRatio: 2, coneOffsetRatio: 0 });
+      expect(tiny?.texts.coneApexInclinationDeg).toBe('90');
+      expect(tiny?.choices.coneApexStarted).toBe(true);
+    });
+  });
+
+  it('keeps 360° in the field and one model with 0°', () => {
+    const [start, end] = [
+      request({ coneApexDirectionDeg: '0' }, throughApex),
+      request({ coneApexDirectionDeg: '360' }, throughApex),
+    ];
+    expect(end.values.coneApexDirectionDeg).toBe(360);
+    expect(end.key).toBe(start.key);
+  });
+
+  it('explains an angle that only touches the cone, one that leaves a sliver, and a direction with no angle at all', () => {
+    expect(validateApexInclination('0')).toEqual({ error: 'Кут має бути більшим за 0° і не більшим за 90°.' });
+    expect(validateApexInclination('90,5')).toEqual({ error: 'Кут має бути більшим за 0° і не більшим за 90°.' });
+    expect(validateApexInclination('90')).toEqual({ value: 90 });
+    const touches = request({ coneApexInclinationDeg: '45' }, throughApex);
+    expect(touches.spec).toBeUndefined();
+    expect(touches.errors.coneApexInclinationDeg).toMatch(/лише торкається конуса/);
+    expect(touches.errors.coneApexInclinationDeg).toMatch(/від 68,2° до 90°/);
+    const sliver = request({ coneApexInclinationDeg: '65' }, throughApex);
+    expect(sliver.errors.coneApexInclinationDeg).toMatch(/надто тонкою/);
+    const against = request({ coneOffsetRatio: '1', coneApexDirectionDeg: '180', coneApexInclinationDeg: '80' }, throughApex);
+    expect(against.spec).toBeUndefined();
+    expect(against.errors.coneApexDirectionDeg).toMatch(/не ділить конус/);
+    expect(against.sectionRanges?.coneApexInclinationDeg).toBeNull();
+    const panel = sectionNumberFields(
+      group(throughApex, 'Переріз', { coneOffsetRatio: '1', coneApexDirectionDeg: '180', coneApexInclinationDeg: '80' }),
+    );
+    expect(panel[0]?.range).toBeUndefined();
+    expect(panel[1]?.range).toEqual({ min: 0, max: 360, increment: 5 });
+  });
+
+  it('disables the position while the plane through a point holds the whole axis, keeping its value', () => {
+    const edited = { coneOffsetRatio: '2', coneObliquePositionPercent: '30' };
+    expect(request(edited).errors).toEqual({});
+    const fields = group(sectioned, 'Переріз', edited).fields;
+    expect(fields[2]).toMatchObject({ key: 'coneObliquePositionPercent', disabled: true });
+    expect(fields[3]).toMatchObject({
+      type: 'note',
+      text: 'Площина містить усю вісь конуса, тому положення точки за висотою не змінює переріз.',
+    });
+    expect(request({ ...edited, coneObliqueInclinationDeg: '50' }).spec?.section).toMatchObject({ positionPercent: 30 });
+  });
+
+  it('refuses a tilted plane near the apex as a split, not as a connector', () => {
+    const thin = request({ coneObliquePositionPercent: '90' });
+    expect(thin.spec).toBeUndefined();
+    expect(thin.errors.coneObliquePositionPercent).toMatch(/^Тонша частина сягає від площини/);
+    expect(thin.sectionRanges).toEqual({});
+  });
+
+  it.each([
+    ['dovetail', 1],
+    ['plug', 1],
+    ['plug', 2],
+    ['dowel', 1],
+    ['dowel', 2],
+  ] as const)('takes a %s × %d through the apex, in millimetres of the actual section', (connector, count) => {
+    const overrides = { coneApexInclinationDeg: '85', coneDovetailLengthPercent: '25', coneRoundSpacingPercent: '30' };
+    const result = request(overrides, choose(connector, throughApex, count));
+    expect(result.errors).toEqual({});
+    expect(result.spec?.section?.connector?.type).toBe(connector);
+    for (const range of Object.values(result.sectionRanges ?? {})) expect(range).not.toBeNull();
+    const labels = sectionNumberFields(group(choose(connector, throughApex, count), 'Кріплення', overrides)).map(
+      ({ label }) => label,
+    );
+    expect(labels.join(' ')).not.toMatch(/нижніх|верхніх/);
+  });
+
+  it('explains the uphill dovetail, its notch and the print note, and names the plane’s own settings', () => {
+    const help = group(choose('dovetail'), 'Кріплення', { coneApexInclinationDeg: '85' }).help?.text;
+    expect(help).toMatch(/вниз по схилу до упора/);
+    expect(help).toMatch(/вгору по схилу/);
+    expect(help).toContain('У звуженій верхній частині може бути помітна виїмка для входу в паз.');
+    expect(help).toMatch(/можуть потребувати підтримок/);
+    const deep = request({ coneApexInclinationDeg: '85', coneRoundDepth: '7' }, choose('plug'));
+    expect(deep.errors.coneRoundDepth).toMatch(/змініть кут чи напрям площини/);
+    expect(deep.errors.coneRoundDepth).not.toMatch(/положення/);
+    const axis = request({ coneRoundDepth: '7' }, choose('plug', sectioned));
+    expect(axis.errors.coneRoundDepth).toMatch(/змініть положення чи кут площини/);
+    const roof = request(
+      { coneApexInclinationDeg: '75', coneDovetailSize: '4', coneDovetailLengthPercent: '10' },
+      choose('dovetail'),
+    );
+    expect(roof.errors.coneDovetailSize).toMatch(/За пазом у частині 2/);
+  });
+
+  it('resets its fields, the placement and the first plane, and keeps the print size', () => {
+    const edited: ParameterState = {
+      texts: texts({ printSizeMm: '120', coneApexInclinationDeg: '75', coneObliquePositionPercent: '30' }),
+      choices: throughApex,
+    };
+    expect(canResetShapeParameters('cone', edited)).toBe(true);
+    const reset = resetShapeParameters('cone', edited);
+    expect(reset.texts).toEqual(texts({ printSizeMm: '120' }));
+    expect(reset.choices).toMatchObject({ coneSection: 'none', coneObliqueThrough: 'axis', coneApexStarted: false });
+    // Having once entered the mode is no setting of its own.
+    expect(canResetShapeParameters('cone', { texts: texts({}), choices: { ...triangle, coneApexStarted: true } })).toBe(false);
+    expect(canResetShapeParameters('cone', { texts: edited.texts, choices: triangle })).toBe(false);
   });
 });

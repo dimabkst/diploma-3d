@@ -1,11 +1,15 @@
 import {
+  apexChordCrossesBase,
   CONSTRAINT_ROUNDOFF_MM,
   type ConnectorFeasibility,
+  coneApexAngleBounds,
+  coneApexChord,
   cutOfSection,
   type DovetailIssue,
   dovetailFeasibility,
   hasFeasibleValues,
   type Interval,
+  isApexChordUsable,
   obliquePlaneContainsAxis,
   obliqueSplitReach,
   type ParameterBounds,
@@ -19,13 +23,14 @@ import {
   verticalOffsetLimitPercent,
 } from '@diploma-3d/engine';
 import {
+  APEX_INCLINATION_MAX_DEG,
   apexRatioSchema,
   BASE_ANGLE_LIMITS,
   BASE_SHIFT_LIMITS,
   baseAngleSchema,
   baseShiftSchema,
+  type ConeShape,
   type ConnectorType,
-  type CylinderShape,
   DEFAULT_DOVETAIL,
   DEFAULT_DOWEL_CLEARANCES_MM,
   DEFAULT_LONGEST_DIMENSION_MM,
@@ -69,7 +74,7 @@ import {
   sectionPositionSchema,
   TILT_OFFSET_LIMITS,
 } from '@diploma-3d/schema';
-import { formatDecimal, halfSumDecimal, parseDecimal } from '../decimal.ts';
+import { formatDecimal, formatSteppedDecimal, halfSumDecimal, parseDecimal, snapDecimal } from '../decimal.ts';
 import {
   type ConnectorScale,
   connectorScaleOf,
@@ -79,6 +84,7 @@ import {
   formatPhysical,
   percentRange,
   physicalRange,
+  planeAngleRange,
   type ScaledConnectorKey,
 } from './connectorScale.ts';
 import {
@@ -159,6 +165,11 @@ export type ParameterKey =
   | 'coneInclinationDeg'
   | 'coneSectionPercent'
   | 'coneSectionOffsetPercent'
+  | 'coneObliquePositionPercent'
+  | 'coneObliqueInclinationDeg'
+  | 'coneObliqueDirectionDeg'
+  | 'coneApexInclinationDeg'
+  | 'coneApexDirectionDeg'
   | 'coneDovetailSize'
   | 'coneDovetailLengthPercent'
   | 'coneDovetailClearanceMm'
@@ -172,8 +183,11 @@ export type ParameterKey =
 /** Raw field text, kept separately from parsed values so that empty and partially typed input stays editable. */
 export type ParameterTexts = Record<ParameterKey, string>;
 
-/** A plane section of the solid, or none. */
-export type SectionChoice = 'none' | SectionType;
+/** A plane section of the solid, or none; a plane through a cone's apex is an oblique one, with its own further choice. */
+export type SectionChoice = 'none' | Exclude<SectionType, 'oblique-apex'>;
+
+/** What a cone's oblique plane passes through. */
+export type ObliqueThrough = 'axis' | 'apex';
 
 /** A connector joining the parts of the section, or flat cut faces. */
 export type ConnectorChoice = 'none' | ConnectorType;
@@ -194,13 +208,16 @@ export type ParameterChoices = {
   coneConnector: ConnectorChoice;
   coneRoundCount: 1 | 2;
   conePartsSeparated: boolean;
+  coneObliqueThrough: ObliqueThrough;
+  /** Whether a plane through the apex has its first valid angle yet, which depends on the cone when it is first chosen. */
+  coneApexStarted: boolean;
 };
 
 /** The switches among the choices. */
 export type ToggleKey = 'cylinderPartsSeparated' | 'conePartsSeparated';
 
 /** The choices picked from options. */
-export type ChoiceKey = Exclude<keyof ParameterChoices, ToggleKey>;
+export type ChoiceKey = Exclude<keyof ParameterChoices, ToggleKey | 'coneApexStarted'>;
 
 export type ParameterErrors = Partial<Record<ParameterKey, string>>;
 
@@ -295,6 +312,11 @@ export const initialParameterTexts = (): ParameterTexts => ({
   cylinderDowelUpperClearanceMm: formatDecimal(DEFAULT_DOWEL_CLEARANCES_MM.upper),
   coneSectionPercent: formatDecimal(DEFAULT_SECTION_POSITION_PERCENT),
   coneSectionOffsetPercent: formatDecimal(DEFAULT_SECTION_OFFSET_PERCENT),
+  coneObliquePositionPercent: formatDecimal(DEFAULT_OBLIQUE_SECTION.positionPercent),
+  coneObliqueInclinationDeg: formatDecimal(DEFAULT_OBLIQUE_SECTION.inclinationDeg),
+  coneObliqueDirectionDeg: formatDecimal(DEFAULT_OBLIQUE_SECTION.directionDeg),
+  coneApexInclinationDeg: formatDecimal(APEX_INCLINATION_MAX_DEG),
+  coneApexDirectionDeg: formatDecimal(DEFAULT_OBLIQUE_SECTION.directionDeg),
   coneDovetailSize: formatDecimal(DEFAULT_DOVETAIL.sizeFactor),
   coneDovetailLengthPercent: formatDecimal(DEFAULT_DOVETAIL.lengthPercent),
   coneDovetailClearanceMm: formatDecimal(DEFAULT_DOVETAIL.clearanceMm),
@@ -320,6 +342,8 @@ export const initialParameterChoices = (): ParameterChoices => ({
   coneConnector: 'none',
   coneRoundCount: DEFAULT_ROUND_CONNECTOR.count,
   conePartsSeparated: true,
+  coneObliqueThrough: 'axis',
+  coneApexStarted: false,
 });
 
 type Validation = { value: number } | { error: string };
@@ -397,6 +421,15 @@ export const validateObliqueInclination = (text: string, exact?: number): Valida
 /** The horizontal direction an oblique plane rises along, from +X towards +Y; 360° is the same as 0°. */
 export const validateObliqueDirection = (text: string, exact?: number): Validation =>
   validateNumber(text, inclusiveRange(OBLIQUE_DIRECTION_LIMITS), OBLIQUE_DIRECTION_LIMITS, '90', '°', exact);
+
+/** A plane through the apex: any angle up to the vertical here; the cone and the direction narrow it, see `sectionChecks`. */
+export const validateApexInclination = (text: string, exact?: number): Validation => {
+  const read = readNumber(text, '75', exact);
+  if ('error' in read) return read;
+  return read.value > 0 && read.value <= APEX_INCLINATION_MAX_DEG
+    ? read
+    : { error: `Кут має бути більшим за 0° і не більшим за ${APEX_INCLINATION_MAX_DEG}°.` };
+};
 
 /** The gap between mating surfaces of a dovetail, in millimetres, within its calibration window. */
 export const validateDovetailClearance = (text: string, exact?: number): Validation =>
@@ -480,6 +513,11 @@ const validators: Readonly<Record<IndependentKey, (text: string, exact?: number)
   cylinderDowelUpperClearanceMm: validateDiametralClearance,
   coneSectionPercent: validateSectionPosition,
   coneSectionOffsetPercent: validateSectionOffset,
+  coneObliquePositionPercent: validateSectionPosition,
+  coneObliqueInclinationDeg: validateObliqueInclination,
+  coneObliqueDirectionDeg: validateObliqueDirection,
+  coneApexInclinationDeg: validateApexInclination,
+  coneApexDirectionDeg: validateObliqueDirection,
   coneDovetailSize: validateConnectorDimension,
   coneDovetailLengthPercent: validateConnectorDimension,
   coneDovetailClearanceMm: validateDovetailClearance,
@@ -695,12 +733,12 @@ function sectionChecks(
   if (section.type === 'parallel-to-bases') return connectorChecks(keys, shape as RoundShape, longestDimensionMm, section);
   const solid = shape as RoundShape;
   const scale = { longestDimensionMm };
+  if (section.type === 'oblique-apex') return apexChecks(keys, shape as ConeShape, longestDimensionMm, section);
   if (section.type === 'oblique') {
-    const cylinder = shape as CylinderShape;
-    const reach = obliqueSplitReach(cylinder, scale, section);
-    if (satisfies(reach)) return connectorChecks(keys, cylinder, longestDimensionMm, section);
-    const contained = obliquePlaneContainsAxis(cylinder, section.inclinationDeg, section.directionDeg);
-    const field = contained ? cylinderSectionKeys.oblique.inclination : cylinderSectionKeys.oblique.position;
+    const reach = obliqueSplitReach(solid, scale, section);
+    if (satisfies(reach)) return connectorChecks(keys, solid, longestDimensionMm, section);
+    const contained = obliquePlaneContainsAxis(solid, section.inclinationDeg, section.directionDeg);
+    const field = contained ? keys.oblique.inclination : keys.oblique.position;
     return {
       errors: {
         [field]:
@@ -723,6 +761,70 @@ function sectionChecks(
     ? { errors: {}, ranges }
     : { errors: connector.errors, ranges: { ...ranges, ...connector.ranges } };
 }
+
+/**
+ * The angles a plane through the apex may take in this direction, and why the current one or the direction itself does
+ * not split the cone. A connector is not checked on a plane that has no usable section. Nothing is moved to make it fit.
+ */
+function apexChecks(
+  keys: SectionKeys,
+  shape: ConeShape,
+  longestDimensionMm: number,
+  section: Extract<Section, { type: 'oblique-apex' }>,
+): { errors: ParameterErrors; ranges: SectionRanges } {
+  const scale = { longestDimensionMm };
+  const bounds = coneApexAngleBounds(shape, scale, section.directionDeg);
+  const ranges: SectionRanges = { [coneApexKeys.inclination]: bounds };
+  if (bounds === null) {
+    return {
+      errors: {
+        [coneApexKeys.direction]:
+          'За цього напряму площина через вершину не ділить конус на дві придатні частини: вершина зміщена надто далеко ' +
+          'від основи в протилежний бік. Змініть напрям нахилу або зменште нахил конуса.',
+      },
+      ranges,
+    };
+  }
+  const chord = coneApexChord(shape, scale, section);
+  if (!isApexChordUsable(chord)) {
+    const shown = planeAngleRange(bounds, 1);
+    const allowed = `Допустимі значення за цього напряму — від ${formatDecimal(shown.min)}° до ${formatDecimal(shown.max)}°.`;
+    const reason = apexChordCrossesBase(chord)
+      ? 'За цього кута одна з частин була б надто тонкою.'
+      : 'За цього кута площина лише торкається конуса й не ділить його.';
+    return { errors: { [coneApexKeys.inclination]: `${reason} ${allowed}` }, ranges };
+  }
+  const connector = connectorChecks(keys, shape, longestDimensionMm, section);
+  return connector === undefined
+    ? { errors: {}, ranges }
+    : { errors: connector.errors, ranges: { ...ranges, ...connector.ranges } };
+}
+
+/**
+ * The first valid plane through this cone's apex: rising along the lean, which is +X for every cone and the same default
+ * for a right one, at the multiple of the step nearest to the middle of the allowed angles. Undefined while the cone is
+ * not valid yet, and for a state that has its plane already; a cone too small for any plane keeps the default.
+ */
+export function startApexSection(state: ParameterState, values: ParameterValues): ParameterState | undefined {
+  const { coneSection, coneObliqueThrough, coneApexStarted } = state.choices;
+  if (coneSection !== 'oblique' || coneObliqueThrough !== 'apex' || coneApexStarted) return undefined;
+  const { printSizeMm, coneHeightRatio, coneOffsetRatio } = values;
+  if (printSizeMm === undefined || coneHeightRatio === undefined || coneOffsetRatio === undefined) return undefined;
+  const directionDeg = DEFAULT_OBLIQUE_SECTION.directionDeg;
+  const shape = { kind: 'cone', heightRatio: coneHeightRatio, offsetRatio: coneOffsetRatio } as const;
+  const bounds = coneApexAngleBounds(shape, { longestDimensionMm: printSizeMm }, directionDeg);
+  const choices = { ...state.choices, coneApexStarted: true };
+  if (bounds === null) return { ...state, choices };
+  const range = planeAngleRange(bounds, APEX_START_INCREMENT_DEG);
+  const texts = {
+    ...state.texts,
+    [coneApexKeys.inclination]: formatSteppedDecimal(snapDecimal((range.min + range.max) / 2, range)),
+    [coneApexKeys.direction]: formatDecimal(directionDeg),
+  };
+  return { ...state, texts, choices };
+}
+
+const APEX_START_INCREMENT_DEG = 5;
 
 /**
  * The connector's feasible ranges and its problems, explained at the fields that can repair them, from the same checks
@@ -780,7 +882,8 @@ function connectorChecks(
     const cutField = {
       'parallel-to-bases': keys.position,
       vertical: keys.offset,
-      oblique: cylinderSectionKeys.oblique.inclination,
+      oblique: keys.oblique.inclination,
+      'oblique-apex': coneApexKeys.inclination,
     };
     errors[cutField[section.type]] = feasibility.unattributed.map(explain).join(' ');
   }
@@ -806,13 +909,17 @@ function rangeSentence(bounds: ParameterBounds, shown: number): string {
 /** Which words a message uses: a cone's cut parallel to the base is limited by the narrowing above it, hence its own. */
 export type CutWording = SectionType | 'cone';
 
+/** A plane through the apex reads like any oblique one, but for the position it does not have. */
+const wordingOf = (cut: CutWording): Exclude<CutWording, 'oblique-apex'> => (cut === 'oblique-apex' ? 'oblique' : cut);
+
 /** A part as the messages name it: by its place in a parallel cut, by its number in the others, where it has no place. */
 function partInMessage(part: 'lower' | 'upper', cut: CutWording): string {
-  if (cut === 'vertical' || cut === 'oblique') return part === 'lower' ? 'у частині 1' : 'у частині 2';
+  if (cut === 'vertical' || cut === 'oblique' || cut === 'oblique-apex') return part === 'lower' ? 'у частині 1' : 'у частині 2';
   return part === 'lower' ? 'у нижній частині' : 'у верхній частині';
 }
 
-const CHANGE_OBLIQUE_PLANE = 'змініть положення чи кут площини';
+const changePlane = (cut: CutWording) =>
+  cut === 'oblique-apex' ? 'змініть кут чи напрям площини' : 'змініть положення чи кут площини';
 
 /** What falls short, by how much, and what to change, for plugs and dowels; in Ukrainian for the interface. */
 export function roundConnectorIssueMessage(
@@ -856,17 +963,18 @@ export function roundConnectorIssueMessage(
         `Під дном отвору ${partInMessage(issue.part, cut)} лишається ${shortfall}. ` +
         {
           vertical: `Зменште ${length}, ${diameter} або зміщення від осі.`,
-          oblique: `Зменште ${length} чи ${diameter} або ${CHANGE_OBLIQUE_PLANE}.`,
+          oblique: `Зменште ${length} чи ${diameter} або ${changePlane(cut)}.`,
           'parallel-to-bases': `Зменште ${length} або ${issue.part === 'upper' ? 'опустіть' : 'підніміть'} переріз.`,
-        }[cut]
+          cone: `Зменште ${length} або ${issue.part === 'upper' ? 'опустіть' : 'підніміть'} переріз.`,
+        }[wordingOf(cut)]
       );
     case 'base-thin':
       return {
         vertical: `За виступом у частині 1 лишається ${shortfall}. Зменште ${diameter} або зміщення від осі.`,
-        oblique: `За виступом у частині 1 лишається ${shortfall}. Зменште ${diameter} або ${CHANGE_OBLIQUE_PLANE}.`,
+        oblique: `За виступом у частині 1 лишається ${shortfall}. Зменште ${diameter} або ${changePlane(cut)}.`,
         'parallel-to-bases': `Під виступом лишається ${shortfall} нижньої частини. Підніміть переріз або збільште найбільший габарит.`,
         cone: `Під виступом лишається ${shortfall} нижньої частини. Підніміть переріз або збільште найбільший габарит.`,
-      }[cut];
+      }[wordingOf(cut)];
   }
 }
 
@@ -888,24 +996,27 @@ export function dovetailIssueMessage(issue: DovetailIssue, cut: CutWording = 'pa
     case 'groove-wall-thin':
       return {
         vertical: `Стінка біля паза — ${shortfall}. Зменште висоту або довжину виступу чи зміщення від осі.`,
-        oblique: `Стінка біля паза — ${shortfall}. Зменште висоту чи довжину виступу або ${CHANGE_OBLIQUE_PLANE}.`,
+        oblique: `Стінка біля паза — ${shortfall}. Зменште висоту чи довжину виступу або ${changePlane(cut)}.`,
         'parallel-to-bases': `Стінка біля закритого кінця паза — ${shortfall}. Зменште довжину або висоту виступу.`,
         cone: `Стінка біля паза — ${shortfall}. Зменште довжину чи висоту виступу або опустіть переріз.`,
-      }[cut];
+      }[wordingOf(cut)];
     case 'stop-thin':
       return cut === 'cone'
         ? `За упором паза лишається ${shortfall}. Зменште довжину виступу чи зазор або опустіть переріз.`
         : `Під нижнім упором паза лишається ${shortfall}. Зменште довжину виступу або зазор.`;
     case 'backing-thin':
       if (cut === 'vertical') return `За пазом у частині 2 лишається ${shortfall}. Зменште висоту виступу або зміщення від осі.`;
+      if (cut === 'oblique' || cut === 'oblique-apex') {
+        return `За пазом у частині 2 лишається ${shortfall}. Зменште висоту чи довжину виступу або ${changePlane(cut)}.`;
+      }
       return `Над пазом лишається ${shortfall} верхньої частини. Опустіть переріз або зменште висоту виступу.`;
     case 'base-thin':
       return {
         vertical: `За виступом у частині 1 лишається ${shortfall}. Зменште висоту виступу або зміщення від осі.`,
-        oblique: `За виступом у частині 1 лишається ${shortfall}. Зменште висоту чи довжину виступу або ${CHANGE_OBLIQUE_PLANE}.`,
+        oblique: `За виступом у частині 1 лишається ${shortfall}. Зменште висоту чи довжину виступу або ${changePlane(cut)}.`,
         'parallel-to-bases': `Під виступом лишається ${shortfall} нижньої частини. Підніміть переріз або збільште найбільший габарит.`,
         cone: `Під виступом лишається ${shortfall} нижньої частини. Підніміть переріз або збільште найбільший габарит.`,
-      }[cut];
+      }[wordingOf(cut)];
   }
 }
 
@@ -913,6 +1024,11 @@ type SectionKeys = {
   readonly choice: 'cylinderSection' | 'coneSection';
   readonly position: 'cylinderSectionPercent' | 'coneSectionPercent';
   readonly offset: 'cylinderSectionOffsetPercent' | 'coneSectionOffsetPercent';
+  readonly oblique: {
+    readonly position: 'cylinderObliquePositionPercent' | 'coneObliquePositionPercent';
+    readonly inclination: 'cylinderObliqueInclinationDeg' | 'coneObliqueInclinationDeg';
+    readonly direction: 'cylinderObliqueDirectionDeg' | 'coneObliqueDirectionDeg';
+  };
   readonly separated: ToggleKey;
   readonly connector: 'cylinderConnector' | 'coneConnector';
   readonly dovetail: {
@@ -961,14 +1077,8 @@ function scaledError(key: ScaledConnectorKey, text: string, unit: number): strin
   return 'error' in read ? read.error : undefined;
 }
 
-/** The cylinder's fields of the cut that only it offers. */
-export const cylinderSectionKeys = {
-  oblique: {
-    position: 'cylinderObliquePositionPercent',
-    inclination: 'cylinderObliqueInclinationDeg',
-    direction: 'cylinderObliqueDirectionDeg',
-  },
-} as const;
+/** The fields of a plane through a cone's apex, kept apart from those of a plane through a point on its axis. */
+export const coneApexKeys = { inclination: 'coneApexInclinationDeg', direction: 'coneApexDirectionDeg' } as const;
 
 /** The fields of the plane section and its connector, for the shapes that offer one. */
 export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys>>> = {
@@ -976,6 +1086,11 @@ export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys>>> = {
     choice: 'cylinderSection',
     position: 'cylinderSectionPercent',
     offset: 'cylinderSectionOffsetPercent',
+    oblique: {
+      position: 'cylinderObliquePositionPercent',
+      inclination: 'cylinderObliqueInclinationDeg',
+      direction: 'cylinderObliqueDirectionDeg',
+    },
     separated: 'cylinderPartsSeparated',
     connector: 'cylinderConnector',
     dovetail: {
@@ -997,6 +1112,11 @@ export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys>>> = {
     choice: 'coneSection',
     position: 'coneSectionPercent',
     offset: 'coneSectionOffsetPercent',
+    oblique: {
+      position: 'coneObliquePositionPercent',
+      inclination: 'coneObliqueInclinationDeg',
+      direction: 'coneObliqueDirectionDeg',
+    },
     separated: 'conePartsSeparated',
     connector: 'coneConnector',
     dovetail: {
@@ -1061,7 +1181,8 @@ export function activeConnector(kind: ShapeKind, choices: ParameterChoices): Con
 export function activeSection(kind: ShapeKind, choices: ParameterChoices): SectionType | undefined {
   const keys = sectionKeys[kind];
   const choice = keys === undefined ? 'none' : choices[keys.choice];
-  return choice === 'none' ? undefined : choice;
+  if (choice === 'none') return undefined;
+  return kind === 'cone' && choice === 'oblique' && choices.coneObliqueThrough === 'apex' ? 'oblique-apex' : choice;
 }
 
 /**
@@ -1094,9 +1215,14 @@ function resolveSection(
   const count = choices[keys.round.count];
   const fields = activeConnectorKeys(keys, connectorType, count) as IndependentKey[];
   // A plane parallel to the bases has a position along the height, a vertical one a distance from the axis, an oblique
-  // one a point on the axis and two angles.
-  const cutKeys: IndependentKey[] =
-    type === 'oblique' ? Object.values(cylinderSectionKeys.oblique) : [type === 'vertical' ? keys.offset : keys.position];
+  // one a point on the axis and two angles, a plane through an apex those angles alone.
+  const cutFields: Readonly<Record<SectionType, readonly IndependentKey[]>> = {
+    'parallel-to-bases': [keys.position],
+    vertical: [keys.offset],
+    oblique: Object.values(keys.oblique),
+    'oblique-apex': Object.values(coneApexKeys),
+  };
+  const cutKeys = cutFields[type];
   const { values, errors } = validateFields([...cutKeys, ...fields], texts, exact);
   // The fields show millimetres: their errors name millimetres too.
   const units = connectorUnits(scale, connectorType === 'dowel' ? 'dowel' : 'plug', type);
@@ -1105,16 +1231,16 @@ function resolveSection(
       errors[key] = scaledError(key, texts[key], units[key]) ?? errors[key];
     }
   }
-  const { inclination, direction, position } = cylinderSectionKeys.oblique;
+  const { inclination, direction, position } = keys.oblique;
   const [inclinationDeg, directionDeg] = [values[inclination], values[direction]];
   // The position cannot change a plane that contains the whole axis and its field is disabled, so an invalid draft of it
   // blocks nothing; it stays as typed for when the plane no longer does.
   if (
     type === 'oblique' &&
-    shape?.kind === 'cylinder' &&
+    (shape?.kind === 'cylinder' || shape?.kind === 'cone') &&
     inclinationDeg !== undefined &&
     directionDeg !== undefined &&
-    obliquePlaneContainsAxis(shape as CylinderShape, inclinationDeg, directionDeg)
+    obliquePlaneContainsAxis(shape as RoundShape, inclinationDeg, directionDeg)
   ) {
     delete errors[position];
     values[position] ??= DEFAULT_OBLIQUE_SECTION.positionPercent;
@@ -1160,6 +1286,13 @@ function resolveSection(
           inclinationDeg: read(inclination),
           // 360° and 0° are one direction, hence one model: the field keeps showing what was chosen, its slider stays put.
           directionDeg: read(direction) % OBLIQUE_DIRECTION_LIMITS.max,
+          ...joining,
+        };
+      case 'oblique-apex':
+        return {
+          type,
+          inclinationDeg: read(coneApexKeys.inclination),
+          directionDeg: read(coneApexKeys.direction) % OBLIQUE_DIRECTION_LIMITS.max,
           ...joining,
         };
     }
@@ -1391,6 +1524,11 @@ export const shapeParameterKeys: Readonly<
       'coneInclinationDeg',
       'coneSectionPercent',
       'coneSectionOffsetPercent',
+      'coneObliquePositionPercent',
+      'coneObliqueInclinationDeg',
+      'coneObliqueDirectionDeg',
+      'coneApexInclinationDeg',
+      'coneApexDirectionDeg',
       'coneDovetailSize',
       'coneDovetailLengthPercent',
       'coneDovetailClearanceMm',
@@ -1401,7 +1539,7 @@ export const shapeParameterKeys: Readonly<
       'coneDowelLowerClearanceMm',
       'coneDowelUpperClearanceMm',
     ],
-    choices: ['coneSection', 'conePartsSeparated', 'coneConnector', 'coneRoundCount'],
+    choices: ['coneSection', 'coneObliqueThrough', 'coneApexStarted', 'conePartsSeparated', 'coneConnector', 'coneRoundCount'],
   },
   ball: { texts: [], choices: [] },
 };
@@ -1452,23 +1590,25 @@ function inactiveSectionKeys(kind: ShapeKind, choices: ParameterChoices): (keyof
   const keys = sectionKeys[kind];
   if (keys === undefined) return [];
   const connector = activeConnector(kind, choices);
-  const active = new Set(activeConnectorKeys(keys, connector, choices[keys.round.count]));
-  const connectorFields: (keyof ParameterChoices | ParameterKey)[] = connectorTextKeys(keys).filter((key) => !active.has(key));
+  const activeFields = new Set(activeConnectorKeys(keys, connector, choices[keys.round.count]));
+  const connectorFields: (keyof ParameterChoices | ParameterKey)[] = connectorTextKeys(keys).filter(
+    (key) => !activeFields.has(key),
+  );
   if (connector !== 'plug' && connector !== 'dowel') connectorFields.push(keys.round.count);
   const section = activeSection(kind, choices);
-  const { offset } = keys;
-  // A cone has none of the oblique cut's fields among its own, so listing them changes nothing for it.
-  const obliqueFields = Object.values(cylinderSectionKeys.oblique);
-  switch (section) {
-    case 'vertical':
-      return [keys.position, ...obliqueFields, ...connectorFields];
-    case 'oblique':
-      return [keys.position, offset, ...connectorFields];
-    case 'parallel-to-bases':
-      return [offset, ...obliqueFields, ...connectorFields];
-    case undefined:
-      return [keys.position, offset, ...obliqueFields, keys.separated, keys.connector, ...connectorFields];
-  }
+  const obliqueFields = Object.values(keys.oblique);
+  const apexFields = Object.values(coneApexKeys);
+  const cutFields: Readonly<Record<SectionType, readonly (keyof ParameterChoices | ParameterKey)[]>> = {
+    'parallel-to-bases': [keys.position],
+    vertical: [keys.offset],
+    oblique: [...obliqueFields, 'coneObliqueThrough'],
+    'oblique-apex': [...apexFields, 'coneObliqueThrough'],
+  };
+  const active = new Set<string>(section === undefined ? [] : cutFields[section]);
+  const cuts = [...new Set(Object.values(cutFields).flat())].filter((key) => !active.has(key));
+  // Whether the first plane through the apex was set up is no setting, and starts over with the section.
+  const always: (keyof ParameterChoices)[] = ['coneApexStarted'];
+  return [...always, ...cuts, ...connectorFields, ...(section === undefined ? ([keys.separated, keys.connector] as const) : [])];
 }
 
 /**

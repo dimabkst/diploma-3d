@@ -8,6 +8,7 @@ import {
   formatPhysical,
   percentRange,
   physicalRange,
+  planeAngleRange,
   shownText,
   storedText,
   storedValue,
@@ -248,6 +249,32 @@ describe('connector settings on a cone', () => {
     expect(coneConnectorScale(values, off)?.verticalSpanMm).toBe(off?.verticalSpanMm);
     // A cylinder's stays its height.
     expect(connectorUnits(scaleOf(80), 'plug', 'vertical').cylinderDovetailLengthPercent).toBeCloseTo(0.8, 12);
+  });
+
+  it('measures an oblique cut, also through the apex, on its actual section, and keeps the last span of an invalid one', () => {
+    const through = { ...values, coneObliquePositionPercent: 50, coneObliqueInclinationDeg: 15, coneObliqueDirectionDeg: 0 };
+    const oblique = coneConnectorScale(through);
+    expect(oblique?.obliqueSpanMm).toBeGreaterThan(40);
+    expect(connectorUnits(oblique as NonNullable<typeof oblique>, 'plug', 'oblique').coneRoundSpacingPercent).toBeCloseTo(
+      (oblique?.obliqueSpanMm as number) / 200,
+      12,
+    );
+    const apex = coneConnectorScale({ ...values, coneApexInclinationDeg: 90, coneApexDirectionDeg: 0 });
+    expect(apex?.apexSpanMm).toBeCloseTo(80, 9);
+    expect(connectorUnits(apex as NonNullable<typeof apex>, 'plug', 'oblique-apex').coneDovetailLengthPercent).toBeCloseTo(
+      0.8,
+      9,
+    );
+    // At 45° the plane only touches the cone: nothing to measure.
+    expect(coneConnectorScale({ ...values, coneApexInclinationDeg: 45, coneApexDirectionDeg: 0 }, apex)?.apexSpanMm).toBe(
+      apex?.apexSpanMm,
+    );
+  });
+
+  it('rounds a plane’s angles inwards, keeps exact ends of an interval too narrow for that, and never reverses them', () => {
+    expect(planeAngleRange({ min: 68.1986, max: 90 }, 5)).toEqual({ min: 68.2, max: 90, increment: 5 });
+    expect(planeAngleRange({ min: 48.0129, max: 84.2894 }, 5)).toEqual({ min: 48.02, max: 84.28, increment: 5 });
+    expect(planeAngleRange({ min: 70.001, max: 70.004 }, 5)).toEqual({ min: 70.001, max: 70.004, increment: 5 });
   });
 
   it('leaves a cylinder’s parallel cut on its diameter', () => {

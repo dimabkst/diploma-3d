@@ -11,8 +11,11 @@ import type { Manifold } from 'manifold-3d';
 import { buildDovetail, type DovetailPlan, planDovetail, verifyDovetail } from './connectors/dovetail.ts';
 import {
   CONSTRAINT_ROUNDOFF_MM,
+  coneApexChord,
+  coneObliqueSection,
   coneVerticalSection,
   cutOfSection,
+  isApexChordUsable,
   obliqueCylinderSection,
   obliqueSplitReach,
   satisfies,
@@ -26,6 +29,7 @@ import type { GeometryKernel } from './kernel.ts';
 import {
   assertValidSolidMesh,
   type Bounds,
+  collapseRoundingSlivers,
   type MeshMeasurements,
   measureMesh,
   meshFromManifold,
@@ -114,6 +118,7 @@ const sectionNames: Readonly<Record<SectionType, string>> = {
   'parallel-to-bases': 'parallel-section',
   vertical: 'vertical-section',
   oblique: 'oblique-section',
+  'oblique-apex': 'apex-section',
 };
 
 /** The names of a section's parts in the order of the plane's negative and positive side, and their object names. */
@@ -121,6 +126,7 @@ const partNames: Readonly<Record<SectionType, readonly [SectionPart, SectionPart
   'parallel-to-bases': ['lower', 'upper'],
   vertical: ['part-1', 'part-2'],
   oblique: ['part-1', 'part-2'],
+  'oblique-apex': ['part-1', 'part-2'],
 };
 const partObjectName = (name: string, part: SectionPart): string =>
   part === 'lower' || part === 'upper' ? `${name}-${part}-part` : `${name}-${part}`;
@@ -165,7 +171,10 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
     return {
       type: spec.section.type,
       plane,
-      parts: { lower: meshWithNewFaces(parts.lower, originalIds), upper: meshWithNewFaces(parts.upper, originalIds) },
+      parts: {
+        lower: collapseRoundingSlivers(meshWithNewFaces(parts.lower, originalIds)),
+        upper: collapseRoundingSlivers(meshWithNewFaces(parts.upper, originalIds)),
+      },
       dowels: dowels.map((dowel) => meshWithNewFaces(dowel, originalIds)),
     };
   });
@@ -223,6 +232,9 @@ function cutPlaneOf({ shape, scale, section }: ModelSpec): Plane {
   if (section?.type === 'vertical' && shape.kind === 'cone')
     return coneVerticalSection(shape, scale, section.offsetPercent).plane;
   if (section?.type === 'oblique' && shape.kind === 'cylinder') return obliqueCylinderSection(shape, scale, section).plane;
+  if ((section?.type === 'oblique' || section?.type === 'oblique-apex') && shape.kind === 'cone') {
+    return coneObliqueSection(shape, scale, section).plane;
+  }
   throw new GeometryError('Expected a vertical or oblique cut of a round solid.');
 }
 
@@ -240,7 +252,16 @@ function assertVerticalOffset({ shape, scale, section }: ModelSpec): void {
 
 /** Both parts of an oblique cut keep a usable thickness: a body that cannot be split, whatever the connector. */
 function assertObliqueSplit({ shape, scale, section }: ModelSpec): void {
-  if (section?.type !== 'oblique' || shape.kind !== 'cylinder') return;
+  if (section?.type === 'oblique-apex' && shape.kind === 'cone') {
+    const chord = coneApexChord(shape, scale, section);
+    if (!isApexChordUsable(chord)) {
+      throw new InvalidModelSpecError([
+        `section: a plane through the apex meets the base at ${chord.offset} mm, outside the ${chord.usable.min}–${chord.usable.max} mm of two usable parts.`,
+      ]);
+    }
+    return;
+  }
+  if (section?.type !== 'oblique' || (shape.kind !== 'cylinder' && shape.kind !== 'cone')) return;
   const reach = obliqueSplitReach(shape, scale, section);
   if (!satisfies(reach)) {
     throw new InvalidModelSpecError([

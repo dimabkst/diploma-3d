@@ -1,7 +1,10 @@
 import {
+  coneApexChord,
+  coneObliqueSection,
   coneSection,
   coneVerticalSection,
   DOVETAIL_PROPORTIONS,
+  isApexChordUsable,
   obliqueCylinderSection,
   ROUND_CONNECTOR_PROPORTIONS,
   roundDimensionsMm,
@@ -21,6 +24,8 @@ export type ConnectorScale = {
   readonly parallelSpanMm?: number | undefined;
   /** The same of a cone's vertical cut; a cylinder's is its height. */
   readonly verticalSpanMm?: number | undefined;
+  /** The same of a plane through a cone's apex. */
+  readonly apexSpanMm?: number | undefined;
 };
 
 /** The fields whose stored value is a multiplier or a percentage, shown in millimetres. */
@@ -45,7 +50,7 @@ export type ScaledConnectorKey =
  * scales every connector as before and a new radius, height or plane keeps the proportions.
  */
 export function connectorUnits(
-  { longestDimensionMm: m, radiusMm: r, heightMm, obliqueSpanMm, parallelSpanMm, verticalSpanMm }: ConnectorScale,
+  { longestDimensionMm: m, radiusMm: r, heightMm, obliqueSpanMm, parallelSpanMm, verticalSpanMm, apexSpanMm }: ConnectorScale,
   roundType: 'plug' | 'dowel',
   sectionType: SectionType = 'parallel-to-bases',
 ): Readonly<Record<ScaledConnectorKey, number>> {
@@ -54,7 +59,9 @@ export function connectorUnits(
       ? (verticalSpanMm ?? heightMm)
       : sectionType === 'oblique'
         ? (obliqueSpanMm ?? 2 * r)
-        : (parallelSpanMm ?? 2 * r);
+        : sectionType === 'oblique-apex'
+          ? (apexSpanMm ?? 2 * r)
+          : (parallelSpanMm ?? 2 * r);
   const size = DOVETAIL_PROPORTIONS.height * m;
   const length = span / 100;
   const diameter = ROUND_CONNECTOR_PROPORTIONS.diameter * m;
@@ -128,6 +135,11 @@ export function coneConnectorScale(
     readonly coneOffsetRatio?: number | undefined;
     readonly coneSectionPercent?: number | undefined;
     readonly coneSectionOffsetPercent?: number | undefined;
+    readonly coneObliquePositionPercent?: number | undefined;
+    readonly coneObliqueInclinationDeg?: number | undefined;
+    readonly coneObliqueDirectionDeg?: number | undefined;
+    readonly coneApexInclinationDeg?: number | undefined;
+    readonly coneApexDirectionDeg?: number | undefined;
   },
   previous?: ConnectorScale,
 ): ConnectorScale | undefined {
@@ -139,7 +151,33 @@ export function coneConnectorScale(
   const parallelSpanMm =
     coneSectionPercent === undefined ? previous?.parallelSpanMm : coneSection(shape, scale, coneSectionPercent).span;
   const verticalSpanMm = verticalSpanOf(shape, scale, coneSectionOffsetPercent, previous?.verticalSpanMm);
-  return { longestDimensionMm: printSizeMm, radiusMm: radius, heightMm: height, parallelSpanMm, verticalSpanMm };
+  const { coneObliquePositionPercent: positionPercent, coneObliqueInclinationDeg, coneObliqueDirectionDeg } = values;
+  const obliqueSpanMm =
+    positionPercent === undefined || coneObliqueInclinationDeg === undefined || coneObliqueDirectionDeg === undefined
+      ? previous?.obliqueSpanMm
+      : coneObliqueSection(shape, scale, {
+          positionPercent,
+          inclinationDeg: coneObliqueInclinationDeg,
+          directionDeg: coneObliqueDirectionDeg,
+        }).span;
+  const apex =
+    values.coneApexInclinationDeg === undefined || values.coneApexDirectionDeg === undefined
+      ? undefined
+      : { inclinationDeg: values.coneApexInclinationDeg, directionDeg: values.coneApexDirectionDeg };
+  // A plane that does not split the cone has no usable section, and keeps the last span.
+  const apexSpanMm =
+    apex === undefined || !isApexChordUsable(coneApexChord(shape, scale, apex))
+      ? previous?.apexSpanMm
+      : coneObliqueSection(shape, scale, apex).span;
+  return {
+    longestDimensionMm: printSizeMm,
+    radiusMm: radius,
+    heightMm: height,
+    parallelSpanMm,
+    verticalSpanMm,
+    obliqueSpanMm,
+    apexSpanMm,
+  };
 }
 
 /** The scale of the solid's connector settings; undefined for a solid without them, or while a value it needs is invalid. */
@@ -184,6 +222,17 @@ export function physicalRange(
 export function percentRange({ min, max }: { readonly min: number; readonly max: number }, increment: number): StepRange {
   const inwards = (value: number) => Math.floor(value * PERCENT_FACTOR + ROUNDOFF_THOUSANDTHS) / PERCENT_FACTOR;
   return { min: -inwards(-min) + 0, max: inwards(max) + 0, increment };
+}
+
+/**
+ * A plane's allowed angles in degrees, for a slider: rounded inwards to hundredths, so that every position is an allowed
+ * angle. An interval too narrow to hold a hundredth keeps its exact ends rather than reversing them. Both ends stay
+ * reachable, as stepping and the slider stop at them even when they are no multiples of the step.
+ */
+export function planeAngleRange({ min, max }: { readonly min: number; readonly max: number }, increment: number): StepRange {
+  const low = Math.ceil(min * PERCENT_FACTOR - ROUNDOFF_THOUSANDTHS) / PERCENT_FACTOR;
+  const high = Math.floor(max * PERCENT_FACTOR + ROUNDOFF_THOUSANDTHS) / PERCENT_FACTOR;
+  return low <= high ? { min: low, max: high, increment } : { min, max, increment };
 }
 
 /** Millimetres for display: rounded to thousandths only here. */

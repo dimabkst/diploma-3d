@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { assertValidSolidMesh, findMeshDefects, measureMesh, meshVolume, type TriangleMesh } from './mesh.ts';
+import {
+  assertValidSolidMesh,
+  collapseRoundingSlivers,
+  findMeshDefects,
+  measureMesh,
+  meshVolume,
+  type TriangleMesh,
+  triangleCount,
+  vertexCount,
+} from './mesh.ts';
 import { rightTetrahedron, rightTetrahedronSurfaceArea, translated } from './test-fixtures.ts';
 
 const withTriangles = (mesh: TriangleMesh, triangles: readonly number[]): TriangleMesh => ({
@@ -71,5 +80,39 @@ describe('findMeshDefects', () => {
     ]);
     expect(findMeshDefects({ positions: new Float32Array(), triangles: new Uint32Array() })).toEqual(['empty']);
     expect(() => assertValidSolidMesh({ positions: new Float32Array(), triangles: new Uint32Array() })).toThrow(/empty/);
+  });
+});
+
+describe('collapseRoundingSlivers', () => {
+  // A tetrahedron with a copy of its apex a few float32 steps away along an edge, with two zero-area triangles between them.
+  const step = 2 ** -18;
+  const withCopy: TriangleMesh = {
+    positions: Float32Array.from([0, 0, 0, 8, 0, 0, 0, 8, 0, 0, 0, 8, -step, 0, 8 + step]),
+    triangles: Uint32Array.from([0, 2, 1, 1, 2, 4, 2, 0, 4, 0, 1, 3, 1, 4, 3, 0, 3, 4]),
+  };
+  const newFaces = Uint8Array.from([0, 1, 0, 1, 0, 1]);
+
+  it('merges the copy, keeps a closed mesh with its marks, and removes only the slivers', () => {
+    expect(findMeshDefects(withCopy)).toContain('degenerate-triangle');
+    const { mesh, newFaces: marks } = collapseRoundingSlivers({ mesh: withCopy, newFaces });
+    expect(findMeshDefects(mesh)).toEqual([]);
+    expect(triangleCount(mesh)).toBe(4);
+    expect(vertexCount(mesh)).toBe(4);
+    expect(marks).toHaveLength(4);
+    expect(Array.from(marks)).toEqual([0, 1, 0, 1]);
+  });
+
+  it('leaves a clean mesh as it is', () => {
+    const clean = { mesh: rightTetrahedron(10, 20, 30), newFaces: Uint8Array.from([0, 0, 0, 0]) };
+    expect(collapseRoundingSlivers(clean)).toBe(clean);
+  });
+
+  it('does not collapse a real, if short, edge', () => {
+    const shape: TriangleMesh = {
+      positions: Float32Array.from([0, 0, 0, 8, 0, 0, 0, 8, 0, 0, 0, 8, -0.01, 0, 8.01]),
+      triangles: withCopy.triangles,
+    };
+    const marked = { mesh: shape, newFaces };
+    expect(collapseRoundingSlivers(marked).mesh.positions).toHaveLength(15);
   });
 });

@@ -175,6 +175,64 @@ export function measureMesh(mesh: TriangleMesh): MeshMeasurements {
  * Checks that the mesh is a closed, consistently oriented edge-manifold with positive volume: every edge is shared by
  * exactly two triangles that traverse it in opposite directions. Self-intersections are not detected here.
  */
+// Edges this much shorter than the mesh's largest coordinate lie within a few float32 rounding steps of nothing.
+const ROUNDING_EDGE_RELATIVE = 1e-6;
+
+/**
+ * Removes the slivers that rounding leaves in a part: a plane through a vertex can leave the kernel a copy of it a
+ * billionth of a millimetre away, which float32 keeps as a separate vertex, one rounding step apart, with zero-area
+ * triangles between them. Only an edge of a degenerate triangle no longer than a few rounding steps collapses, into its
+ * first vertex: no geometry that a print could show moves, and a mesh without such slivers comes back as it is.
+ */
+export function collapseRoundingSlivers<Marked extends { readonly mesh: TriangleMesh; readonly newFaces: Uint8Array }>(
+  marked: Marked,
+): Marked {
+  const { mesh, newFaces } = marked;
+  const { size, bounds } = measureMesh(mesh);
+  const minimumDoubleArea = 2 * DEGENERATE_AREA_TOLERANCE * dot(size, size);
+  const shortest = ROUNDING_EDGE_RELATIVE * Math.max(...bounds.min.map(Math.abs), ...bounds.max.map(Math.abs));
+  const parent = Array.from({ length: vertexCount(mesh) }, (_, vertex) => vertex);
+  const rootOf = (vertex: number): number => {
+    let root = vertex;
+    while (parent[root] !== root) root = parent[root] as number;
+    return root;
+  };
+  let collapsed = false;
+  for (let triangle = 0; triangle < triangleCount(mesh); triangle += 1) {
+    if (length(triangleAreaVector(mesh, triangle)) > minimumDoubleArea) continue;
+    const corners = triangleAt(mesh, triangle);
+    corners.forEach((vertex, corner) => {
+      const next = corners[(corner + 1) % 3] as number;
+      if (length(subtract(vertexAt(mesh, vertex), vertexAt(mesh, next))) > shortest) return;
+      parent[rootOf(next)] = rootOf(vertex);
+      collapsed = true;
+    });
+  }
+  if (!collapsed) return marked;
+  const kept = Array.from({ length: triangleCount(mesh) }, (_, triangle) => triangle).filter((triangle) => {
+    const [a, b, c] = triangleAt(mesh, triangle).map(rootOf) as [number, number, number];
+    return a !== b && b !== c && c !== a;
+  });
+  const newIndex = new Map<number, number>();
+  const positions: number[] = [];
+  const indexOf = (vertex: number) => {
+    const root = rootOf(vertex);
+    let index = newIndex.get(root);
+    if (index === undefined) {
+      index = newIndex.size;
+      newIndex.set(root, index);
+      positions.push(...vertexAt(mesh, root));
+    }
+    return index;
+  };
+  const triangles = kept.flatMap((triangle) => triangleAt(mesh, triangle).map(indexOf));
+  return {
+    ...marked,
+    mesh: { positions: Float32Array.from(positions), triangles: Uint32Array.from(triangles) },
+    newFaces: Uint8Array.from(kept, (triangle) => newFaces[triangle] as number),
+  };
+}
+
 export function findMeshDefects(mesh: TriangleMesh): MeshDefect[] {
   const defects = new Set<MeshDefect>();
   const { positions, triangles } = mesh;

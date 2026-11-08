@@ -44,7 +44,7 @@ export type ShapeKind = Shape['kind'];
 /** The section types each shape offers; a shape that is not listed offers none yet. */
 export const SECTIONS_BY_SHAPE: Readonly<Partial<Record<ShapeKind, readonly SectionType[]>>> = {
   cylinder: ['parallel-to-bases', 'vertical', 'oblique'],
-  cone: ['parallel-to-bases', 'vertical'],
+  cone: ['parallel-to-bases', 'vertical', 'oblique', 'oblique-apex'],
 };
 
 export const supportsSection = (kind: ShapeKind, type: SectionType): boolean => SECTIONS_BY_SHAPE[kind]?.includes(type) ?? false;

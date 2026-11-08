@@ -743,10 +743,10 @@ describe('plane sections', () => {
     expect(modelSpecSchema.safeParse({ shape: cylinder, scale, section: { ...at(50), extra: 1 } }).success).toBe(false);
   });
 
-  it('offers parallel sections for the cylinder and the cone, and the other planes for the cylinder alone', () => {
+  it('offers parallel sections for the cylinder and the cone, and a plane through an apex for the cone alone', () => {
     expect(SECTIONS_BY_SHAPE).toEqual({
       cylinder: ['parallel-to-bases', 'vertical', 'oblique'],
-      cone: ['parallel-to-bases', 'vertical'],
+      cone: ['parallel-to-bases', 'vertical', 'oblique', 'oblique-apex'],
     });
     const shape = { kind: 'cone', heightRatio: 2 };
     const cone = modelSpecSchema.safeParse({ shape, scale, section: at(50) });
@@ -754,10 +754,33 @@ describe('plane sections', () => {
     for (const positionPercent of [9.9, 90.1, Number.NaN]) {
       expect(modelSpecSchema.safeParse({ shape, scale, section: at(positionPercent) }).success).toBe(false);
     }
-    const oblique = modelSpecSchema.safeParse({ shape, scale, section: { type: 'oblique' } });
-    expect(oblique.success).toBe(false);
-    expect(oblique.error?.issues[0]?.path).toEqual(['section']);
+    const apexOfCylinder = modelSpecSchema.safeParse({
+      shape: { kind: 'cylinder', heightRatio: 2 },
+      scale,
+      section: { type: 'oblique-apex', inclinationDeg: 80, directionDeg: 0 },
+    });
+    expect(apexOfCylinder.success).toBe(false);
+    expect(apexOfCylinder.error?.issues[0]?.path).toEqual(['section']);
     expect(modelSpecSchema.safeParse({ shape: { kind: 'cube' }, scale, section: at(50) }).success).toBe(false);
+  });
+});
+
+describe('a section through the apex', () => {
+  const parse = (values: Record<string, unknown>) =>
+    modelSpecSchema.safeParse({
+      shape: { kind: 'cone', heightRatio: 2 },
+      scale: { longestDimensionMm: 80 },
+      section: { type: 'oblique-apex', inclinationDeg: 75, directionDeg: 0, ...values },
+    });
+
+  it('takes any angle up to 90°, which the ordinary oblique plane’s cap does not apply to, and no position', () => {
+    for (const inclinationDeg of [0.5, 45, 85.5, 90]) expect(parse({ inclinationDeg }).success).toBe(true);
+    for (const inclinationDeg of [0, -1, 90.1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(parse({ inclinationDeg }).success).toBe(false);
+    }
+    for (const directionDeg of [0, 137.5, 360]) expect(parse({ directionDeg }).success).toBe(true);
+    for (const directionDeg of [-1, 360.5]) expect(parse({ directionDeg }).success).toBe(false);
+    expect(parse({ positionPercent: 50 }).success).toBe(false);
   });
 });
 

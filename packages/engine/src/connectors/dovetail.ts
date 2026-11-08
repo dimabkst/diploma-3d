@@ -9,6 +9,7 @@ import type { RoundShape } from '../shapes/round.ts';
 import { type ConnectorFeasibility, connectorFeasibility } from './bounds.ts';
 import {
   CONNECTOR_MIN_WALL_MM,
+  type ConeObliqueSection,
   type ConeParallelSection,
   type ConeVerticalSection,
   connectorVolumeTolerance,
@@ -232,6 +233,7 @@ function wallsOf(
     case 'cone-parallel':
       return coneWalls(section, dimensions, groove, 1);
     case 'cone-vertical':
+    case 'cone-oblique':
       return coneWalls(section, dimensions, groove, -1);
   }
 }
@@ -342,7 +344,7 @@ function obliqueWalls(
  * and the first three each meet the last at the closed end's corners, which these walls keep inside the part.
  */
 function coneWalls(
-  section: ConeParallelSection | ConeVerticalSection,
+  section: ConeParallelSection | ConeVerticalSection | ConeObliqueSection,
   { height, length, clearance }: DovetailDimensions,
   groove: ReturnType<typeof grooveExtent>,
   towardsStop: 1 | -1,
@@ -436,7 +438,8 @@ function dovetailFrame({ type, frame }: SolidSection): DovetailFrame {
  * above the centroid, where a right cylinder's channel opens through the upper base.
  *
  * A cone's cut parallel to its base slides like a cylinder's parallel cut, with the stop at +u and the entrance at −u; its
- * vertical cut like a cylinder's, with part A coming off straight up, whatever the cone's lean.
+ * vertical cut like a cylinder's, with part A coming off straight up, whatever the cone's lean; its oblique cut along the
+ * plane, uphill, with the stop downhill, also through the apex.
  *
  * An oblique cut does the same along the plane: part A comes off uphill and is seated downhill, the entrance uphill and
  * the stop downhill, whatever the plane's direction. See `dovetailChecks` for the constraints.

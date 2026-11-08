@@ -75,6 +75,9 @@ export {
   physicalScaleSchema,
 } from './scale.ts';
 export {
+  APEX_INCLINATION_MAX_DEG,
+  type ApexSection,
+  apexSectionSchema,
   CONNECTOR_TYPES,
   type Connector,
   type ConnectorType,

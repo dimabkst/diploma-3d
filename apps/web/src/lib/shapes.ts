@@ -33,6 +33,7 @@ import {
   connectorUnits,
   percentRange,
   physicalRange,
+  planeAngleRange,
   type ScaledConnectorKey,
 } from './model/connectorScale.ts';
 import {
@@ -40,7 +41,7 @@ import {
   type ChoiceKey,
   type ConnectorChoice,
   canSwitchTiltMode,
-  cylinderSectionKeys,
+  coneApexKeys,
   type ParameterChoices,
   type ParameterKey,
   type ParameterValues,
@@ -596,7 +597,35 @@ const coneVerticalSectionHelp: Help = {
     'гарантують, що тонку частину вдасться надрукувати.',
 };
 
-const AXIS_IN_PLANE_NOTE = 'Площина містить усю вісь циліндра, тому положення точки за висотою не змінює переріз.';
+const coneObliqueSectionHelp: Help = {
+  label: 'Як задано переріз?',
+  text:
+    'Площина проходить через вибрану точку на осі конуса — відрізку від центра основи до вершини: її положення задано у ' +
+    'відсотках висоти h від основи. Кут вимірюється відносно площини основи. Напрям показує, куди площина піднімається: ' +
+    '0° — уздовж осі X, 90° — уздовж осі Y. Поворот камери його не змінює, а компас у перегляді показує осі й стрілку ' +
+    'підйому.\n\n' +
+    'Поки площина не торкається основи, переріз прямого конуса — еліпс. Якщо площина перетинає основу, частина межі ' +
+    'перерізу стає відрізком. Кріплення розміщуються за фактичною формою перерізу.\n\n' +
+    'Частини 1 і 2 лежать по різні боки площини й експортуються окремими об’єктами в одному масштабі; розсування змінює ' +
+    'лише перегляд. Яка частина містить вершину, а яка основу, залежить від площини. Межі кута є обмеженнями застосунку: ' +
+    'горизонтальний, вертикальний і проведений через вершину перерізи мають окремі режими.',
+};
+
+const coneApexSectionHelp: Help = {
+  label: 'Як задано переріз?',
+  text:
+    'У режимі «Через вершину» площина проходить точно через вершину конуса та перетинає його основу. Переріз є трикутником. ' +
+    'Допустимі кути залежать від форми конуса й напряму нахилу площини.\n\n' +
+    'Вершини трикутника — вершина конуса й кінці хорди на основі; він зазвичай не рівнобедрений. Кут вимірюється відносно ' +
+    'площини основи, напрям показує, куди площина піднімається: компас у перегляді показує осі й стрілку підйому. Межі кута ' +
+    'лишають кожній частині щонайменше десяту частину ширини основи вздовж цього напряму, а площина, що лише торкається ' +
+    'конуса, його не ділить.\n\n' +
+    'Частини 1 і 2 лежать по різні боки площини, обидві стоять у файлі на залишках основи й експортуються окремими ' +
+    'об’єктами в одному масштабі; розсування змінює лише перегляд.',
+};
+
+const axisInPlaneNote = (kind: 'cylinder' | 'cone') =>
+  `Площина містить усю вісь ${kind === 'cone' ? 'конуса' : 'циліндра'}, тому положення точки за висотою не змінює переріз.`;
 
 const connectorNames: Readonly<Record<ConnectorChoice, string>> = {
   none: 'Без кріплення',
@@ -721,12 +750,14 @@ const CONE_PRINT_NOTE =
 
 const withConeNote = (help: Help): Help => ({ ...help, text: `${help.text}\n\n${CONE_PRINT_NOTE}` });
 
+const ENTRY_NOTCH_NOTE = 'У звуженій верхній частині може бути помітна виїмка для входу в паз.';
+
 const coneVerticalDovetailHelp: Help = {
   label: 'Як працює кріплення?',
   text:
     'Щоб скласти модель, опустіть частину з виступом уздовж паза до упора. Для розбирання утримуйте частину з пазом і ' +
     'підніміть частину з виступом. Паз відкритий угорі, упор — унизу; рух вертикальний, також у похилого конуса.\n\n' +
-    'У звуженій верхній частині може бути помітна виїмка для входу в паз.\n\n' +
+    `${ENTRY_NOTCH_NOTE}\n\n` +
     'Виступ — на частині 1, паз — у частині 2. Похилі боки під кутом 45° утримують половинки від роз’єднання ' +
     'перпендикулярно до перерізу, але це не замок: половинки роз’єднаються, якщо утримувати іншу або перевернути модель.\n\n' +
     'Висота визначає, наскільки виступ виходить за переріз. Довжина вимірюється вертикально, вздовж паза. Зазор — ' +
@@ -766,7 +797,7 @@ function connectorSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, 
     options: (['none', 'dovetail', 'plug', 'dowel'] as const).map((value) => ({ value, label: connectorNames[value] })),
   };
   const { dovetail, round } = keys;
-  const cut = choices[keys.choice] as SectionType;
+  const cut = activeSection(kind, choices) as SectionType;
   // Only a parallel cut has a lower and an upper part wherever it runs; the others number theirs.
   const numbered = cut !== 'parallel-to-bases';
   const units = connectorUnits(scale, chosen === 'dowel' ? 'dowel' : 'plug', cut);
@@ -871,13 +902,22 @@ function connectorSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, 
       plug: numberedPlugHelp(OBLIQUE_PRINT_NOTE),
       dowel: numberedDowelHelp(OBLIQUE_PRINT_NOTE),
     },
+    'oblique-apex': {
+      dovetail: obliqueDovetailHelp,
+      plug: numberedPlugHelp(OBLIQUE_PRINT_NOTE),
+      dowel: numberedDowelHelp(OBLIQUE_PRINT_NOTE),
+    },
   };
   const helpOf = (type: Exclude<ConnectorChoice, 'none'>): Help => {
     if (kind !== 'cone') return helps[cut][type];
-    if (cut !== 'vertical') return withConeNote(helps[cut][type]);
-    return type === 'dovetail'
-      ? coneVerticalDovetailHelp
-      : (type === 'plug' ? numberedPlugHelp : numberedDowelHelp)(CONE_VERTICAL_NOTE + VERTICAL_PRINT_NOTE);
+    if (cut === 'parallel-to-bases') return withConeNote(helps[cut][type]);
+    if (cut === 'vertical' && type === 'dovetail') return coneVerticalDovetailHelp;
+    if (type === 'dovetail') {
+      const { label, text } = helps[cut][type];
+      return { label, text: `${ENTRY_NOTCH_NOTE}\n\n${text}` };
+    }
+    const printNote = cut === 'vertical' ? VERTICAL_PRINT_NOTE : OBLIQUE_PRINT_NOTE;
+    return (type === 'plug' ? numberedPlugHelp : numberedDowelHelp)(CONE_VERTICAL_NOTE + printNote);
   };
   return [
     section(`${kind}-connector`, 'Кріплення', [selector, ...fields[chosen]], {
@@ -890,17 +930,19 @@ function connectorSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, 
 /** A dowel enters each part by half its whole length. */
 const shownHalf = (length: number | undefined) => (length === undefined ? undefined : length / 2);
 
-/** Whether the current valid plane contains the current valid cylinder's whole axis. */
+/** Whether the current valid plane contains the current valid solid's whole axis. */
 function obliqueContainsAxis(
+  kind: 'cylinder' | 'cone',
   values: ParameterValues | undefined,
   inclinationKey: ParameterKey,
   directionKey: ParameterKey,
 ): boolean {
-  const [heightRatio, offsetRatio] = [values?.cylinderHeightRatio, values?.cylinderOffsetRatio];
+  const heightRatio = kind === 'cone' ? values?.coneHeightRatio : values?.cylinderHeightRatio;
+  const offsetRatio = kind === 'cone' ? values?.coneOffsetRatio : values?.cylinderOffsetRatio;
   const [inclination, direction] = [values?.[inclinationKey], values?.[directionKey]];
   if (heightRatio === undefined || offsetRatio === undefined || inclination === undefined || direction === undefined)
     return false;
-  return obliquePlaneContainsAxis({ kind: 'cylinder', heightRatio, offsetRatio }, inclination, direction);
+  return obliquePlaneContainsAxis({ kind, heightRatio, offsetRatio }, inclination, direction);
 }
 
 /**
@@ -918,17 +960,24 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
     type: 'choice',
     key: keys.choice,
     label: 'Тип перерізу',
-    options: (kind === 'cone'
-      ? (['none', 'parallel-to-bases', 'vertical'] as const)
-      : (['none', 'parallel-to-bases', 'vertical', 'oblique'] as const)
-    ).map((value) => ({ value, label: namesOf(value) })),
+    options: (['none', 'parallel-to-bases', 'vertical', 'oblique'] as const).map((value) => ({ value, label: namesOf(value) })),
   };
-  const { offset } = keys;
-  const { oblique } = cylinderSectionKeys;
+  const { offset, oblique } = keys;
   const interval = context.sectionRanges?.[offset];
   const toggle: ToggleField = { type: 'toggle', key: keys.separated, label: 'Розсунути частини' };
   const noteId = `${kind}-oblique-axis-note`;
-  const containsAxis = obliqueContainsAxis(context.values, oblique.inclination, oblique.direction);
+  const containsAxis = obliqueContainsAxis(kind, context.values, oblique.inclination, oblique.direction);
+  const through: ChoiceField = {
+    type: 'choice',
+    key: 'coneObliqueThrough',
+    label: 'Площина проходить через',
+    options: [
+      { value: 'axis', label: 'Точку на осі' },
+      { value: 'apex', label: 'Вершину' },
+    ],
+  };
+  const apexAngles = context.sectionRanges?.[coneApexKeys.inclination];
+  const throughApex = kind === 'cone' && choices.coneObliqueThrough === 'apex';
   const details: Record<SectionChoice, ParameterField[]> = {
     none: [],
     'parallel-to-bases': [
@@ -951,26 +1000,46 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
       },
       toggle,
     ],
-    oblique: [
-      {
-        type: 'number',
-        key: oblique.position,
-        label: 'Точка на осі від нижньої основи',
-        suffix: '% h',
-        range: sectionPositionRange,
-        ...(containsAxis ? { disabled: true, describedBy: noteId } : {}),
-      },
-      ...(containsAxis ? [{ type: 'note' as const, key: noteId, text: AXIS_IN_PLANE_NOTE }] : []),
-      { type: 'number', key: oblique.inclination, label: 'Кут до площини основи', suffix: '°', range: obliqueInclinationRange },
-      { type: 'number', key: oblique.direction, label: 'Напрям нахилу', suffix: '°', range: obliqueDirectionRange },
-      toggle,
-    ],
+    oblique: throughApex
+      ? [
+          through,
+          {
+            type: 'number',
+            key: coneApexKeys.inclination,
+            label: 'Кут до площини основи',
+            suffix: '°',
+            range: apexAngles === undefined || apexAngles === null ? undefined : planeAngleRange(apexAngles, ANGLE_INCREMENT_DEG),
+          },
+          { type: 'number', key: coneApexKeys.direction, label: 'Напрям нахилу', suffix: '°', range: obliqueDirectionRange },
+          toggle,
+        ]
+      : [
+          ...(kind === 'cone' ? [through] : []),
+          {
+            type: 'number',
+            key: oblique.position,
+            label: kind === 'cone' ? 'Точка на осі від основи' : 'Точка на осі від нижньої основи',
+            suffix: '% h',
+            range: sectionPositionRange,
+            ...(containsAxis ? { disabled: true, describedBy: noteId } : {}),
+          },
+          ...(containsAxis ? [{ type: 'note' as const, key: noteId, text: axisInPlaneNote(kind) }] : []),
+          {
+            type: 'number',
+            key: oblique.inclination,
+            label: 'Кут до площини основи',
+            suffix: '°',
+            range: obliqueInclinationRange,
+          },
+          { type: 'number', key: oblique.direction, label: 'Напрям нахилу', suffix: '°', range: obliqueDirectionRange },
+          toggle,
+        ],
   };
   const help: Record<SectionChoice, Help | undefined> = {
     none: undefined,
     'parallel-to-bases': kind === 'cone' ? coneSectionHelp : parallelSectionHelp,
     vertical: kind === 'cone' ? coneVerticalSectionHelp : verticalSectionHelp,
-    oblique: obliqueSectionHelp,
+    oblique: kind === 'cone' ? (throughApex ? coneApexSectionHelp : coneObliqueSectionHelp) : obliqueSectionHelp,
   };
   return section(`${kind}-section`, 'Переріз', [selector, ...details[chosen]], {
     initiallyOpen: false,

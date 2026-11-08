@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const SECTION_TYPES = ['parallel-to-bases', 'vertical', 'oblique'] as const;
+export const SECTION_TYPES = ['parallel-to-bases', 'vertical', 'oblique', 'oblique-apex'] as const;
 
 export type SectionType = (typeof SECTION_TYPES)[number];
 
@@ -27,6 +27,8 @@ export const sectionPositionSchema = z.number().min(SECTION_POSITION_LIMITS.min)
  */
 export const OBLIQUE_INCLINATION_LIMITS = { min: 5, max: 85 } as const;
 export const OBLIQUE_DIRECTION_LIMITS = { min: 0, max: 360 } as const;
+
+export const APEX_INCLINATION_MAX_DEG = 90;
 
 export const DEFAULT_OBLIQUE_SECTION = { positionPercent: 50, inclinationDeg: 45, directionDeg: 0 } as const;
 
@@ -163,6 +165,26 @@ export const obliqueSectionSchema = z.strictObject({
 
 export type ObliqueSection = z.infer<typeof obliqueSectionSchema>;
 
-export const sectionSchema = z.discriminatedUnion('type', [parallelSectionSchema, verticalSectionSchema, obliqueSectionSchema]);
+/**
+ * A plane through a cone's apex, at the angle inclinationDeg to the base plane, rising along the horizontal direction
+ * directionDeg. Any such plane is well-formed up to the vertical 90°, which holds the axis of a right cone; whether it
+ * splits this cone into two parts depends on the cone and the direction, which the engine checks.
+ */
+export const apexSectionSchema = z.strictObject({
+  type: z.literal('oblique-apex'),
+  inclinationDeg: z.number().gt(0).max(APEX_INCLINATION_MAX_DEG),
+  directionDeg: z.number().min(OBLIQUE_DIRECTION_LIMITS.min).max(OBLIQUE_DIRECTION_LIMITS.max),
+  /** Joins the parts; without one, both cut faces stay flat. */
+  connector: connectorSchema.optional(),
+});
+
+export type ApexSection = z.infer<typeof apexSectionSchema>;
+
+export const sectionSchema = z.discriminatedUnion('type', [
+  parallelSectionSchema,
+  verticalSectionSchema,
+  obliqueSectionSchema,
+  apexSectionSchema,
+]);
 
 export type Section = z.infer<typeof sectionSchema>;

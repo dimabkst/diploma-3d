@@ -122,6 +122,26 @@ describe('restOnFlatFace', () => {
     expect(faceDownArea(rested)).toBeGreaterThan(0);
   });
 
+  it('turns a part with no flat face to spare so that its connector’s face points up, and rests on a free cut otherwise', () => {
+    // Floating above the base's plane: a tip, whose one flat side faces −Y.
+    const tip = tetrahedron(
+      [
+        [0, 0, 5],
+        [10, 0, 5],
+        [5, 0, 15],
+      ],
+      [5, 10, 8],
+    );
+    const outward: Vec3 = [0, -1, 0];
+    const up = restOnFlatFace(tip, { baseHeight: 30, turnAxis, connectorFace: outward });
+    const free = restOnFlatFace(tip, { baseHeight: 30, turnAxis, cutFaceOutward: outward });
+    // y ↦ z, so that the face at y = 0 is now the plane z = 0 of the rotation, and points up or down.
+    expect(measureMesh(up).bounds.max[2]).toBeCloseTo(0, 5);
+    expect(measureMesh(free).bounds.min[2]).toBeCloseTo(0, 5);
+    expect(measureMesh(up).volume).toBeCloseTo(measureMesh(tip).volume, 3);
+    expect(measureMesh(free).volume).toBeCloseTo(measureMesh(tip).volume, 3);
+  });
+
   it('keeps the part as it is when both bases carry it equally', () => {
     const box = (width: number): TriangleMesh => ({
       positions: Float32Array.from([

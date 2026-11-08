@@ -25,6 +25,7 @@ import {
   resolveModelRequest,
   type SectionRanges,
   sectionKeys,
+  startApexSection,
   switchTiltMode,
 } from './lib/model/parameters.ts';
 import { loadPrintSizeText, savePrintSize } from './lib/model/printSize.ts';
@@ -84,7 +85,8 @@ $effect.pre(() => {
       current.heightMm !== last?.heightMm ||
       current.obliqueSpanMm !== last?.obliqueSpanMm ||
       current.parallelSpanMm !== last?.parallelSpanMm ||
-      current.verticalSpanMm !== last?.verticalSpanMm)
+      current.verticalSpanMm !== last?.verticalSpanMm ||
+      current.apexSpanMm !== last?.apexSpanMm)
   ) {
     lastConnectorScales = { ...untrack(() => lastConnectorScales), [selectedKind]: current };
   }
@@ -165,6 +167,12 @@ function applyState(state: ParameterState) {
   parameterExact = state.exact ?? {};
   tiltModes = state.tiltModes ?? tiltModes;
 }
+
+// The first plane through a cone's apex takes a valid angle for the cone it finds; after that nothing changes on its own.
+$effect.pre(() => {
+  const next = startApexSection(parameterState, request?.values ?? {});
+  if (next !== undefined) untrack(() => applyState(next));
+});
 
 let latestRequest = 0;
 

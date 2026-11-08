@@ -107,20 +107,32 @@ const scaled = (a: Vec3, factor: number): Vec3 => [a[0] * factor, a[1] * factor,
  * bed, which they may need supports for. A
  * vertical cut's parts stay upright on what remains of their bases, by translation only; their connector faces stand
  * upright too, so a connector along them may need another orientation in the slicer. An oblique cut's parts each choose
- * their own resting face, see `restOnFlatFace`. Removable dowels stand upright on an end face.
+ * their own resting face, see `restOnFlatFace`; the parts of a plane through a cone's apex both keep some of the base,
+ * and stay upright on it. Removable dowels stand upright on an end face.
  */
 function printObjects({ solids, section, spec }: GeneratedModel): readonly ThreeMfObject[] {
   if (solids.length === 1) return solids;
   const connector = section?.connector;
-  if (spec.section?.type === 'oblique' && spec.shape.kind === 'cylinder') {
+  if (spec.section?.type === 'oblique' && (spec.shape.kind === 'cylinder' || spec.shape.kind === 'cone')) {
+    const isCone = spec.shape.kind === 'cone';
     const baseHeight = roundDimensionsMm(spec.shape, spec.scale).height;
     const { n, v } = obliqueAxes(spec.section.inclinationDeg, spec.section.directionDeg);
+    // Whichever part keeps the base or the apex, a plug or a tongue on the cut face could not rest on the bed.
+    const protrudes = connector?.type === 'plug' || connector?.type === 'dovetail';
     return arrangeInRow(
       solids.map((solid) => {
         if (solid.part === 'dowel') return { ...solid, mesh: rotateOntoZ(solid.mesh, n) };
-        // A connector on the cut face could not rest on the bed.
-        const cutFace = connector === undefined ? { cutFaceOutward: solid.part === 'part-1' ? n : scaled(n, -1) } : {};
-        return { ...solid, mesh: restOnFlatFace(solid.mesh, { baseHeight, turnAxis: v, ...cutFace }) };
+        const outward = solid.part === 'part-1' ? n : scaled(n, -1);
+        const cutFaceFree = isCone ? !(protrudes && solid.part === 'part-1') : connector === undefined;
+        return {
+          ...solid,
+          mesh: restOnFlatFace(solid.mesh, {
+            baseHeight,
+            turnAxis: v,
+            ...(cutFaceFree ? { cutFaceOutward: outward } : {}),
+            ...(isCone && !cutFaceFree ? { connectorFace: outward } : {}),
+          }),
+        };
       }),
     );
   }

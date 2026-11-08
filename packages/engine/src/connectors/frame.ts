@@ -1,4 +1,5 @@
 import {
+  APEX_INCLINATION_MAX_DEG,
   type ConeShape,
   type CylinderShape,
   type PhysicalScale,
@@ -134,16 +135,27 @@ export interface ConeVerticalSection extends FacetedSection {
   readonly offset: number;
 }
 
+/**
+ * A cone's oblique cut: part A lies on the negative side of the normal, part B on the positive one; u points uphill within
+ * the plane. Which of them keeps the apex or the base follows from the plane alone. `anchor` only fixes the plane: a point
+ * on the axis, or the apex, which no connector may stand on; connectors stand on `frame.origin`, the area centroid.
+ */
+export interface ConeObliqueSection extends FacetedSection {
+  readonly type: 'cone-oblique';
+  readonly anchor: Vec3;
+  readonly throughApex: boolean;
+}
+
 export type SolidSection =
   | ParallelCylinderSection
   | VerticalCylinderSection
   | ObliqueCylinderSection
   | ConeParallelSection
-  | ConeVerticalSection;
+  | ConeVerticalSection
+  | ConeObliqueSection;
 
 /** Whether the section was read off the actual solid's faces. */
-export const isFaceted = (section: SolidSection): section is ObliqueCylinderSection | ConeParallelSection | ConeVerticalSection =>
-  'faces' in section;
+export const isFaceted = (section: SolidSection): section is SolidSection & FacetedSection => 'faces' in section;
 
 /** A vertical cut's position: the signed distance from the axis in percent of the radius. */
 export interface VerticalCut {
@@ -157,8 +169,14 @@ export interface ObliqueCut {
   readonly directionDeg: number;
 }
 
+/** A plane through a cone's apex: the angle to the base plane, and the horizontal direction it rises along. */
+export interface ApexCut {
+  readonly inclinationDeg: number;
+  readonly directionDeg: number;
+}
+
 /** Where a round solid is cut: a plane parallel to the base at this percentage of the height, or another plane. */
-export type SolidCut = number | VerticalCut | ObliqueCut;
+export type SolidCut = number | VerticalCut | ObliqueCut | ApexCut;
 
 const normalised = (a: Vec3): Vec3 => {
   const norm = length(a);
@@ -314,10 +332,10 @@ export function obliqueAxes(
 }
 
 /**
- * Whether the plane contains the cylinder's whole axis a = (d, 0, H), so that every P on it gives the same plane:
+ * Whether the plane contains the round solid's whole axis a = (d, 0, H), so that every P on it gives the same plane:
  * n·a = 0. The ratio d/H decides, whatever the size. Compared rather than solved for, so nothing divides by n·a.
  */
-export function obliquePlaneContainsAxis(shape: CylinderShape, inclinationDeg: number, directionDeg: number): boolean {
+export function obliquePlaneContainsAxis(shape: RoundShape, inclinationDeg: number, directionDeg: number): boolean {
   const { n } = obliqueAxes(inclinationDeg, directionDeg);
   const axis: Vec3 = [shape.offsetRatio, 0, shape.heightRatio];
   return Math.abs(dot(n, axis)) <= AXIS_IN_PLANE_RELATIVE * length(axis);
@@ -539,23 +557,103 @@ export function coneVerticalSection(shape: ConeShape, scale: PhysicalScale, offs
   };
 }
 
+/** A cone's oblique cut, through a point on its axis or exactly through its apex; the entrance lies uphill, at +u. */
+export function coneObliqueSection(shape: ConeShape, scale: PhysicalScale, cut: ObliqueCut | ApexCut): ConeObliqueSection {
+  const dimensions = roundDimensionsMm(shape, scale);
+  const axes = obliqueAxes(cut.inclinationDeg, cut.directionDeg);
+  const t = 'positionPercent' in cut ? cut.positionPercent / 100 : 1;
+  const anchor: Vec3 = [t * dimensions.offset, 0, t * dimensions.height];
+  return {
+    ...facetedSection(conePolyhedron(dimensions), axes, dot(axes.n, anchor), dimensions.radius, 1),
+    type: 'cone-oblique',
+    anchor,
+    throughApex: !('positionPercent' in cut),
+  };
+}
+
+/** Where a plane through the apex meets the base, along the direction q it rises in, and what the base allows there. */
+export interface ApexChord {
+  /** δ: the chord's distance from the base's centre along q, n·x = n·A at z = 0: δ = L − H·cot α, with L = q·(A − C0). */
+  readonly offset: number;
+  /** The actual polygon's reach along q: a plane beyond it only touches the cone, at the apex or along a generator. */
+  readonly support: { readonly min: number; readonly max: number };
+  /** Within the support, the chords that leave both parts of the base a usable width. Reversed when no chord does. */
+  readonly usable: { readonly min: number; readonly max: number };
+  readonly horizontalReachOfApex: number;
+  readonly height: number;
+}
+
+/**
+ * The chord of the plane through the apex at this angle and direction. The usable chords follow the rule of a vertical
+ * cut: each part keeps a tenth of the base's width along q and at least one wall, which excludes tangent cuts and slivers.
+ */
+export function coneApexChord(shape: ConeShape, scale: PhysicalScale, cut: ApexCut): ApexChord {
+  const { radius, height, offset: d } = roundDimensionsMm(shape, scale);
+  const [cosAlpha, sinAlpha] = cosSinDeg(cut.inclinationDeg);
+  const { u } = obliqueAxes(0, cut.directionDeg);
+  const q: Vec3 = [u[0], u[1], 0];
+  const along = basePolygon(radius).map(([x, y]) => x * q[0] + y * q[1]);
+  const support = { min: Math.min(...along), max: Math.max(...along) };
+  const margin = Math.max((SECTION_POSITION_LIMITS.min / 100) * (support.max - support.min), CONNECTOR_MIN_WALL_MM);
+  const reach = d * q[0];
+  return {
+    offset: reach - (height * cosAlpha) / sinAlpha,
+    support,
+    usable: { min: support.min + margin, max: support.max - margin },
+    horizontalReachOfApex: reach,
+    height,
+  };
+}
+
+/** Whether the plane through the apex crosses the base inside its usable chords, up to the plans' roundoff. */
+export function isApexChordUsable({ offset, usable }: ApexChord): boolean {
+  return offset >= usable.min - CONSTRAINT_ROUNDOFF_MM && offset <= usable.max + CONSTRAINT_ROUNDOFF_MM;
+}
+
+/** Whether the plane through the apex meets the base at all, or only touches the cone. */
+export const apexChordCrossesBase = ({ offset, support }: ApexChord): boolean => offset > support.min && offset < support.max;
+
+/**
+ * The angles at which a plane through the apex, rising in this direction, crosses the base within its usable chords, in
+ * degrees; null when none does. δ grows with α up to L at 90°, so α runs from atan2(H, L − δlow) to atan2(H, L − δhigh)
+ * with δhigh = min(usable high, L): a direction against a strong lean leaves δhigh below δlow, and no angle at all.
+ */
+export function coneApexAngleBounds(
+  shape: ConeShape,
+  scale: PhysicalScale,
+  directionDeg: number,
+): { readonly min: number; readonly max: number } | null {
+  const {
+    usable,
+    horizontalReachOfApex: L,
+    height,
+  } = coneApexChord(shape, scale, {
+    inclinationDeg: APEX_INCLINATION_MAX_DEG,
+    directionDeg,
+  });
+  const high = Math.min(usable.max, L);
+  if (high < usable.min) return null;
+  const degrees = (run: number) => (Math.atan2(height, run) * 180) / Math.PI;
+  return { min: degrees(L - usable.min), max: degrees(L - high) };
+}
+
 /**
  * The least distance each part must keep from the plane along the normal for a usable part, in millimetres: the rule of
  * a vertical cut, at least one wall and a tenth of the solid's extent. The position's limits already keep that share,
  * since the part's reach from P is a mean of t·|n·a| and the polygon's own reach. An application restriction: it does
  * not make every thin part printable.
  */
-export function obliquePartMinimumMm(section: ObliqueCylinderSection): number {
+export function obliquePartMinimumMm(section: FacetedSection): number {
   return Math.max((SECTION_POSITION_LIMITS.min / 100) * section.depthExtent, CONNECTOR_MIN_WALL_MM);
 }
 
 /** How far the thinner part reaches from an oblique plane, in millimetres, with what it must reach. */
 export function obliqueSplitReach(
-  shape: CylinderShape,
+  shape: RoundShape,
   scale: PhysicalScale,
   cut: ObliqueCut,
 ): { readonly valueMm: number; readonly minimumMm: number } {
-  const section = obliqueCylinderSection(shape, scale, cut);
+  const section = shape.kind === 'cone' ? coneObliqueSection(shape, scale, cut) : obliqueCylinderSection(shape, scale, cut);
   return { valueMm: Math.min(section.reach.negative, section.reach.positive), minimumMm: obliquePartMinimumMm(section) };
 }
 
@@ -582,6 +680,8 @@ export const cutOfSection = (section: Section): SolidCut => {
         inclinationDeg: section.inclinationDeg,
         directionDeg: section.directionDeg,
       };
+    case 'oblique-apex':
+      return { inclinationDeg: section.inclinationDeg, directionDeg: section.directionDeg };
     case 'parallel-to-bases':
       return section.positionPercent;
   }
@@ -591,13 +691,12 @@ export const cutOfSection = (section: Section): SolidCut => {
 export function solidCut(shape: RoundShape, scale: PhysicalScale, cut: SolidCut): SolidSection {
   if (shape.kind === 'cone') {
     if (typeof cut === 'number') return coneSection(shape, scale, cut);
-    if ('offsetPercent' in cut) return coneVerticalSection(shape, scale, cut.offsetPercent);
-    throw new GeometryError('A cone offers no oblique cut.');
+    return 'offsetPercent' in cut ? coneVerticalSection(shape, scale, cut.offsetPercent) : coneObliqueSection(shape, scale, cut);
   }
   if (typeof cut === 'number') return cylinderSection(shape, scale, cut);
-  return 'offsetPercent' in cut
-    ? verticalCylinderSection(shape, scale, cut.offsetPercent)
-    : obliqueCylinderSection(shape, scale, cut);
+  if ('offsetPercent' in cut) return verticalCylinderSection(shape, scale, cut.offsetPercent);
+  if ('positionPercent' in cut) return obliqueCylinderSection(shape, scale, cut);
+  throw new GeometryError('A cylinder has no apex to cut through.');
 }
 
 /**
