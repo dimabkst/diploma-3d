@@ -146,14 +146,13 @@ test('where no value fits the controls say so, and smooth surfaces remain', asyn
   await entry(page, OFFSET).fill('80');
   await expectReady(page, '20 × 20 × 20 мм');
   await entry(page, 'Тип кріплення').selectOption({ label: 'Виступ і отвір' });
-  await expect(
-    parameterSection(page, 'Кріплення')
-      .getByText(/жодне значення/)
-      .first(),
-  ).toBeVisible();
-  await expect(slider(page, 'Висота виступу, мм')).toBeDisabled();
+  await expect(parameterSection(page, 'Кріплення').getByText(/^Кріплення не вміщується/)).toBeVisible();
+  // The cut stays in view, but the file would not hold what the group promises.
+  await expect(previewViewport(page)).toHaveAttribute('data-preview-status', 'loaded', { timeout: 30_000 });
+  await expect(entry(page, 'Висота виступу, мм')).toHaveCount(0);
   await expect(partsButton(page)).toBeDisabled();
-  await entry(page, 'Тип кріплення').selectOption({ label: 'Без кріплення' });
+  await page.getByRole('button', { name: 'Обрати «Без кріплення»', exact: true }).click();
+  await expect(entry(page, 'Тип кріплення')).toHaveValue('none');
   await expectReady(page, '20 × 20 × 20 мм');
 });
 
@@ -196,11 +195,11 @@ test('on a narrow phone every field is reachable and the page fits', async ({ pa
   await entry(page, 'Кількість').selectOption({ label: '2' });
   for (const label of [
     OFFSET,
-    'Діаметр штифта, мм',
+    'Діаметр вихідного кола, мм',
     'Від центра до осі кріплення, мм',
     'Повна довжина штифта, мм',
-    'Збільшення діаметра нижніх отворів, мм',
-    'Збільшення діаметра верхніх отворів, мм',
+    'Збільшення нижніх отворів, мм',
+    'Збільшення верхніх отворів, мм',
   ]) {
     await slider(page, label).scrollIntoViewIfNeeded();
     await expect(slider(page, label)).toBeInViewport();

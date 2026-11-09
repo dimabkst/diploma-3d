@@ -2,16 +2,19 @@ import { obliqueCylinderSection, roundDimensionsMm, sectionOffsetMm } from '@dip
 import { describe, expect, it } from 'vitest';
 import { formatSteppedDecimal, snapDecimal, stepDecimal } from '../decimal.ts';
 import { sectionNumberFields, shapePanel } from '../shapes.ts';
-import { storedText } from './connectorScale.ts';
+import { formatMillimetres, storedText } from './connectorScale.ts';
 import {
   activeConnector,
   activeSection,
   alignedTrapezoidShift,
+  type ConnectorEdits,
   canResetShapeParameters,
   canSwitchTiltMode,
+  commitConnectorEdit,
   initialParameterChoices,
   initialParameterTexts,
   isScaledConnectorKey,
+  type ParameterChoices,
   type ParameterState,
   type ParameterTexts,
   partsSeparated,
@@ -23,6 +26,7 @@ import {
   validateAngle,
   validateApex,
   validateApexInclination,
+  validateDiametralClearance,
   validateDirection,
   validateObliqueDirection,
   validateObliqueInclination,
@@ -35,8 +39,35 @@ import {
 } from './parameters.ts';
 import { initialTiltModes, type TiltMode, type TiltSolid } from './tilt.ts';
 
-const texts = (overrides: Partial<ParameterTexts>): ParameterTexts => ({ ...initialParameterTexts(), ...overrides });
-const triangle = initialParameterChoices();
+// Most cases read as a hand-entered circular connector with earlier clearances, the one that must keep behaving as it did;
+// the defaults of new connectors have their own cases at the end.
+const entered = {
+  cylinderPlugClearanceMm: '0,2',
+  cylinderDowelLowerClearanceMm: '0,1',
+  cylinderDowelUpperClearanceMm: '0,2',
+  conePlugClearanceMm: '0,2',
+  coneDowelLowerClearanceMm: '0,1',
+  coneDowelUpperClearanceMm: '0,2',
+  ballPlugClearanceMm: '0,2',
+  ballDowelLowerClearanceMm: '0,1',
+  ballDowelUpperClearanceMm: '0,2',
+};
+const texts = (overrides: Partial<ParameterTexts>): ParameterTexts => ({ ...initialParameterTexts(), ...entered, ...overrides });
+const triangle = {
+  ...initialParameterChoices(),
+  cylinderRoundProfile: 'circle',
+  coneRoundProfile: 'circle',
+  ballRoundProfile: 'circle',
+} as const satisfies ParameterChoices;
+
+/** After a reset, a solid's own connector values are the current defaults again; the other solids' stay as they were. */
+const resetTexts = (kind: 'cylinder' | 'cone' | 'ball', overrides: Partial<ParameterTexts>): ParameterTexts => {
+  const initial = initialParameterTexts();
+  const clearances = (['PlugClearanceMm', 'DowelLowerClearanceMm', 'DowelUpperClearanceMm'] as const).map(
+    (name) => `${kind}${name}` as keyof ParameterTexts,
+  );
+  return { ...texts(overrides), ...Object.fromEntries(clearances.map((key) => [key, initial[key]])) };
+};
 
 describe('validateRatio', () => {
   it.each([
@@ -188,9 +219,9 @@ describe('resolveModelRequest', () => {
       coneRoundSpacingPercent: '45',
       coneRoundDiameter: '1',
       coneRoundDepth: '1',
-      conePlugClearanceMm: '0,2',
-      coneDowelLowerClearanceMm: '0,1',
-      coneDowelUpperClearanceMm: '0,2',
+      conePlugClearanceMm: '0,5',
+      coneDowelLowerClearanceMm: '0,4',
+      coneDowelUpperClearanceMm: '0,5',
       ballSectionOffsetPercent: '0',
       ballDovetailSize: '1',
       ballDovetailLengthPercent: '50',
@@ -198,9 +229,9 @@ describe('resolveModelRequest', () => {
       ballRoundSpacingPercent: '45',
       ballRoundDiameter: '1',
       ballRoundDepth: '1',
-      ballPlugClearanceMm: '0,2',
-      ballDowelLowerClearanceMm: '0,1',
-      ballDowelUpperClearanceMm: '0,2',
+      ballPlugClearanceMm: '0,5',
+      ballDowelLowerClearanceMm: '0,4',
+      ballDowelUpperClearanceMm: '0,5',
       cylinderSectionPercent: '50',
       cylinderSectionOffsetPercent: '0',
       cylinderObliquePositionPercent: '50',
@@ -212,9 +243,9 @@ describe('resolveModelRequest', () => {
       cylinderRoundSpacingPercent: '45',
       cylinderRoundDiameter: '1',
       cylinderRoundDepth: '1',
-      cylinderPlugClearanceMm: '0,2',
-      cylinderDowelLowerClearanceMm: '0,1',
-      cylinderDowelUpperClearanceMm: '0,2',
+      cylinderPlugClearanceMm: '0,5',
+      cylinderDowelLowerClearanceMm: '0,4',
+      cylinderDowelUpperClearanceMm: '0,5',
     });
     expect(initialParameterChoices()).toEqual({
       prismBaseType: 'regular',
@@ -225,15 +256,18 @@ describe('resolveModelRequest', () => {
       cylinderPartsSeparated: true,
       cylinderConnector: 'none',
       cylinderRoundCount: 1,
+      cylinderRoundProfile: 'flatted-circle',
       coneSection: 'none',
       conePartsSeparated: true,
       coneConnector: 'none',
       coneRoundCount: 1,
+      coneRoundProfile: 'flatted-circle',
       coneObliqueThrough: 'axis',
       coneApexStarted: false,
       ballSection: 'none',
       ballConnector: 'none',
       ballRoundCount: 1,
+      ballRoundProfile: 'flatted-circle',
       ballPartsSeparated: true,
     });
     expect(resolveModelRequest('cuboid', initialParameterTexts(), triangle).spec).toEqual({
@@ -1200,7 +1234,7 @@ describe('one range per control', () => {
   )('makes the slider and buttons of every %s field span exactly the values it accepts (%j, %s mode)', (kind, choices, mode) => {
     const tiltModes = kind === 'cuboid' ? initialTiltModes() : { ...initialTiltModes(), [kind as TiltSolid]: mode as TiltMode };
     const options = { exact: {}, tiltModes };
-    const initial = resolveModelRequest(kind, initialParameterTexts(), choices, options);
+    const initial = resolveModelRequest(kind, texts({}), choices, options);
     // The defaults of every figure are valid in both modes.
     expect(initial.errors).toEqual({});
     const panel = shapePanel(kind, choices, { tiltModes, values: initial.values, sectionRanges: initial.sectionRanges });
@@ -1353,8 +1387,8 @@ describe('a cylinder section parallel to the bases', () => {
     };
     expect(canResetShapeParameters('cylinder', edited)).toBe(true);
     const reset = resetShapeParameters('cylinder', edited);
-    expect(reset.texts).toEqual(texts({ printSizeMm: '120', coneHeightRatio: '4' }));
-    expect(reset.choices).toEqual({ ...triangle, prismBaseSides: 6 });
+    expect(reset.texts).toEqual(resetTexts('cylinder', { printSizeMm: '120', coneHeightRatio: '4' }));
+    expect(reset.choices).toEqual({ ...triangle, prismBaseSides: 6, cylinderRoundProfile: 'flatted-circle' });
     expect(reset.choices).toMatchObject({ cylinderSection: 'none', cylinderPartsSeparated: true });
     expect(canResetShapeParameters('cylinder', reset)).toBe(false);
   });
@@ -1555,7 +1589,7 @@ describe('a dovetail joining the cylinder’s parts', () => {
     const reset = resetShapeParameters('cylinder', edited);
     expect(reset.choices.cylinderConnector).toBe('none');
     expect(reset.choices.cylinderSection).toBe('none');
-    expect(reset.texts).toEqual(texts({ printSizeMm: '120' }));
+    expect(reset.texts).toEqual(resetTexts('cylinder', { printSizeMm: '120' }));
     // Settings of a connector that is not chosen do not offer a reset on their own.
     const hidden = { texts: texts({ cylinderDovetailSize: '1,5' }), choices: { ...joined, cylinderConnector: 'none' } } as const;
     expect(canResetShapeParameters('cylinder', { ...hidden, choices: { ...hidden.choices, cylinderSection: 'none' } })).toBe(
@@ -1588,6 +1622,7 @@ describe('plugs and dowels joining the cylinder’s parts', () => {
     expect(request({}, choose('plug')).spec?.section?.connector).toEqual({
       type: 'plug',
       count: 1,
+      profile: 'circle',
       diameterFactor: 1,
       depthFactor: 1,
       holeClearanceMm: 0.2,
@@ -1595,6 +1630,7 @@ describe('plugs and dowels joining the cylinder’s parts', () => {
     expect(request({}, choose('dowel')).spec?.section?.connector).toEqual({
       type: 'dowel',
       count: 1,
+      profile: 'circle',
       diameterFactor: 1,
       depthFactor: 1,
       lowerClearanceMm: 0.1,
@@ -1606,15 +1642,19 @@ describe('plugs and dowels joining the cylinder’s parts', () => {
     expect(fieldsOf(choose('plug'))).toEqual([
       ['choice', 'cylinderConnector'],
       ['note', 'cylinder-connector-scale'],
+      ['choice', 'cylinderRoundProfile'],
       ['choice', 'cylinderRoundCount'],
       ['note', 'cylinder-connector-count'],
       ['number', 'cylinderRoundDiameter'],
       ['number', 'cylinderRoundDepth'],
+      ['note', 'cylinder-plug-height'],
       ['number', 'cylinderPlugClearanceMm'],
+      ['note', 'cylinder-connector-clearance'],
     ]);
     expect(fieldsOf(choose('dowel', 2))).toEqual([
       ['choice', 'cylinderConnector'],
       ['note', 'cylinder-connector-scale'],
+      ['choice', 'cylinderRoundProfile'],
       ['choice', 'cylinderRoundCount'],
       ['note', 'cylinder-connector-count'],
       ['number', 'cylinderRoundDiameter'],
@@ -1624,6 +1664,8 @@ describe('plugs and dowels joining the cylinder’s parts', () => {
       ['note', 'cylinder-dowel-insertion'],
       ['number', 'cylinderDowelLowerClearanceMm'],
       ['number', 'cylinderDowelUpperClearanceMm'],
+      ['note', 'cylinder-connector-clearance'],
+      ['action', 'cylinder-download-pins'],
     ]);
     const group = connectorGroup(choose('dowel', 2));
     expect(group?.status).toEqual({ text: 'знімні штифти', highlighted: true });
@@ -1635,26 +1677,28 @@ describe('plugs and dowels joining the cylinder’s parts', () => {
     expect(
       sectionNumberFields(group as NonNullable<typeof group>).map(({ label, suffix, range }) => [label, suffix, range]),
     ).toEqual([
-      ['Діаметр штифта, мм', '', { min: 3.75, max: 36.666, increment: 0.25 }],
+      ['Діаметр штифта, мм', '', { min: 3.75, max: 36.666, increment: 0.1 }],
       ['Від центра до осі кріплення, мм', '', { min: 3.31, max: 35.751, increment: 0.25 }],
       ['Повна довжина штифта, мм', '', { min: 6.2, max: 77, increment: 0.25 }],
-      ['Збільшення діаметра нижніх отворів, мм', '', { min: 0, max: 0.4, increment: 0.05 }],
-      ['Збільшення діаметра верхніх отворів, мм', '', { min: 0, max: 0.4, increment: 0.05 }],
+      ['Збільшення діаметра нижніх отворів, мм', '', { min: 0, max: 0.5, increment: 0.05 }],
+      ['Збільшення діаметра верхніх отворів, мм', '', { min: 0, max: 0.5, increment: 0.05 }],
     ]);
     const notes = (choices: typeof triangle) =>
       connectorGroup(choices)?.fields.flatMap((field) => (field.type === 'note' ? [field.text] : []));
     expect(notes(choose('dowel', 2))).toEqual([
-      'Показано фактичні розміри для поточного масштабу моделі. Розміри кріплення змінюються разом із найбільшим габаритом.',
+      'Показано фактичні розміри кріплення. Спочатку їх визначає місце в обох частинах; задані вручну змінюються разом із ' +
+        'найбільшим габаритом, а якщо вже не вміщуються, зменшуються автоматично.',
       'Одне кругле кріплення дозволяє повертати половинки. Два кріплення різного діаметра задають їхнє взаємне положення.',
       'Друге кріплення: діаметр 4 мм.',
       'У кожну половинку штифт входить на 4 мм.',
+      'Значення 0,4 мм дає зазор 0,2 мм з кожного боку.',
     ]);
     // A plug's field is its height above the cut, e = 4 mm, from 2,8 to 38,5 mm; it enters the upper part only.
     const plug = connectorGroup(choose('plug'));
     expect(sectionNumberFields(plug as NonNullable<typeof plug>).map(({ label, range }) => [label, range])).toEqual([
-      ['Діаметр виступу, мм', { min: 3, max: 75.703, increment: 0.25 }],
+      ['Діаметр виступу, мм', { min: 3, max: 75.703, increment: 0.1 }],
       ['Висота виступу, мм', { min: 2.8, max: 38.5, increment: 0.25 }],
-      ['Збільшення діаметра отвору, мм', { min: 0, max: 0.4, increment: 0.05 }],
+      ['Збільшення діаметра отвору, мм', { min: 0, max: 1, increment: 0.05 }],
     ]);
     expect(plug?.help?.text).toMatch(/^Виступ друкується разом із нижньою половинкою та входить в отвір верхньої\./);
     expect(plug?.help?.text).toMatch(/значення 0,2 мм дає отвір діаметром 5,2 мм\.\n\nМежі повзунків/);
@@ -1694,8 +1738,8 @@ describe('plugs and dowels joining the cylinder’s parts', () => {
           'від центра до осей. Стінка біля отвору у нижній частині — 0 мм, потрібно щонайменше 1,2 мм. Зменште діаметр ' +
           'штифта або відстань від центра до осей. Зараз допустимо від 3,31 мм до 35,751 мм.',
       ],
-      ['cylinderDowelLowerClearanceMm', '-0,05', 'Допустимі значення — від 0 мм до 0,4 мм.'],
-      ['cylinderDowelUpperClearanceMm', '0,45', 'Допустимі значення — від 0 мм до 0,4 мм.'],
+      ['cylinderDowelLowerClearanceMm', '-0,05', 'Допустимі значення — від 0 мм до 1 мм.'],
+      ['cylinderDowelUpperClearanceMm', '1,05', 'Допустимі значення — від 0 мм до 1 мм.'],
     ] as const) {
       const result = request({ [key]: text }, choose('dowel', 2));
       expect(result.errors[key]).toBe(message);
@@ -1767,7 +1811,7 @@ describe('plugs and dowels joining the cylinder’s parts', () => {
     };
     expect(canResetShapeParameters('cylinder', edited)).toBe(true);
     const reset = resetShapeParameters('cylinder', edited);
-    expect(reset.texts).toEqual(texts({ printSizeMm: '120' }));
+    expect(reset.texts).toEqual(resetTexts('cylinder', { printSizeMm: '120' }));
     expect(reset.choices).toMatchObject({ cylinderConnector: 'none', cylinderRoundCount: 1, cylinderSection: 'none' });
     // Without a section its connector's settings shape nothing and offer no reset of their own.
     const hidden = texts({ cylinderRoundSpacingPercent: '60', cylinderPlugClearanceMm: '0,3' });
@@ -1910,7 +1954,7 @@ describe('a vertical section of the cylinder', () => {
     };
     expect(canResetShapeParameters('cylinder', edited)).toBe(true);
     const reset = resetShapeParameters('cylinder', edited);
-    expect(reset.texts).toEqual(texts({ printSizeMm: '120' }));
+    expect(reset.texts).toEqual(resetTexts('cylinder', { printSizeMm: '120' }));
     expect(reset.choices).toMatchObject({ cylinderSection: 'none', cylinderConnector: 'none' });
     // A hidden distance offers no reset of its own.
     expect(canResetShapeParameters('cylinder', { texts: texts({ cylinderSectionOffsetPercent: '25' }), choices: triangle })).toBe(
@@ -2292,7 +2336,7 @@ describe('an oblique section of the cylinder', () => {
     };
     expect(canResetShapeParameters('cylinder', edited)).toBe(true);
     const reset = resetShapeParameters('cylinder', edited);
-    expect(reset.texts).toEqual(texts({ printSizeMm: '120' }));
+    expect(reset.texts).toEqual(resetTexts('cylinder', { printSizeMm: '120' }));
     expect(reset.choices.cylinderSection).toBe('none');
     // Fields of a mode that is not chosen shape nothing.
     expect(canResetShapeParameters('cylinder', { texts: edited.texts, choices: triangle })).toBe(false);
@@ -2448,7 +2492,7 @@ describe('a section of the cone parallel to its base', () => {
     };
     expect(canResetShapeParameters('cone', edited)).toBe(true);
     const reset = resetShapeParameters('cone', edited);
-    expect(reset.texts).toEqual(texts({ printSizeMm: '120', cylinderSectionPercent: '70' }));
+    expect(reset.texts).toEqual(resetTexts('cone', { printSizeMm: '120', cylinderSectionPercent: '70' }));
     expect(reset.choices).toMatchObject({
       coneSection: 'none',
       coneConnector: 'none',
@@ -2603,7 +2647,7 @@ describe('a vertical section of the cone', () => {
     const edited: ParameterState = { texts: texts({ printSizeMm: '120', coneSectionOffsetPercent: '40' }), choices: sectioned };
     expect(canResetShapeParameters('cone', edited)).toBe(true);
     const reset = resetShapeParameters('cone', edited);
-    expect(reset.texts).toEqual(texts({ printSizeMm: '120' }));
+    expect(reset.texts).toEqual(resetTexts('cone', { printSizeMm: '120' }));
     expect(reset.choices.coneSection).toBe('none');
     // A hidden offset shapes nothing.
     const hidden = {
@@ -2831,7 +2875,7 @@ describe('an oblique section of the cone', () => {
     };
     expect(canResetShapeParameters('cone', edited)).toBe(true);
     const reset = resetShapeParameters('cone', edited);
-    expect(reset.texts).toEqual(texts({ printSizeMm: '120' }));
+    expect(reset.texts).toEqual(resetTexts('cone', { printSizeMm: '120' }));
     expect(reset.choices).toMatchObject({ coneSection: 'none', coneObliqueThrough: 'axis', coneApexStarted: false });
     // Having once entered the mode is no setting of its own.
     expect(canResetShapeParameters('cone', { texts: texts({}), choices: { ...triangle, coneApexStarted: true } })).toBe(false);
@@ -2974,7 +3018,7 @@ describe('a horizontal section of the ball', () => {
     };
     expect(canResetShapeParameters('ball', edited)).toBe(true);
     const reset = resetShapeParameters('ball', edited);
-    expect(reset.texts).toEqual(texts({ printSizeMm: '120' }));
+    expect(reset.texts).toEqual(resetTexts('ball', { printSizeMm: '120' }));
     expect(reset.choices).toMatchObject({
       ballSection: 'none',
       ballConnector: 'none',
@@ -2985,5 +3029,252 @@ describe('a horizontal section of the ball', () => {
     expect(activeSection('ball', sectioned)).toBe('horizontal');
     expect(activeConnector('ball', choose('dowel'))).toBe('dowel');
     expect(partsSeparated('ball', { ...sectioned, ballPartsSeparated: false })).toBe(false);
+  });
+});
+
+describe('a new round connector, and one edited by hand', () => {
+  const choices = (connector: 'plug' | 'dowel', overrides: Partial<ParameterChoices> = {}): ParameterChoices => ({
+    ...initialParameterChoices(),
+    cylinderSection: 'parallel-to-bases',
+    cylinderConnector: connector,
+    ...overrides,
+  });
+  // r = 30 mm and H = 100 mm.
+  const tall = { printSizeMm: '100', cylinderHeightRatio: '3,3333333333' };
+  const initial = (overrides: Partial<ParameterTexts> = {}) => ({ ...initialParameterTexts(), ...tall, ...overrides });
+  const resolved = (
+    connector: 'plug' | 'dowel',
+    overrides: Partial<ParameterTexts> = {},
+    edits: ConnectorEdits = {},
+    chosen: Partial<ParameterChoices> = {},
+  ) => resolveModelRequest('cylinder', initial(overrides), choices(connector, chosen), { connectorEdits: edits });
+  const millimetres = (factor: number | undefined, unit: number) => Number(((factor ?? Number.NaN) * unit).toFixed(6));
+  const atM100 = { diameter: 6.25, insertion: 5 };
+
+  it('starts from what the section offers, with the flat side and the provisional clearances', () => {
+    const plug = resolved('plug');
+    expect(plug.errors).toEqual({});
+    expect(plug.spec?.section?.connector).toMatchObject({ type: 'plug', profile: 'flatted-circle', holeClearanceMm: 0.5 });
+    expect(millimetres(plug.values.cylinderRoundDiameter, atM100.diameter)).toBe(13.9);
+    expect(millimetres(plug.values.cylinderRoundDepth, atM100.insertion)).toBe(24.25);
+    const dowel = resolved('dowel');
+    expect(dowel.spec?.section?.connector).toMatchObject({ lowerClearanceMm: 0.4, upperClearanceMm: 0.5 });
+    // The field shows the whole length.
+    expect(2 * millimetres(dowel.values.cylinderRoundDepth, atM100.insertion)).toBe(48.5);
+    expect(plug.connectorStatus?.corrections).toEqual([]);
+  });
+
+  it('keeps following the section until a value is edited by hand', () => {
+    const atHalf = resolved('plug');
+    const nearTop = resolved('plug', { cylinderSectionPercent: '90' });
+    expect(nearTop.values.cylinderRoundDepth as number).toBeLessThan(atHalf.values.cylinderRoundDepth as number);
+    expect(nearTop.connectorStatus?.corrections).toEqual([]);
+    const pair = resolved('plug', {}, {}, { cylinderRoundCount: 2 });
+    expect(pair.values.cylinderRoundDiameter as number).toBeLessThan(atHalf.values.cylinderRoundDiameter as number);
+    expect(pair.values.cylinderRoundSpacingPercent).toBe(45);
+    expect(pair.errors).toEqual({});
+  });
+
+  const state = (connector: 'plug' | 'dowel', overrides: Partial<ParameterTexts> = {}): ParameterState => ({
+    texts: initial(overrides),
+    choices: choices(connector),
+    connectorEdits: {},
+  });
+  const requestOf = ({ texts: stored, choices: chosen, connectorEdits }: ParameterState) =>
+    resolveModelRequest('cylinder', stored, chosen, { connectorEdits });
+  /** What a hand edit does: what the fields show is kept, and then the typed value replaces its own. */
+  const edit = (before: ParameterState, key: keyof ParameterTexts, text: string): ParameterState => {
+    const committed = commitConnectorEdit('cylinder', before, requestOf(before));
+    return { ...committed, texts: { ...committed.texts, [key]: text } };
+  };
+
+  it('keeps every shown value when one is edited, and counts a typed value out of range as that field’s error', () => {
+    const before = state('plug');
+    const shown = requestOf(before).values;
+    const after = edit(before, 'cylinderRoundDepth', '2');
+    const request = requestOf(after);
+    expect(request.errors).toEqual({});
+    expect(request.values.cylinderRoundDiameter).toBeCloseTo(shown.cylinderRoundDiameter as number, 9);
+    expect(request.values.cylinderRoundDepth).toBe(2);
+    // Beyond the part's thickness: reported, not corrected.
+    const tooLong = requestOf(edit(after, 'cylinderRoundDepth', '20'));
+    expect(tooLong.errors.cylinderRoundDepth).toMatch(/^Під дном отвору у верхній частині лишається/);
+    expect(tooLong.spec).toBeUndefined();
+    expect(tooLong.connectorStatus?.corrections).toEqual([]);
+  });
+
+  it('preserves an edited value while it fits, and corrects it with a note when the model changes', () => {
+    const edited = edit(state('dowel'), 'cylinderRoundDepth', '6');
+    const fits = requestOf({ ...edited, texts: { ...edited.texts, cylinderHeightRatio: '4' } });
+    expect(fits.values.cylinderRoundDepth).toBe(6);
+    expect(fits.connectorStatus?.corrections).toEqual([]);
+    const thin = requestOf({ ...edited, texts: { ...edited.texts, cylinderSectionPercent: '90' } });
+    expect(thin.errors).toEqual({});
+    const length = 2 * (thin.values.cylinderRoundDepth as number) * atM100.insertion;
+    expect(length).toBeLessThan(60);
+    expect(thin.connectorStatus?.corrections).toEqual([
+      `Довжину штифта зменшено до ${formatMillimetres(length)} мм через товщину частини.`,
+    ]);
+    expect(thin.spec?.section?.connector).toMatchObject({ depthFactor: thin.values.cylinderRoundDepth });
+  });
+
+  it('never shrinks a stored value: a model that returns gets its former dimensions, whatever came between', () => {
+    const edited = edit(state('dowel'), 'cylinderRoundDepth', '6');
+    const key = requestOf(edited).key;
+    let current = edited;
+    for (const position of ['90', '10', '85', '50']) {
+      current = { ...current, texts: { ...current.texts, cylinderSectionPercent: position } };
+      const first = requestOf(current);
+      expect(requestOf(current).key).toBe(first.key);
+      expect(first.errors).toEqual({});
+    }
+    expect(current.texts.cylinderRoundDepth).toBe('6');
+    expect(requestOf(current).key).toBe(key);
+    expect(requestOf(current).connectorStatus?.corrections).toEqual([]);
+  });
+
+  it('scales edited dimensions with the model, keeps clearances absolute, and adjusts afterwards', () => {
+    const edited = edit(edit(state('dowel'), 'cylinderRoundDiameter', '2'), 'cylinderDowelUpperClearanceMm', '0,75');
+    const resized = requestOf({ ...edited, texts: { ...edited.texts, printSizeMm: '200' } });
+    expect(resized.spec?.section?.connector).toMatchObject({ diameterFactor: 2, upperClearanceMm: 0.75, lowerClearanceMm: 0.4 });
+    const shrunk = requestOf({ ...edited, texts: { ...edited.texts, printSizeMm: '30' } });
+    expect(shrunk.errors).toEqual({});
+    expect(shrunk.spec?.section?.connector).toMatchObject({ upperClearanceMm: 0.75, lowerClearanceMm: 0.4 });
+  });
+
+  it('commits nothing again in the same context, so that typing is left as typed', () => {
+    const edited = edit(state('plug'), 'cylinderRoundDepth', '2,50');
+    expect(commitConnectorEdit('cylinder', edited, requestOf(edited))).toBe(edited);
+    expect(requestOf(edited).values.cylinderRoundDepth).toBe(2.5);
+  });
+
+  it('answers a connector that cannot fit with the plain cut, an explanation and a way to choose none', () => {
+    const tiny = { printSizeMm: '10', cylinderHeightRatio: '0,5' };
+    const request = resolved('dowel', tiny);
+    expect(request.errors).toEqual({});
+    expect(request.spec?.section).toEqual({ type: 'parallel-to-bases', positionPercent: 50 });
+    expect(request.connectorStatus?.unavailable).toMatch(/^Кріплення не вміщується/);
+    expect(request.connectorStatus?.unavailable).toMatch(/оберіть «Без кріплення»/);
+    // The same model chosen without a connector is another request: only that one is for download.
+    const plain = resolveModelRequest('cylinder', initial(tiny), choices('dowel', { cylinderConnector: 'none' }), {
+      connectorEdits: {},
+    });
+    expect(plain.spec).toEqual(request.spec);
+    expect(plain.key).not.toBe(request.key);
+    expect(plain.connectorStatus).toBeUndefined();
+    const panel = shapePanel('cylinder', choices('dowel'), { ...request, connectorStatus: request.connectorStatus });
+    const group = panel.type === 'parameters' ? panel.sections.find(({ title }) => title === 'Кріплення') : undefined;
+    expect(group?.status).toEqual({ text: 'не вміщується', highlighted: true });
+    const fields = group?.fields ?? [];
+    expect(fields.some((field) => field.type === 'note' && field.tone === 'alert')).toBe(true);
+    expect(fields.map(({ key }) => key)).toContain('cylinder-choose-no-connector');
+    expect(fields.map(({ key }) => key)).not.toContain('cylinderRoundDiameter');
+    expect(fields.map(({ key }) => key)).not.toContain('cylinder-download-pins');
+  });
+
+  it('returns an edited connector to the section’s defaults on a reset', () => {
+    const edited = edit(state('plug'), 'cylinderRoundDepth', '2');
+    expect(canResetShapeParameters('cylinder', edited)).toBe(true);
+    const reset = resetShapeParameters('cylinder', edited);
+    expect(reset.connectorEdits).toEqual({});
+    expect(reset.choices.cylinderConnector).toBe('none');
+    const again = resolveModelRequest('cylinder', { ...reset.texts, ...tall }, choices('plug'), { connectorEdits: {} });
+    expect(millimetres(again.values.cylinderRoundDiameter, atM100.diameter)).toBe(13.9);
+  });
+
+  const fieldsFor = (connector: 'plug' | 'dowel', chosen: Partial<ParameterChoices> = {}) => {
+    const request = resolved(connector, {}, {}, chosen);
+    const panel = shapePanel('cylinder', choices(connector, chosen), {
+      values: request.values,
+      sectionRanges: request.sectionRanges,
+    });
+    const group = panel.type === 'parameters' ? panel.sections.find(({ title }) => title === 'Кріплення') : undefined;
+    return group as NonNullable<typeof group>;
+  };
+
+  it.each([
+    ['circle', 'Діаметр штифта, мм', 'Збільшення діаметра нижніх отворів, мм', undefined],
+    [
+      'triangle',
+      'Діаметр описаного кола, мм',
+      'Збільшення нижніх отворів, мм',
+      'Розмір — діаметр описаного кола, а не довжина сторони.',
+    ],
+    [
+      'square',
+      'Діаметр описаного кола, мм',
+      'Збільшення нижніх отворів, мм',
+      'Розмір — діаметр описаного кола, тобто діагональ квадрата.',
+    ],
+    [
+      'hexagon',
+      'Діаметр описаного кола, мм',
+      'Збільшення нижніх отворів, мм',
+      'Розмір — діаметр описаного кола, а не довжина сторони.',
+    ],
+    [
+      'flatted-circle',
+      'Діаметр вихідного кола, мм',
+      'Збільшення нижніх отворів, мм',
+      'Розмір — діаметр вихідного кола, з якого зрізано один бік.',
+    ],
+  ] as const)('names what the size of a %s measures', (profile, size, clearance, note) => {
+    const group = fieldsFor('dowel', { cylinderRoundProfile: profile });
+    const labels = sectionNumberFields(group).map(({ label }) => label);
+    expect(labels).toContain(size);
+    expect(labels).toContain(clearance);
+    expect(labels.join(' ')).not.toMatch(/сторон|граней/);
+    const notes = group.fields.flatMap((field) => (field.type === 'note' ? [field.text] : []));
+    if (note !== undefined) expect(notes).toContain(note);
+    expect(notes).toContain('Значення 0,4 мм дає зазор 0,2 мм з кожного боку.');
+  });
+
+  it('offers the five profiles in Ukrainian, and the pins alone for dowels only', () => {
+    const profile = fieldsFor('plug').fields.find(({ key }) => key === 'cylinderRoundProfile');
+    expect(profile?.type === 'choice' ? profile.options.map(({ label }) => label) : []).toEqual([
+      'Круг',
+      'Трикутник',
+      'Квадрат',
+      'Шестикутник',
+      'Круг зі зрізаним боком',
+    ]);
+    const action = (connector: 'plug' | 'dowel') =>
+      fieldsFor(connector).fields.flatMap((field) => (field.type === 'action' ? [field.label] : []));
+    expect(action('dowel')).toEqual(['Завантажити лише штифти']);
+    expect(action('plug')).toEqual([]);
+  });
+
+  it('tells a plug’s height from a dowel’s whole length', () => {
+    const notes = (connector: 'plug' | 'dowel') =>
+      fieldsFor(connector).fields.flatMap((field) => (field.type === 'note' ? [field.text] : []));
+    expect(notes('plug')).toContain('Висота від площини перерізу: на стільки виступ заходить в отвір другої частини.');
+    expect(notes('dowel')).toContain('У кожну половинку штифт входить на 24,25 мм.');
+  });
+
+  it('steps the size by 0,1 mm to the next grid value, without binary artefacts', () => {
+    const size = sectionNumberFields(fieldsFor('plug')).find(({ key }) => key === 'cylinderRoundDiameter');
+    expect(size?.range?.increment).toBe(0.1);
+    const range = size?.range as NonNullable<typeof size>['range'] & object;
+    expect(stepDecimal(15.05, -1, range)).toBe(15);
+    expect(stepDecimal(15.05, 1, range)).toBe(15.1);
+    expect(stepDecimal(0.3 + 15, 1, range)).toBe(15.4);
+    expect(formatSteppedDecimal(stepDecimal(13.9, 1, range) as number)).toBe('14');
+    expect(formatSteppedDecimal(stepDecimal(14, -1, range) as number)).toBe('13,9');
+  });
+
+  it('opens the clearance up to 1 mm on both connectors where the walls allow it', () => {
+    for (const [connector, key] of [
+      ['plug', 'cylinderPlugClearanceMm'],
+      ['dowel', 'cylinderDowelUpperClearanceMm'],
+      ['dowel', 'cylinderDowelLowerClearanceMm'],
+    ] as const) {
+      expect(sectionNumberFields(fieldsFor(connector)).find((field) => field.key === key)?.range).toMatchObject({
+        min: 0,
+        max: 1,
+      });
+      void key;
+      expect(validateDiametralClearance('1')).toEqual({ value: 1 });
+      expect(validateDiametralClearance('1,05')).toEqual({ error: 'Допустимі значення — від 0 мм до 1 мм.' });
+    }
   });
 });

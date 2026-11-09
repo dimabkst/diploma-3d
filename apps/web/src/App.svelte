@@ -15,7 +15,9 @@ import { describeModelError, type ModelState, visibleArtifacts } from './lib/mod
 import {
   activeConnector,
   activeSection,
+  type ConnectorEdits,
   canResetShapeParameters,
+  commitConnectorEdit,
   initialParameterChoices,
   initialParameterTexts,
   type ParameterExact,
@@ -30,7 +32,15 @@ import {
 } from './lib/model/parameters.ts';
 import { loadPrintSizeText, savePrintSize } from './lib/model/printSize.ts';
 import { initialTiltModes, type TiltMode, type TiltSolid } from './lib/model/tilt.ts';
-import { isAvailableShape, printSizeField, sectionNumberFields, shapeLabel, shapeOptions, shapePanel } from './lib/shapes.ts';
+import {
+  isAvailableShape,
+  type PanelAction,
+  printSizeField,
+  sectionNumberFields,
+  shapeLabel,
+  shapeOptions,
+  shapePanel,
+} from './lib/shapes.ts';
 
 // Parameter edits are coalesced briefly so that typing "1,75" does not rebuild the model for every keystroke.
 const EDIT_DEBOUNCE_MS = 150;
@@ -42,6 +52,7 @@ let parameterChoices = $state(initialParameterChoices());
 // Replaced as a whole, never mutated: the exact values behind converted texts and each solid's tilt input mode.
 let parameterExact = $state.raw<ParameterExact>({});
 let tiltModes = $state.raw(initialTiltModes());
+let connectorEdits = $state.raw<ConnectorEdits>({});
 let attempt = $state(0);
 // Raw state: the artifacts hold large typed arrays that must not be wrapped in deep reactive proxies.
 let model = $state.raw<ModelState>({ status: 'generating', stale: undefined });
@@ -54,6 +65,7 @@ const parameterState = $derived<ParameterState>({
   choices: parameterChoices,
   exact: parameterExact,
   tiltModes,
+  connectorEdits,
 });
 // The last valid scale of each solid with connectors, so that its settings stay in millimetres while the print size or
 // the solid is being corrected.
@@ -66,6 +78,7 @@ const request = $derived(
         exact: parameterExact,
         tiltModes,
         connectorScale: lastConnectorScale,
+        connectorEdits,
       }),
 );
 const connectorScale = $derived(
@@ -103,6 +116,7 @@ const connectorContext = $derived(
         activeSection(selectedKind, parameterChoices) ?? 'none',
         activeConnector(selectedKind, parameterChoices) ?? 'none',
         parameterChoices[sectionKeys[selectedKind]?.round.count ?? 'cylinderRoundCount'],
+        parameterChoices[sectionKeys[selectedKind]?.round.profile ?? 'cylinderRoundProfile'],
       ].join(':'),
 );
 $effect.pre(() => {
@@ -123,7 +137,13 @@ const requestKey = $derived(request?.key);
 const panel = $derived(
   selectedKind === undefined
     ? { type: 'fixed' as const, note: '' }
-    : shapePanel(selectedKind, parameterChoices, { tiltModes, values: request?.values, connectorScale, sectionRanges }),
+    : shapePanel(selectedKind, parameterChoices, {
+        tiltModes,
+        values: request?.values,
+        connectorScale,
+        sectionRanges,
+        connectorStatus: request?.connectorStatus,
+      }),
 );
 const invalidFields = $derived(
   [printSizeField, ...(panel.type === 'fixed' ? [] : panel.sections.flatMap(sectionNumberFields))]
@@ -134,6 +154,9 @@ const canReset = $derived(selectedKind !== undefined && canResetShapeParameters(
 // The download exports the parts of the chosen section, or the whole solid.
 const sectioned = $derived(selectedKind !== undefined && activeSection(selectedKind, parameterChoices) !== undefined);
 const separated = $derived(selectedKind !== undefined && partsSeparated(selectedKind, parameterChoices));
+// The model shown for a connector that does not fit is the plain cut, which nobody asked to print.
+const canDownload = $derived(model.status === 'ready' && request?.connectorStatus?.unavailable === undefined);
+const pinsFile = $derived(model.status === 'ready' && model.key === requestKey ? model.artifacts.pinsFile : undefined);
 
 function withStoredPrintSize() {
   const stored = loadPrintSizeText();
@@ -167,6 +190,21 @@ function applyState(state: ParameterState) {
   parameterChoices = state.choices;
   parameterExact = state.exact ?? {};
   tiltModes = state.tiltModes ?? tiltModes;
+  connectorEdits = state.connectorEdits ?? {};
+}
+
+/** Before a round connector's field changes by hand, what it shows becomes what it stores. */
+function commitRoundEdit() {
+  if (selectedKind !== undefined) applyState(commitConnectorEdit(selectedKind, parameterState, request));
+}
+
+function runPanelAction(action: PanelAction) {
+  if (action === 'download-pins') {
+    if (pinsFile !== undefined) saveFile(pinsFile.bytes, pinsFile.fileName, THREE_MF_MEDIA_TYPE);
+    return;
+  }
+  const key = selectedKind === undefined ? undefined : sectionKeys[selectedKind]?.connector;
+  if (key !== undefined) parameterChoices[key] = 'none';
 }
 
 // The first plane through a cone's apex takes a valid angle for the cone it finds; after that nothing changes on its own.
@@ -215,7 +253,7 @@ $effect(() => {
 });
 
 function downloadPrintFile() {
-  if (model.status !== 'ready' || model.key !== requestKey) return;
+  if (model.status !== 'ready' || model.key !== requestKey || !canDownload) return;
   const { fileName, bytes } = model.artifacts.printFile;
   saveFile(bytes, fileName, THREE_MF_MEDIA_TYPE);
 }
@@ -243,7 +281,7 @@ function downloadPrintFile() {
         error={request?.errors.printSizeMm}
         variant="entry"
       />
-      <Button disabled={model.status !== 'ready'} loading={model.status === 'generating'} onclick={downloadPrintFile}>
+      <Button disabled={!canDownload} loading={model.status === 'generating'} onclick={downloadPrintFile}>
         {#snippet leadingIcon()}
           <svg class="download-icon" viewBox="0 0 16 16"><path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10" /></svg>
         {/snippet}
@@ -264,6 +302,9 @@ function downloadPrintFile() {
         {canReset}
         onreset={resetParameters}
         ontiltmode={changeTiltMode}
+        pinsReady={pinsFile !== undefined}
+        onaction={runPanelAction}
+        onroundedit={commitRoundEdit}
       />
     </div>
     <div class="preview-area">

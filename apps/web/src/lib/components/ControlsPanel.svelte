@@ -1,7 +1,7 @@
 <script lang="ts">
 import { tick } from 'svelte';
 import { formatSteppedDecimal } from '../decimal.ts';
-import { shownText, storedText } from '../model/connectorScale.ts';
+import { formatPhysical, shownText, storedText } from '../model/connectorScale.ts';
 import {
   alignedTrapezoidShift,
   isScaledConnectorKey,
@@ -15,6 +15,7 @@ import {
 import type { TiltMode, TiltSolid } from '../model/tilt.ts';
 import {
   type NumericField,
+  type PanelAction,
   type ParameterSection as Section,
   type ShapePanel,
   sectionNumberFields,
@@ -40,6 +41,9 @@ let {
   canReset,
   onreset,
   ontiltmode,
+  pinsReady,
+  onaction,
+  onroundedit,
 }: {
   panel: ShapePanel;
   texts: ParameterTexts;
@@ -51,6 +55,11 @@ let {
   onreset: () => void;
   /** Asks to enter the solid's displacement in the given mode; the page converts the values without changing the solid. */
   ontiltmode: (solid: TiltSolid, mode: TiltMode) => void;
+  /** Whether the current model's dowels can be downloaded now. */
+  pinsReady: boolean;
+  onaction: (action: PanelAction) => void;
+  /** Called before a round connector's field changes by hand, while its other values are still as shown. */
+  onroundedit: () => void;
 } = $props();
 
 // Per group, across shapes: a group keeps its open state and its fields keep their values while collapsed.
@@ -63,14 +72,18 @@ let openSections = $state<Record<string, boolean>>({});
  */
 let drafts = $state<Partial<Record<ParameterKey, string>>>({});
 
-function enterMillimetres(key: ParameterKey, typed: string, unit: number) {
+function enterMillimetres(field: NumericField, typed: string, unit: number) {
+  const { key } = field;
   if (!isScaledConnectorKey(key)) return;
+  if (field.editsRoundConnector) onroundedit();
   texts[key] = storedText(typed, unit);
   if (shownText(texts[key], unit) === typed) delete drafts[key];
   else drafts[key] = typed;
 }
 
-const hasError = (section: Section) => sectionNumberFields(section).some((field) => errors[field.key] !== undefined);
+const hasError = (section: Section) =>
+  sectionNumberFields(section).some((field) => errors[field.key] !== undefined) ||
+  section.fields.some((field) => field.type === 'note' && field.tone === 'alert');
 
 /** Opens the group of the field, which may have been collapsed after the error appeared, and moves focus to it. */
 export async function focusField(key: ParameterKey): Promise<void> {
@@ -117,7 +130,13 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
     <NumberField
       id={field.key}
       label={field.label}
-      bind:text={texts[field.key]}
+      bind:text={
+        () => texts[field.key],
+        (typed) => {
+          if (field.editsRoundConnector) onroundedit();
+          texts[field.key] = typed;
+        }
+      }
       value={values[field.key]}
       range={field.range}
       suffix={field.suffix}
@@ -128,10 +147,14 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
   {:else}
     {@const unit = field.unit}
     {@const value = values[field.key]}
+    <!-- The value generated, which may differ from the stored one when the model no longer leaves room for that. -->
     <NumberField
       id={field.key}
       label={field.label}
-      bind:text={() => drafts[field.key] ?? shownText(texts[field.key], unit), (typed) => enterMillimetres(field.key, typed, unit)}
+      bind:text={
+        () => drafts[field.key] ?? (value === undefined ? shownText(texts[field.key], unit) : formatPhysical(value, unit)),
+        (typed) => enterMillimetres(field, typed, unit)
+      }
       value={value === undefined ? undefined : Number((value * unit).toFixed(9))}
       range={field.range}
       suffix={field.suffix}
@@ -180,7 +203,23 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
                 <Select id={field.key} bind:value={choices[field.key]} options={field.options} />
               </Field>
             {:else if field.type === 'note'}
-              <p class="group-status" id={field.key}>{field.text}</p>
+              <p
+                class={['group-status', field.tone === 'alert' && 'alert']}
+                id={field.key}
+                role={field.tone === 'alert' ? 'alert' : field.tone === 'status' ? 'status' : undefined}
+              >
+                {field.text}
+              </p>
+            {:else if field.type === 'action'}
+              <div class="group-actions">
+                <Button
+                  variant="secondary"
+                  disabled={field.action === 'download-pins' && !pinsReady}
+                  onclick={() => onaction(field.action)}
+                >
+                  {field.label}
+                </Button>
+              </div>
             {:else if field.type === 'toggle'}
               <Checkbox id={field.key} label={field.label} bind:checked={choices[field.key]} />
             {:else if field.type === 'tilt'}
@@ -317,6 +356,10 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
     margin: 0;
     color: var(--color-text-muted);
     font-size: var(--text-small);
+  }
+
+  .group-status.alert {
+    color: var(--color-error);
   }
 
   @media (max-width: 420px) {

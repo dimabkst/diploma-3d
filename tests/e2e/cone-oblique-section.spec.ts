@@ -280,7 +280,13 @@ test('on a narrow phone every field is reachable and the page fits', async ({ pa
   await entry(page, 'Кількість').selectOption({ label: '2' });
   await entry(page, THROUGH).scrollIntoViewIfNeeded();
   await expect(entry(page, THROUGH)).toBeInViewport();
-  for (const label of [ANGLE, DIRECTION, 'Діаметр штифта, мм', 'Від центра до осі кріплення, мм', 'Повна довжина штифта, мм']) {
+  for (const label of [
+    ANGLE,
+    DIRECTION,
+    'Діаметр вихідного кола, мм',
+    'Від центра до осі кріплення, мм',
+    'Повна довжина штифта, мм',
+  ]) {
     await slider(page, label).scrollIntoViewIfNeeded();
     await expect(slider(page, label)).toBeInViewport();
     await expect(entry(page, label)).toBeVisible();

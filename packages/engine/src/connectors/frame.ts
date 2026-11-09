@@ -710,6 +710,13 @@ export const ballDiscWall = (
   radius: number,
 ): number => inradius - Math.hypot(Math.abs(along) + radius, offset + normal);
 
+/**
+ * The wall around any ring of a cavity `normal` from the plane along n, whose farthest point lies `reach` from the vertical
+ * through the centre within the ring's plane; `ballDiscWall` is its case of a circle.
+ */
+export const ballInnerWall = ({ inradius, offset }: BallHorizontalSection, reach: number, normal: number): number =>
+  inradius - Math.hypot(reach, offset + normal);
+
 /** The same for a point (along u, across v, along n) in the frame. */
 export const ballPointWall = (
   { inradius, offset }: BallHorizontalSection,

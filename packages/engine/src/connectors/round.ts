@@ -1,18 +1,16 @@
-import { DIAMETRAL_CLEARANCE_LIMITS, type PhysicalScale, type RoundConnector } from '@diploma-3d/schema';
-import type { Vec2 as KernelVec2, Manifold, Mat4 } from 'manifold-3d';
+import { type ConnectorProfile, DIAMETRAL_CLEARANCE_LIMITS, type PhysicalScale, type RoundConnector } from '@diploma-3d/schema';
+import type { Manifold, Mat4 } from 'manifold-3d';
 import { ConnectorVerificationError } from '../errors.ts';
 import type { GeometryKernel } from '../kernel.ts';
 import type { Vec3 } from '../mesh.ts';
 import type { Track } from '../scope.ts';
-import type { Vec2 } from '../shapes/polygon.ts';
 import { circularSegments } from '../shapes/round.ts';
 import { type ConnectorFeasibility, connectorFeasibility, type ParameterSpec } from './bounds.ts';
 import {
   type BallHorizontalSection,
-  ballDiscWall,
+  ballInnerWall,
   CONNECTOR_MIN_WALL_MM,
   connectorVolumeTolerance,
-  discWall,
   type FacetedSection,
   facesOfPart,
   frameMatrix,
@@ -23,15 +21,18 @@ import {
   type SectionedShape,
   type SectionFrame,
   type SolidCut,
+  type SolidFace,
   type SolidSection,
   satisfies,
   solidCut,
 } from './frame.ts';
+import { profileArcAngles, profileMinWidth, profileReach, profileRing, profileSupport } from './profile.ts';
 
 /**
- * Initial experimental proportions for print trials, relative to the assembled model's longest dimension M: the primary
- * diameter d = 0,0625·M·kd, the insertion length e = 0,05·M·ke into one receiving part, and the second diameter of a
- * pair, 0,8·d. At M = 80 mm and kd = ke = 1: d = 5 mm, 4 mm for the second, e = 4 mm, dowels 2e = 8 mm long.
+ * What the stored multipliers are relative to, the assembled model's longest dimension M, so that a chosen connector scales
+ * with the model: the primary nominal size d = 0,0625·M·kd and the insertion length e = 0,05·M·ke into one receiving part;
+ * and the second size of a pair, 0,8·d. At M = 80 mm and kd = ke = 1: d = 5 mm, 4 mm for the second, e = 4 mm, dowels
+ * 2e = 8 mm long. A new connector's dimensions do not follow from these, see `defaultRoundConnector`.
  */
 export const ROUND_CONNECTOR_PROPORTIONS = { diameter: 0.0625, insertion: 0.05, secondaryDiameter: 0.8 } as const;
 
@@ -39,10 +40,10 @@ export const ROUND_CONNECTOR_PROPORTIONS = { diameter: 0.0625, insertion: 0.05, 
 export const ROUND_CONNECTOR_DEPTH_ALLOWANCE_MM = 0.3;
 
 /**
- * Conservative thresholds for first trials with a 0,4 mm nozzle, not a strength guarantee: the thinnest pin, every wall
- * around and beneath a hole and between holes, the straight engagement left in a receiving part after chamfers and
- * axial play, and by how much the larger pin of a pair is wider than the smaller hole, so that the parts cannot be
- * joined turned by 180°.
+ * Conservative thresholds for first trials with a 0,4 mm nozzle, not a strength guarantee: the narrowest width of the
+ * thinnest pin's actual profile, every wall around and beneath a hole and between holes, the straight engagement left in a
+ * receiving part after chamfers and axial play, and by how much the larger pin of a pair is wider than the smaller hole,
+ * so that the parts cannot be joined turned by 180°.
  */
 export const ROUND_CONNECTOR_MINIMUMS_MM = {
   pinDiameter: 3,
@@ -54,7 +55,10 @@ export const ROUND_CONNECTOR_MINIMUMS_MM = {
 /** How far an integral plug reaches into the lower part below the cut, so that the union is not coplanar. */
 export const PLUG_ROOT_OVERLAP_MM = 0.2;
 
-/** The 45° chamfer on pin ends and hole entrances: min(0,08·local pin diameter, 0,2·e). */
+/**
+ * The 45° chamfer on pin ends and hole entrances: min(0,08·w, 0,2·e), with w the narrowest width of the local pin's profile,
+ * its diameter on a circle. Bound to that width, it leaves a polygon's narrow end face most of its width.
+ */
 export const ROUND_CONNECTOR_CHAMFER = { diameter: 0.08, insertion: 0.2 } as const;
 
 // Hole cutters continue past the cut face, so that no membrane is left over an entrance.
@@ -65,6 +69,7 @@ export interface RoundConnectorSite {
   readonly centre: Vec3;
   /** The position along u from the section's centre. */
   readonly along: number;
+  /** The nominal size: the diameter of a circle, of a polygon's circumscribed circle, or of the circle a flat side cuts. */
   readonly pinDiameter: number;
   readonly chamfer: number;
 }
@@ -83,6 +88,7 @@ export type RoundConnectorIssue =
 
 export interface RoundConnectorPlan {
   readonly type: 'plug' | 'dowel';
+  readonly profile: ConnectorProfile;
   readonly frame: SectionFrame;
   /** The primary connector first: at the centre, or at +spacing·r along u; the 0,8d one at −spacing·r. */
   readonly sites: readonly RoundConnectorSite[];
@@ -109,6 +115,8 @@ export function roundConnectorDimensionsMm(diameterFactor: number, depthFactor: 
 export interface RoundConnectorDimensions {
   readonly type: 'plug' | 'dowel';
   readonly count: 1 | 2;
+  /** A circle unless given. */
+  readonly profile?: ConnectorProfile;
   /** d, the primary pin; a pair's second pin is 0,8·d. */
   readonly diameter: number;
   /** e: how far a plug protrudes, or a dowel enters each part. */
@@ -129,6 +137,7 @@ export function roundConnectorDimensions(
   return {
     type: connector.type,
     count: connector.count,
+    profile: connector.profile ?? 'circle',
     diameter,
     insertion,
     spacing: ((connector.spacingPercent ?? 0) / 100) * halfSpanMm,
@@ -140,27 +149,46 @@ export function roundConnectorDimensions(
 }
 
 /** The 45° chamfer of a pin end and of its hole's entrance; both ends of a site share it. */
-const chamferOf = (pinDiameter: number, insertion: number) =>
-  Math.min(ROUND_CONNECTOR_CHAMFER.diameter * pinDiameter, ROUND_CONNECTOR_CHAMFER.insertion * insertion);
+const chamferOf = (profile: ConnectorProfile, pinDiameter: number, insertion: number) =>
+  Math.min(
+    ROUND_CONNECTOR_CHAMFER.diameter * profileMinWidth(profile, pinDiameter / 2, 0),
+    ROUND_CONNECTOR_CHAMFER.insertion * insertion,
+  );
 
 /** The pins along u, primary first: at the centre, or at +s with d and at −s with 0,8·d. */
-function siteLayout({ count, diameter, insertion, spacing }: RoundConnectorDimensions) {
-  const site = (along: number, pinDiameter: number) => ({ along, pinDiameter, chamfer: chamferOf(pinDiameter, insertion) });
+function siteLayout({ count, profile = 'circle', diameter, insertion, spacing }: RoundConnectorDimensions) {
+  const site = (along: number, pinDiameter: number) => ({
+    along,
+    pinDiameter,
+    chamfer: chamferOf(profile, pinDiameter, insertion),
+  });
   return count === 1
     ? [site(0, diameter)]
     : [site(spacing, diameter), site(-spacing, ROUND_CONNECTOR_PROPORTIONS.secondaryDiameter * diameter)];
 }
 
 /**
+ * The least e that leaves the straight engagement e − play − 2·chamfer: with chamfer = min(0,08·w, 0,2·e) the value is the
+ * larger of e − play − 2·0,08·w and e·(1 − 2·0,2) − play, so that either reaching the minimum suffices. The primary pin has
+ * the longest chamfer of a pair.
+ */
+export function leastInsertion(type: 'plug' | 'dowel', profile: ConnectorProfile, diameter: number): number {
+  const needed = ROUND_CONNECTOR_MINIMUMS_MM.straightEngagement + (type === 'dowel' ? ROUND_CONNECTOR_DEPTH_ALLOWANCE_MM : 0);
+  const width = profileMinWidth(profile, diameter / 2, 0);
+  return Math.min(needed + 2 * ROUND_CONNECTOR_CHAMFER.diameter * width, needed / (1 - 2 * ROUND_CONNECTOR_CHAMFER.insertion));
+}
+
+/**
  * Every construction constraint of the plugs or dowels, satisfied or not, always the same ones in the same order for a
  * type and count, so that the bounds of each dimension can be solved from them (see `roundConnectorFeasibility`).
  *
- * - The thinnest pin, 0,8·d of a pair, is at least 3 mm.
+ * - The narrowest width of the thinnest pin, 0,8·d of a pair, is at least 3 mm.
  * - The straight engagement e − play − 2·chamfer of every site is at least 2 mm: the pin's end and the hole's entrance
  *   each take one chamfer, and a dowel may slide by the 0,3 mm depth allowance towards the opposite hole's bottom; an
  *   integral plug sits fully home.
- * - A pair keys the parts: d − (0,8·d + the larger diametral clearance) ≥ 0,5 mm, on the straight hole, so that the
- *   larger pin enters neither smaller hole.
+ * - A pair keys the parts: the larger pin is at least 0,5 mm wider than the smaller hole, on the straight hole and across
+ *   their narrowest widths. A convex shape that fits into another at some angle is not the wider across its narrowest
+ *   width, so that the larger pin enters neither smaller hole at any angle.
  * - In each receiving part, the wall beside every hole is at least 1,2 mm where the hole is widest (the chamfered
  *   entrance at the cut), where its straight wall starts and, under `hole-bottom-thin`, at its bottom e + 0,3 mm deep;
  *   see `holeWalls` for how each cut measures them.
@@ -171,13 +199,17 @@ function siteLayout({ count, diameter, insertion, spacing }: RoundConnectorDimen
  * chamfers, a larger e deepens holes and may lengthen chamfers, a larger s moves holes apart and outwards.
  */
 export function roundConnectorChecks(section: SolidSection, dimensions: RoundConnectorDimensions): RoundConnectorIssue[] {
-  const { type, insertion, clearance } = dimensions;
+  const { type, insertion, clearance, profile = 'circle' } = dimensions;
   const sites = siteLayout(dimensions);
   const holeDepth = insertion + ROUND_CONNECTOR_DEPTH_ALLOWANCE_MM;
   const play = type === 'dowel' ? ROUND_CONNECTOR_DEPTH_ALLOWANCE_MM : 0;
   const { pinDiameter, wall, straightEngagement, keying } = ROUND_CONNECTOR_MINIMUMS_MM;
   const checks: RoundConnectorIssue[] = [
-    { code: 'pin-too-thin', valueMm: Math.min(...sites.map((site) => site.pinDiameter)), minimumMm: pinDiameter },
+    {
+      code: 'pin-too-thin',
+      valueMm: Math.min(...sites.map((site) => profileMinWidth(profile, site.pinDiameter / 2, 0))),
+      minimumMm: pinDiameter,
+    },
     {
       code: 'engagement-short',
       valueMm: Math.min(...sites.map(({ chamfer }) => insertion - play - 2 * chamfer)),
@@ -187,62 +219,82 @@ export function roundConnectorChecks(section: SolidSection, dimensions: RoundCon
   if (sites.length === 2) {
     const [primary, secondary] = sites as [(typeof sites)[number], (typeof sites)[number]];
     const widest = Math.max(clearance.upper, clearance.lower ?? 0);
-    checks.push({ code: 'keying-lost', valueMm: primary.pinDiameter - (secondary.pinDiameter + widest), minimumMm: keying });
+    checks.push({
+      code: 'keying-lost',
+      valueMm:
+        profileMinWidth(profile, primary.pinDiameter / 2, 0) - profileMinWidth(profile, secondary.pinDiameter / 2, widest / 2),
+      minimumMm: keying,
+    });
   }
   const parts: [Part, number][] = [['upper', clearance.upper]];
   if (clearance.lower !== undefined) parts.push(['lower', clearance.lower]);
   for (const [part, holeClearance] of parts) {
-    const holes = sites.map(({ along, pinDiameter: pin, chamfer }) => {
-      const straight = (pin + holeClearance) / 2;
-      return { along, chamfer, straight, opening: straight + chamfer };
-    });
+    const holes = sites.map(
+      ({ along, pinDiameter: pin, chamfer }): HoleExtent => ({
+        profile,
+        radius: pin / 2,
+        along,
+        chamfer,
+        straight: holeClearance / 2,
+        opening: holeClearance / 2 + chamfer,
+      }),
+    );
     const walls = holes.map((hole) => holeWalls(section, part, hole, holeDepth));
     checks.push({ code: 'hole-wall-thin', part, valueMm: Math.min(...walls.map(({ side }) => side)), minimumMm: wall });
     if (holes.length === 2) {
-      const [first, second] = holes as [(typeof holes)[number], (typeof holes)[number]];
-      const between = Math.abs(first.along - second.along) - first.opening - second.opening;
+      const [first, second] = holes as [HoleExtent, HoleExtent];
+      // How far apart they stay along u: a lower bound of their distance, and the distance itself on circles.
+      const between =
+        first.along -
+        second.along -
+        profileSupport(profile, first.radius, first.opening, 0, -1) -
+        profileSupport(profile, second.radius, second.opening, 0, 1);
       checks.push({ code: 'holes-too-close', part, valueMm: between, minimumMm: wall });
     }
     checks.push({ code: 'hole-bottom-thin', part, valueMm: Math.min(...walls.map(({ bottom }) => bottom)), minimumMm: wall });
   }
   if (type === 'plug') {
-    checks.push({ code: 'base-thin', valueMm: plugBacking(section, sites), minimumMm: wall });
+    checks.push({ code: 'base-thin', valueMm: plugBacking(section, profile, sites), minimumMm: wall });
   }
   return checks;
 }
 
 interface HoleExtent {
+  readonly profile: ConnectorProfile;
+  /** The pin's nominal radius. */
+  readonly radius: number;
   /** The position along u from the section's centre. */
   readonly along: number;
   readonly chamfer: number;
-  /** The radii of the straight hole and of its widened entrance. */
+  /** How far the side surfaces lie outside the pin's: of the straight hole, and of its widened entrance. */
   readonly straight: number;
   readonly opening: number;
 }
 
 /**
- * The walls of one blind hole.
+ * The walls of one blind hole. Its cavity consists of a frustum and a prism of the profile, both convex, so that its rings
+ * at the entrance, at the end of the chamfer and at the bottom bound every point of it; the wall to any convex body is
+ * concave and takes its least value on those rings.
  *
  * In a parallel cut they are measured to the polygon's inscribed circle in each horizontal section, from the section's
- * centre moved by an oblique cylinder's lean; the distance from the moved centre is convex in the depth, so the three
- * depths bound the whole hole. The bottom has the part's thickness along the axis to the far base.
+ * centre moved by an oblique cylinder's lean. The bottom has the part's thickness along the axis to the far base.
  *
  * In a vertical cut the axis lies along n, towards the curved surface, and a hole's depth is limited by the same wall
- * that bounds its sides. The cavity consists of a cone and a cylinder, both convex, so that its circles at the entrance,
- * at the end of the chamfer and at the bottom bound every point of it (see `lateralWall`). The lean moves a hole at
- * `along` from the centroid by lean·along within its section, and the circle reaches radius·stretch from there; the
- * centroid itself lies on the axis, because the polygon's chord is symmetric. A hole approaching the axis first gains
- * material, so the farther of its entrance and bottom from the axis plane counts; on the way there the entrance is the
- * thinner anyway. The bases are the planes z = 0 and z = H, at H/2 from the centroid.
+ * that bounds its sides, see `lateralWall`, from how far the ring reaches along the lean in the horizontal sections. A
+ * hole approaching the axis first gains material, so the farther of its entrance and bottom from the axis plane counts; on
+ * the way there the entrance is the thinner anyway. The bases are the planes z = 0 and z = H, at H/2 from the centroid.
  *
  * In an oblique cut and in a cone they are measured to the actual faces that bound the part, see `facetedHoleWalls`; in
  * a ball to the sphere inside it, see `ballHoleWalls`.
  */
 function holeWalls(section: SolidSection, part: Part, hole: HoleExtent, holeDepth: number) {
-  const { along, chamfer, straight, opening } = hole;
+  const { profile, radius, along, chamfer, straight, opening } = hole;
+  const towards = part === 'upper' ? 1 : -1;
   if (section.type === 'parallel-to-bases') {
     const { inradius, leanAcross, lowerThickness, upperThickness } = section;
-    const clearanceAt = (depth: number, radius: number) => inradius - Math.hypot(along, leanAcross * depth) - radius;
+    // A horizontal section `height` above the cut moves by leanAcross·height along +v.
+    const clearanceAt = (depth: number, offset: number) =>
+      inradius - profileReach(profile, radius, offset, -leanAcross * towards * depth, along);
     return {
       side: Math.min(clearanceAt(0, opening), clearanceAt(chamfer, straight), clearanceAt(holeDepth, straight)),
       bottom: (part === 'upper' ? upperThickness : lowerThickness) - holeDepth,
@@ -250,70 +302,98 @@ function holeWalls(section: SolidSection, part: Part, hole: HoleExtent, holeDept
   }
   if (isFaceted(section)) return facetedHoleWalls(section, part, hole, holeDepth);
   if (section.type === 'ball-horizontal') return ballHoleWalls(section, part, hole, holeDepth);
-  const { offset, lean, stretch, height } = section;
-  const towards = part === 'upper' ? 1 : -1;
-  const reachOf = (radius: number) => lean * Math.abs(along) + radius * stretch;
+  const { offset, height } = section;
   const farthest = (depth: number) => Math.max(Math.abs(offset), Math.abs(offset + towards * depth));
   return {
     side: Math.min(
-      lateralWall(section, reachOf(opening), offset),
-      lateralWall(section, reachOf(straight), farthest(chamfer)),
-      height / 2 - Math.abs(along) - opening,
+      lateralWall(section, verticalReach(section, hole, opening), offset),
+      lateralWall(section, verticalReach(section, hole, straight), farthest(chamfer)),
+      height / 2 -
+        Math.max(
+          along + profileSupport(profile, radius, opening, 0, 1),
+          -along + profileSupport(profile, radius, opening, 0, -1),
+        ),
     ),
-    bottom: lateralWall(section, reachOf(straight), farthest(holeDepth)),
+    bottom: lateralWall(section, verticalReach(section, hole, straight), farthest(holeDepth)),
   };
 }
 
 /**
- * A hole in a ball: (s + a(z))² + (offset ± z)² ≤ R² at every depth z, with a(z) the cavity's radius and R reduced by the
- * wall. The distance from the centre is convex, so that the cavity's circles at the entrance, at the end of the chamfer
- * and at the bottom bound it, and a cavity whose mouth fits with room to spare is still measured where it reaches furthest.
+ * How far a ring of a hole in a vertical cut reaches from the axis within its horizontal section: a point (x, y) of the
+ * profile lies −x along +X from the centroid, as v is −X, and y + along above it, where the axis has moved by
+ * lean·(y + along); the centroid itself lies on the axis, because the polygon's chord is symmetric. So it reaches
+ * −(x + lean·y) − lean·along from the axis.
+ */
+function verticalReach(
+  { lean }: { readonly lean: number },
+  { profile, radius, along }: { profile: ConnectorProfile; radius: number; along: number },
+  offset: number,
+): number {
+  return Math.max(
+    profileSupport(profile, radius, offset, -1, -lean) - lean * along,
+    profileSupport(profile, radius, offset, 1, lean) + lean * along,
+  );
+}
+
+/**
+ * A hole in a ball: its distance from the centre is convex, so that the cavity's rings at the entrance, at the end of the
+ * chamfer and at the bottom bound it, and a cavity whose mouth fits with room to spare is still measured where it reaches
+ * furthest.
  */
 function ballHoleWalls(section: BallHorizontalSection, part: Part, hole: HoleExtent, holeDepth: number) {
-  const { along, chamfer, straight, opening } = hole;
+  const { profile, radius, along, chamfer, straight, opening } = hole;
   const towards = part === 'upper' ? 1 : -1;
+  const reach = (offset: number) => profileReach(profile, radius, offset, 0, along);
   return {
-    side: Math.min(ballDiscWall(section, along, 0, opening), ballDiscWall(section, along, towards * chamfer, straight)),
-    bottom: ballDiscWall(section, along, towards * holeDepth, straight),
+    side: Math.min(ballInnerWall(section, reach(opening), 0), ballInnerWall(section, reach(straight), towards * chamfer)),
+    bottom: ballInnerWall(section, reach(straight), towards * holeDepth),
   };
 }
 
+/** A ring of a cavity in the plane normal to n: the wall to one face, which the ring's farthest point along it sets. */
+const ringWall = (
+  face: SolidFace,
+  { profile, radius, along }: { profile: ConnectorProfile; radius: number; along: number },
+  normal: number,
+  offset: number,
+): number =>
+  face.clearance - along * face.alongU - normal * face.alongN - profileSupport(profile, radius, offset, face.alongV, face.alongU);
+
 /**
- * A hole measured on the actual faces: it is a cone and a cylinder, both convex, so that its circles at the entrance, at
- * the end of the chamfer and at the bottom bound every point of it, and a circle's wall to a face follows from the face's
- * plane. The whole cavity is measured, with its bottom apart, because a part may thin out behind a mouth that fits with
- * room to spare: a cone narrows and its curved side recedes along a hole's axis, and an oblique one moves away from it.
+ * A hole measured on the actual faces: the whole cavity, with its bottom apart, because a part may thin out behind a mouth
+ * that fits with room to spare: a cone narrows and its curved side recedes along a hole's axis, and an oblique one moves
+ * away from it.
  */
 function facetedHoleWalls(section: FacetedSection, part: Part, hole: HoleExtent, holeDepth: number) {
-  const { along, chamfer, straight, opening } = hole;
+  const { chamfer, straight, opening } = hole;
   const towards = part === 'upper' ? 1 : -1;
   const faces = facesOfPart(section, part === 'upper' ? 'positive' : 'negative');
-  const wallAt = (depth: number, radius: number) =>
-    Math.min(...faces.map((face) => discWall(face, along, towards * depth, radius)));
+  const wallAt = (depth: number, offset: number) =>
+    Math.min(...faces.map((face) => ringWall(face, hole, towards * depth, offset)));
   return { side: Math.min(wallAt(0, opening), wallAt(chamfer, straight)), bottom: wallAt(holeDepth, straight) };
 }
 
 /** What remains behind the root overlap of the plugs in the part that carries them. */
-function plugBacking(section: SolidSection, sites: readonly { along: number; pinDiameter: number }[]): number {
+function plugBacking(
+  section: SolidSection,
+  profile: ConnectorProfile,
+  sites: readonly { along: number; pinDiameter: number }[],
+): number {
   if (section.type === 'parallel-to-bases') return section.lowerThickness - PLUG_ROOT_OVERLAP_MM;
+  const rings = sites.map(({ along, pinDiameter }) => ({ profile, radius: pinDiameter / 2, along }));
   if (section.type === 'ball-horizontal') {
     return Math.min(
-      ...sites.map(({ along, pinDiameter }) => ballDiscWall(section, along, -PLUG_ROOT_OVERLAP_MM, pinDiameter / 2)),
+      ...rings.map(({ radius, along }) =>
+        ballInnerWall(section, profileReach(profile, radius, 0, 0, along), -PLUG_ROOT_OVERLAP_MM),
+      ),
     );
   }
   if (isFaceted(section)) {
     const faces = facesOfPart(section, 'negative');
-    return Math.min(
-      ...sites.flatMap(({ along, pinDiameter }) =>
-        faces.map((face) => discWall(face, along, -PLUG_ROOT_OVERLAP_MM, pinDiameter / 2)),
-      ),
-    );
+    return Math.min(...rings.flatMap((ring) => faces.map((face) => ringWall(face, ring, -PLUG_ROOT_OVERLAP_MM, 0))));
   }
-  const { offset, lean, stretch } = section;
   return Math.min(
-    ...sites.map(({ along, pinDiameter }) =>
-      lateralWall(section, lean * Math.abs(along) + (pinDiameter / 2) * stretch, offset - PLUG_ROOT_OVERLAP_MM),
-    ),
+    ...rings.map((ring) => lateralWall(section, verticalReach(section, ring, 0), section.offset - PLUG_ROOT_OVERLAP_MM)),
   );
 }
 
@@ -331,11 +411,12 @@ export function planRoundConnectors(
   const section = solidCut(shape, scale, cut);
   const dimensions = roundConnectorDimensions(connector, scale.longestDimensionMm, section.span / 2);
   const { frame } = section;
-  const { insertion, clearance } = dimensions;
+  const { insertion, clearance, profile = 'circle' } = dimensions;
   const sites = siteLayout(dimensions).map((site) => ({ ...site, centre: framePoint(frame, [site.along, 0, 0]) }));
   const play = connector.type === 'dowel' ? ROUND_CONNECTOR_DEPTH_ALLOWANCE_MM : 0;
   return {
     type: connector.type,
+    profile,
     frame,
     sites,
     insertion,
@@ -403,41 +484,6 @@ export function roundConnectorFeasibility(
   return connectorFeasibility((current) => roundConnectorChecks(section, current), dimensions, parameters);
 }
 
-/**
- * The profile of a pin in (radius, axial), counter-clockwise, from `bottom` to `top`, with 45° chamfers of `chamfer`
- * at the ends that are given; a missing chamfer leaves the end square.
- */
-function pinProfile(radius: number, bottom: number, top: number, chamfer: { bottom?: number; top?: number }): Vec2[] {
-  const lower = chamfer.bottom ?? 0;
-  const upper = chamfer.top ?? 0;
-  return [
-    [0, bottom],
-    ...(lower > 0 ? ([[radius - lower, bottom]] as Vec2[]) : []),
-    [radius, bottom + lower],
-    [radius, top - upper],
-    ...(upper > 0 ? ([[radius - upper, top]] as Vec2[]) : []),
-    [0, top],
-  ];
-}
-
-/**
- * A blind hole opening at the cut and reaching `depth` into the part: straight with radius `radius`, widened at the
- * entrance by a 45° chamfer, and continued past the cut by the cutter margin. Built upwards; the lower part's hole is
- * its mirror image.
- */
-function holeProfile(radius: number, chamfer: number, depth: number): Vec2[] {
-  return [
-    [0, -CUTTER_MARGIN_MM],
-    [radius + chamfer + CUTTER_MARGIN_MM, -CUTTER_MARGIN_MM],
-    [radius, chamfer],
-    [radius, depth],
-    [0, depth],
-  ];
-}
-
-/** The mirror image along the axis, still counter-clockwise. */
-const mirrored = (profile: readonly Vec2[]): Vec2[] => profile.map(([x, y]): Vec2 => [x, -y]).reverse();
-
 export interface RoundConnectorParts {
   readonly lower: Manifold;
   readonly upper: Manifold;
@@ -447,22 +493,99 @@ export interface RoundConnectorParts {
   readonly sites: readonly { readonly pin: Manifold; readonly cutters: Partial<Record<Part, Manifold>> }[];
 }
 
-/** A solid of revolution about the axis through `centre` along the frame's n. */
-function revolveAlongN(
+/** One ring of a pin or hole: its height along n from the cut, and how far its side surfaces lie outside the pin's. */
+type Layer = readonly [height: number, offset: number];
+
+/**
+ * The profile lofted through the layers, from the lowest height to the highest, around the axis through `centre` along n.
+ * Built as a closed mesh of the rings rather than extruded in either direction, so that every height has the same (x, y):
+ * a hole below the cut and one above it are never mirrored or turned against the pin, nor is the part of a pin in either.
+ * `turnedBy` turns the whole of it about its axis, for trying a wrong orientation.
+ */
+function loftAlongN(
   kernel: GeometryKernel,
   track: Track,
   frame: SectionFrame,
-  profile: readonly Vec2[],
-  segments: number,
-  centre: Vec3,
+  {
+    profile,
+    radius,
+    arcAngles,
+    centre,
+  }: { profile: ConnectorProfile; radius: number; arcAngles: readonly number[]; centre: Vec3 },
+  layers: readonly Layer[],
+  turnedBy = 0,
 ): Manifold {
-  const local = track(kernel.Manifold.revolve([profile.map(([x, y]) => [x, y] as KernelVec2)], segments));
+  const rings = layers.map(([, offset]) => profileRing(profile, radius, offset, arcAngles));
+  const size = (rings[0] as (typeof rings)[number]).length;
+  const [cos, sin] = [Math.cos(turnedBy), Math.sin(turnedBy)];
+  const positions: number[] = [];
+  rings.forEach((ring, index) => {
+    const height = (layers[index] as Layer)[0];
+    for (const [x, y] of ring) positions.push(cos * x - sin * y, sin * x + cos * y, height);
+  });
+  const bottomCentre = positions.length / 3;
+  const topCentre = bottomCentre + 1;
+  positions.push(0, 0, (layers[0] as Layer)[0], 0, 0, (layers[layers.length - 1] as Layer)[0]);
+  const triangles: number[] = [];
+  const lastRing = (rings.length - 1) * size;
+  for (let vertex = 0; vertex < size; vertex += 1) {
+    const next = (vertex + 1) % size;
+    triangles.push(bottomCentre, next, vertex, topCentre, lastRing + vertex, lastRing + next);
+    for (let ring = 0; ring + 1 < rings.length; ring += 1) {
+      const [below, above] = [ring * size, (ring + 1) * size];
+      triangles.push(below + vertex, below + next, above + next, below + vertex, above + next, above + vertex);
+    }
+  }
+  const mesh = new kernel.Mesh({
+    numProp: 3,
+    vertProperties: Float32Array.from(positions),
+    triVerts: Uint32Array.from(triangles),
+  });
+  const local = track(new kernel.Manifold(mesh));
   return track(local.transform(frameMatrix(frame, centre)));
 }
 
-/** The number of segments that a site's pins and holes share. */
+/** The segments of a site's arcs, shared by its pin and holes. */
 const siteSegments = ({ clearance }: RoundConnectorPlan, { pinDiameter, chamfer }: { pinDiameter: number; chamfer: number }) =>
   circularSegments((pinDiameter + clearance.upper) / 2 + chamfer + CUTTER_MARGIN_MM);
+
+/** What the rings of one site have in common: pin and holes share their vertex angles, also where a flat side cuts the arc. */
+const siteRings = (plan: RoundConnectorPlan, site: RoundConnectorSite) => ({
+  profile: plan.profile,
+  radius: site.pinDiameter / 2,
+  arcAngles: profileArcAngles(plan.profile, site.pinDiameter / 2, -site.chamfer, siteSegments(plan, site)),
+  centre: site.centre,
+});
+
+/**
+ * The layers of a site's plug or dowel, with its straight wall `below` and `above` millimetres longer, swept along its own
+ * axis: the chamfered free end or ends, and a plug's square root inside the lower part.
+ */
+function pinLayers(plan: RoundConnectorPlan, { chamfer }: RoundConnectorSite, below = 0, above = 0): Layer[] {
+  const top = plan.insertion + above;
+  const upperEnd: Layer[] = [
+    [top - chamfer, 0],
+    [top, -chamfer],
+  ];
+  if (plan.type === 'plug') return [[-PLUG_ROOT_OVERLAP_MM - below, 0], ...upperEnd];
+  const bottom = -plan.insertion - below;
+  return [[bottom, -chamfer], [bottom + chamfer, 0], ...upperEnd];
+}
+
+/**
+ * The layers of a blind hole opening at the cut and reaching `depth` into the part, on the side of `towards`: straight with
+ * the clearance, widened at the entrance by a 45° chamfer, and continued past the cut by the cutter margin, so that no
+ * membrane is left over the entrance.
+ */
+function holeLayers(clearance: number, chamfer: number, depth: number, towards: 1 | -1): Layer[] {
+  const straight = clearance / 2;
+  const layers: Layer[] = [
+    [towards * -CUTTER_MARGIN_MM, straight + chamfer + CUTTER_MARGIN_MM],
+    [towards * chamfer, straight],
+    [towards * depth, straight],
+  ];
+  return towards > 0 ? layers : layers.reverse();
+}
 
 /**
  * A site's plug or dowel swept along its own axis, from `below` to `above` millimetres away: the same profile with a longer
@@ -476,19 +599,13 @@ function pinSweep(
   site: RoundConnectorSite,
   { below = 0, above = 0 }: { below?: number; above?: number },
 ): Manifold {
-  const { pinDiameter, chamfer, centre } = site;
-  const e = plan.insertion;
-  const profile =
-    plan.type === 'plug'
-      ? pinProfile(pinDiameter / 2, -PLUG_ROOT_OVERLAP_MM - below, e + above, { top: chamfer })
-      : pinProfile(pinDiameter / 2, -e - below, e + above, { bottom: chamfer, top: chamfer });
-  return revolveAlongN(kernel, track, plan.frame, profile, siteSegments(plan, site), centre);
+  return loftAlongN(kernel, track, plan.frame, siteRings(plan, site), pinLayers(plan, site, below, above));
 }
 
 /**
- * Builds the plugs or dowels on the parts. Pins and holes of a site are revolved with the same number of segments from
- * the same starting angle, so that their polygons are aligned and the diametral clearance holds between corresponding
- * vertices; the count follows the project's circle accuracy for the largest radius involved.
+ * Builds the plugs or dowels on the parts. Pins and holes of a site share their rings' vertex angles, so that their polygons
+ * are aligned and the clearance holds between corresponding facets; the count follows the project's circle accuracy for the
+ * largest radius involved.
  */
 export function buildRoundConnectors(
   kernel: GeometryKernel,
@@ -496,23 +613,14 @@ export function buildRoundConnectors(
   parts: { readonly lower: Manifold; readonly upper: Manifold },
   plan: RoundConnectorPlan,
 ): RoundConnectorParts {
-  const { frame, insertion: e, holeDepth, clearance } = plan;
-  const revolve = (profile: readonly Vec2[], segments: number, centre: Vec3): Manifold =>
-    revolveAlongN(kernel, track, frame, profile, segments, centre);
-  const sites = plan.sites.map(({ centre, pinDiameter, chamfer }) => {
-    const pinRadius = pinDiameter / 2;
-    const holeRadius = (part: Part) => (pinDiameter + (clearance[part] ?? 0)) / 2;
-    const segments = siteSegments(plan, { pinDiameter, chamfer });
-    const pin =
-      plan.type === 'plug'
-        ? revolve(pinProfile(pinRadius, -PLUG_ROOT_OVERLAP_MM, e, { top: chamfer }), segments, centre)
-        : revolve(pinProfile(pinRadius, -e, e, { bottom: chamfer, top: chamfer }), segments, centre);
-    const upper = holeProfile(holeRadius('upper'), chamfer, holeDepth);
-    const cutters: Partial<Record<Part, Manifold>> = { upper: revolve(upper, segments, centre) };
-    if (clearance.lower !== undefined) {
-      cutters.lower = revolve(mirrored(holeProfile(holeRadius('lower'), chamfer, holeDepth)), segments, centre);
-    }
-    return { pin, cutters };
+  const { frame, holeDepth, clearance } = plan;
+  const sites = plan.sites.map((site) => {
+    const rings = siteRings(plan, site);
+    const hole = (partClearance: number, towards: 1 | -1) =>
+      loftAlongN(kernel, track, frame, rings, holeLayers(partClearance, site.chamfer, holeDepth, towards));
+    const cutters: Partial<Record<Part, Manifold>> = { upper: hole(clearance.upper, 1) };
+    if (clearance.lower !== undefined) cutters.lower = hole(clearance.lower, -1);
+    return { pin: loftAlongN(kernel, track, frame, rings, pinLayers(plan, site)), cutters };
   });
   const apply = (part: Manifold, cutters: (Manifold | undefined)[]) =>
     cutters.reduce<Manifold>((result, cutter) => (cutter === undefined ? result : track(result.subtract(cutter))), part);
@@ -527,6 +635,8 @@ export function buildRoundConnectors(
   const lower = plan.type === 'plug' ? sites.reduce<Manifold>((result, entry) => track(result.add(entry.pin)), drilled) : drilled;
   return { lower, upper, pins: plan.type === 'dowel' ? sites.map((entry) => entry.pin) : [], sites };
 }
+
+const FLAT_SIDE_OVERLAP_MM3 = 0.01;
 
 /** The half turn about the line through `centre` along the unit axis: p ↦ 2(a·(p − c))a − (p − c) + c. */
 function halfTurnAbout([ax, ay, az]: Vec3, [cx, cy, cz]: Vec3): Mat4 {
@@ -552,6 +662,8 @@ function halfTurnAbout([ax, ay, az]: Vec3, [cx, cy, cz]: Vec3): Mat4 {
  * - The parts come apart along n: each plug or seated dowel, swept along −n out of the upper part, and each dowel,
  *   swept along +n out of the lower part, meets nothing.
  * - A pair keys the parts: the upper part turned by 180° about the section's axis meets the plugs or dowels.
+ * - A flat side keys each site: its fully inserted plug or dowel, turned by 90° or 180° about its own axis, meets the
+ *   receiving part. Regular polygons repeat under their own turns, which is why a single one does not key the parts.
  */
 export function verifyRoundConnectors(
   kernel: GeometryKernel,
@@ -603,5 +715,16 @@ export function verifyRoundConnectors(
     const turned = track(built.upper.transform(halfTurnAbout(n, origin)));
     const mating = plan.type === 'plug' ? [built.lower] : built.pins;
     if (!(mating.reduce((sum, solid) => sum + volume(turned.intersect(solid)), 0) > tolerance)) fail('keying');
+  }
+  if (plan.profile === 'flatted-circle') {
+    // Far below the sliver a turned pin cuts, even the thinnest with the largest clearance at the largest size.
+    const overlap = Math.min(tolerance, FLAT_SIDE_OVERLAP_MM3);
+    const receiving = plan.type === 'plug' ? [built.upper] : [built.lower, built.upper];
+    for (const site of plan.sites) {
+      for (const turn of [Math.PI / 2, Math.PI]) {
+        const turned = loftAlongN(kernel, track, plan.frame, siteRings(plan, site), pinLayers(plan, site), turn);
+        if (receiving.some((part) => !(volume(turned.intersect(part)) > overlap))) fail('profile-keying');
+      }
+    }
   }
 }

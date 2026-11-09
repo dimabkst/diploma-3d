@@ -8,15 +8,19 @@ import {
   coneApexChord,
   cutOfSection,
   type DovetailIssue,
+  defaultRoundConnector,
   dovetailFeasibility,
   hasFeasibleValues,
   type Interval,
   isApexChordUsable,
+  normalizeRoundConnector,
   obliquePlaneContainsAxis,
   obliqueSplitReach,
   type ParameterBounds,
   type ParameterFeasibility,
+  ROUND_CONNECTOR_PROPORTIONS,
   type RoundConnectorIssue,
+  type RoundConnectorOutcome,
   type RoundShape,
   roundConnectorFeasibility,
   roundDimensionsMm,
@@ -33,7 +37,9 @@ import {
   baseAngleSchema,
   baseShiftSchema,
   type ConeShape,
+  type ConnectorProfile,
   type ConnectorType,
+  DEFAULT_CONNECTOR_PROFILE,
   DEFAULT_DOVETAIL,
   DEFAULT_DOWEL_CLEARANCES_MM,
   DEFAULT_LONGEST_DIMENSION_MM,
@@ -67,6 +73,7 @@ import {
   RATIO_LIMITS,
   ROUND_HEIGHT_LIMITS,
   ROUND_OFFSET_LIMITS,
+  type RoundConnector,
   ratioSchema,
   roundHeightRatioSchema,
   roundOffsetSchema,
@@ -213,13 +220,15 @@ export type ParameterChoices = {
   pyramidBaseSides: PyramidBaseSides;
   cylinderSection: SectionChoice;
   cylinderConnector: ConnectorChoice;
-  /** One round connector at the centre, or a keyed pair; shared by plugs and dowels. */
+  /** One round connector at the centre, or a keyed pair; shared by plugs and dowels, as their cross-section is. */
   cylinderRoundCount: 1 | 2;
+  cylinderRoundProfile: ConnectorProfile;
   /** Whether the preview moves the parts of the section apart; it changes neither the geometry nor the print file. */
   cylinderPartsSeparated: boolean;
   coneSection: SectionChoice;
   coneConnector: ConnectorChoice;
   coneRoundCount: 1 | 2;
+  coneRoundProfile: ConnectorProfile;
   conePartsSeparated: boolean;
   coneObliqueThrough: ObliqueThrough;
   /** Whether a plane through the apex has its first valid angle yet, which depends on the cone when it is first chosen. */
@@ -227,6 +236,7 @@ export type ParameterChoices = {
   ballSection: SectionChoice;
   ballConnector: ConnectorChoice;
   ballRoundCount: 1 | 2;
+  ballRoundProfile: ConnectorProfile;
   ballPartsSeparated: boolean;
 };
 
@@ -248,6 +258,15 @@ export type ParameterValues = Partial<Record<ParameterKey, number>>;
  */
 export type ParameterExact = Partial<Record<ParameterKey, number>>;
 
+/**
+ * Where each solid's round connector was last edited by hand: the context of `ConnectorStatus` at that moment. A solid
+ * without an entry has an untouched connector, whose dimensions follow from what its section offers. In the context of the
+ * last edit the stored values count as they are, so that a typed value out of range is that field's error; in any other,
+ * they are corrected if they no longer fit, without being overwritten, so that the former values return with the former
+ * model and nothing shrinks step by step while a value is dragged or typed.
+ */
+export type ConnectorEdits = Partial<Record<ShapeKind, string>>;
+
 /** How the request reads the texts: the exact values behind them and the tilt input mode of each solid. */
 export type ParameterOptions = {
   readonly exact?: ParameterExact | undefined;
@@ -257,6 +276,18 @@ export type ParameterOptions = {
    * the current one is used whenever it is.
    */
   readonly connectorScale?: ConnectorScale | undefined;
+  /** Without it, as in a request made of bare texts, the stored connector values count as just typed. */
+  readonly connectorEdits?: ConnectorEdits | undefined;
+};
+
+/** What became of the stored dimensions of a round connector. */
+export type ConnectorStatus = {
+  /** Everything a connector's fit depends on but its own dimensions: the solid, the size, the cut, the type, profile and count. */
+  readonly context: string;
+  /** One short sentence per dimension that had to change from its stored value. */
+  readonly corrections: readonly string[];
+  /** Why no usable connector fits; the model is then the plain cut, which the interface does not offer for download. */
+  readonly unavailable?: string | undefined;
 };
 
 /**
@@ -271,6 +302,8 @@ export type ModelRequest = {
   readonly errors: ParameterErrors;
   /** Present while the solid, the size, the cut's position and every connector field are valid numbers. */
   readonly sectionRanges?: SectionRanges | undefined;
+  /** Present for a round connector on a usable cut, when the request knows the edits. */
+  readonly connectorStatus?: ConnectorStatus | undefined;
 } & ({ readonly spec: ModelSpec; readonly key: string } | { readonly spec: undefined; readonly key: undefined });
 
 /** The texts every field starts with, and returns to on reset: the single source of the defaults in the interface. */
@@ -364,16 +397,19 @@ export const initialParameterChoices = (): ParameterChoices => ({
   cylinderSection: 'none',
   cylinderConnector: 'none',
   cylinderRoundCount: DEFAULT_ROUND_CONNECTOR.count,
+  cylinderRoundProfile: DEFAULT_CONNECTOR_PROFILE,
   cylinderPartsSeparated: true,
   coneSection: 'none',
   coneConnector: 'none',
   coneRoundCount: DEFAULT_ROUND_CONNECTOR.count,
+  coneRoundProfile: DEFAULT_CONNECTOR_PROFILE,
   conePartsSeparated: true,
   coneObliqueThrough: 'axis',
   coneApexStarted: false,
   ballSection: 'none',
   ballConnector: 'none',
   ballRoundCount: DEFAULT_ROUND_CONNECTOR.count,
+  ballRoundProfile: DEFAULT_CONNECTOR_PROFILE,
   ballPartsSeparated: true,
 });
 
@@ -478,7 +514,7 @@ export const validateConnectorDimension = (text: string, exact?: number): Valida
  */
 export const validateSectionOffset = (text: string, exact?: number): Validation => readNumber(text, '25', exact);
 
-/** A diametral clearance: how much wider a hole is than its pin, in millimetres. */
+/** A hole's enlargement Δ in millimetres: each of its side surfaces lies Δ/2 outside the pin's. */
 export const validateDiametralClearance = (text: string, exact?: number): Validation =>
   validateNumber(text, inclusiveRange(DIAMETRAL_CLEARANCE_LIMITS), DIAMETRAL_CLEARANCE_LIMITS, '0,2', ' мм', exact);
 
@@ -709,7 +745,7 @@ export function resolveModelRequest(
     options.connectorScale ??
     INITIAL_CONNECTOR_SCALE;
   const section = resolveSection(kind, texts, choices, options.exact, scale, resolved.shape);
-  const values = { ...resolved.values, ...section.values };
+  const values: ParameterValues = { ...resolved.values, ...section.values };
   const errors = { ...resolved.errors, ...section.errors };
   if ('error' in size) errors.printSizeMm = size.error;
   else values.printSizeMm = size.value;
@@ -717,20 +753,30 @@ export function resolveModelRequest(
     return { values, errors, spec: undefined, key: undefined };
   }
   // The cut and the connector are checked before the specification is parsed: their settings have no fixed limits here.
-  const checked = section.section === 'none' ? undefined : sectionChecks(kind, resolved.shape, size.value, section.section);
+  const checked =
+    section.section === 'none'
+      ? undefined
+      : sectionChecks(kind, resolved.shape, size.value, section.section, options.connectorEdits);
   if (checked !== undefined) {
     for (const [key, message] of Object.entries(checked.errors) as [ParameterKey, string][]) {
       errors[key] = errors[key] === undefined ? message : `${errors[key]} ${message}`;
     }
   }
   const sectionRanges = checked?.ranges;
-  if (Object.keys(errors).length > 0) return { values, errors, sectionRanges, spec: undefined, key: undefined };
+  const connectorStatus = checked?.resolved?.status;
+  Object.assign(values, checked?.resolved?.values);
+  if (Object.keys(errors).length > 0) {
+    return { values, errors, sectionRanges, connectorStatus, spec: undefined, key: undefined };
+  }
+  const built = checked?.resolved?.section ?? section.section;
   const spec = modelSpecSchema.parse({
     shape: resolved.shape,
     scale: { longestDimensionMm: size.value },
-    ...(section.section === 'none' ? {} : { section: section.section }),
+    ...(built === 'none' ? {} : { section: built }),
   });
-  return { values, errors, sectionRanges, spec, key: JSON.stringify(spec) };
+  // The plain cut shown for an unavailable connector is not the plain cut chosen without one: only the latter is for download.
+  const key = `${JSON.stringify(spec)}${connectorStatus?.unavailable === undefined ? '' : ':connector-unavailable'}`;
+  return { values, errors, sectionRanges, connectorStatus, spec, key };
 }
 
 // Feasibility depends only on the solid, the size, the cut and the connector; the panel and the request read it for every
@@ -758,6 +804,138 @@ function cachedFeasibility(shape: SectionedShape, longestDimensionMm: number, se
   return result;
 }
 
+type RoundResolution = {
+  readonly status: ConnectorStatus;
+  /** The dimensions actually generated, for the fields to show. */
+  readonly values: ParameterValues;
+  /** The section to build: with those dimensions, or without a connector when none fits. */
+  readonly section: Section;
+};
+
+type SectionCheck = { errors: ParameterErrors; ranges: SectionRanges; resolved?: RoundResolution | undefined };
+
+const roundOutcomeCache = new Map<string, RoundConnectorOutcome>();
+
+function cachedRoundOutcome(
+  untouched: boolean,
+  shape: SectionedShape,
+  longestDimensionMm: number,
+  section: Section,
+  connector: RoundConnector,
+) {
+  const cut = cutOfSection(section);
+  const key = JSON.stringify([untouched, shape, longestDimensionMm, cut, connector]);
+  const cached = roundOutcomeCache.get(key);
+  if (cached !== undefined) return cached;
+  const scale = { longestDimensionMm };
+  const outcome = (untouched ? defaultRoundConnector : normalizeRoundConnector)(shape, scale, cut, connector);
+  if (roundOutcomeCache.size >= FEASIBILITY_CACHE_SIZE) roundOutcomeCache.delete(roundOutcomeCache.keys().next().value as string);
+  roundOutcomeCache.set(key, outcome);
+  return outcome;
+}
+
+/** What a correction blames, from what failed at the stored dimensions. */
+function correctionReason(issues: readonly RoundConnectorIssue[]): string {
+  const codes = issues.map(({ code }) => code);
+  if (codes.includes('hole-bottom-thin') || codes.includes('base-thin')) return 'через товщину частини';
+  if (codes.includes('hole-wall-thin')) return 'через стінки навколо отвору';
+  if (codes.includes('holes-too-close')) return 'через відстань між отворами';
+  return 'щоб кріплення лишалося придатним';
+}
+
+/** One sentence per dimension that differs from the stored one, in the millimetres its field shows. */
+function correctionsOf(
+  stated: RoundConnector,
+  actual: RoundConnector,
+  longest: number,
+  issues: readonly RoundConnectorIssue[],
+): string[] {
+  const reason = correctionReason(issues);
+  const pin = stated.type === 'plug' ? 'виступу' : 'штифта';
+  const sentence = (subject: string, from: number, to: number, millimetresPerUnit: number) =>
+    from === to
+      ? []
+      : [`${subject} ${to < from ? 'зменшено' : 'збільшено'} до ${formatMillimetres(to * millimetresPerUnit)} мм ${reason}.`];
+  const { diameter, insertion } = ROUND_CONNECTOR_PROPORTIONS;
+  const dowelLength = stated.type === 'dowel' ? 2 : 1;
+  return [
+    ...sentence(
+      `${(stated.profile ?? 'circle') === 'circle' ? 'Діаметр' : 'Розмір'} ${pin}`,
+      stated.diameterFactor,
+      actual.diameterFactor,
+      diameter * longest,
+    ),
+    ...sentence(
+      stated.type === 'plug' ? 'Висоту виступу' : 'Довжину штифта',
+      stated.depthFactor,
+      actual.depthFactor,
+      insertion * longest * dowelLength,
+    ),
+  ];
+}
+
+/** Why even the smallest connector does not fit, briefly, and the ways on. */
+function unavailableMessage(issues: readonly RoundConnectorIssue[], type: 'plug' | 'dowel'): string {
+  const issue = issues.find(({ code }) => code !== 'pin-too-thin' && code !== 'engagement-short') ?? issues[0];
+  const pin = type === 'plug' ? 'виступ' : 'штифт';
+  const shortfall =
+    issue === undefined ? '' : `${millimetres(issue.valueMm)}, потрібно щонайменше ${millimetres(issue.minimumMm)}`;
+  const what: Partial<Record<RoundConnectorIssue['code'], string>> = {
+    'hole-wall-thin': `навіть за найменшого розміру стінка біля отвору — ${shortfall}`,
+    'hole-bottom-thin': `навіть за найменшого розміру під дном отвору лишається ${shortfall}`,
+    'holes-too-close': `навіть за найменшого розміру між отворами лишається ${shortfall}`,
+    'base-thin': `за виступом лишається ${shortfall}`,
+    'keying-lost': `більший ${pin} ширший за менший отвір лише на ${shortfall}`,
+  };
+  const reason = issue === undefined ? undefined : what[issue.code];
+  return (
+    `Кріплення не вміщується${reason === undefined ? '' : `: ${reason}`}. Змініть переріз або розмір моделі, спробуйте інший профіль ` +
+    'чи кількість або оберіть «Без кріплення». Доти завантаження вимкнено.'
+  );
+}
+
+/**
+ * The round connector to build, unless the stored values count as they are: a new one from what the section offers, an
+ * edited one as it is if it still fits, and corrected otherwise. Pure in the stored values, so that evaluating it again, as
+ * every edit of any field does, changes nothing.
+ */
+function resolveRound(
+  { round }: SectionKeys,
+  shape: SectionedShape,
+  longestDimensionMm: number,
+  section: Section,
+  edits: ConnectorEdits | undefined,
+): RoundResolution | undefined {
+  const { connector } = section;
+  if (edits === undefined || connector === undefined || connector.type === 'dovetail') return undefined;
+  const { type, count, profile } = connector;
+  const context = JSON.stringify([shape, longestDimensionMm, cutOfSection(section), type, profile, count]);
+  const edited = edits[shape.kind];
+  if (edited === context) return { status: { context, corrections: [] }, values: {}, section };
+  const outcome = cachedRoundOutcome(edited === undefined, shape, longestDimensionMm, section, connector);
+  if (outcome.status === 'unavailable') {
+    const { connector: _none, ...plain } = section;
+    return {
+      status: { context, corrections: [], unavailable: unavailableMessage(outcome.issues, type) },
+      values: {},
+      section: plain as Section,
+    };
+  }
+  const actual = outcome.connector as RoundConnector;
+  return {
+    status: {
+      context,
+      corrections: outcome.adjusted ? correctionsOf(connector, actual, longestDimensionMm, outcome.issues) : [],
+    },
+    values: {
+      [round.diameter]: actual.diameterFactor,
+      [round.depth]: actual.depthFactor,
+      ...(actual.spacingPercent === undefined ? {} : { [round.spacing]: actual.spacingPercent }),
+    },
+    section: { ...section, connector: actual },
+  };
+}
+
 /**
  * The ranges of the section's fields and their problems. A vertical plane stays within the distance from the axis that
  * leaves two usable parts, from the engine's limit, and an oblique plane leaves both parts a usable thickness; a
@@ -768,10 +946,11 @@ function sectionChecks(
   shape: ShapeInput,
   longestDimensionMm: number,
   section: Section,
-): { errors: ParameterErrors; ranges: SectionRanges } | undefined {
+  edits: ConnectorEdits | undefined,
+): SectionCheck | undefined {
   const keys = sectionKeys[kind];
   if (keys === undefined || (shape.kind !== 'cylinder' && shape.kind !== 'cone' && shape.kind !== 'ball')) return undefined;
-  if (section.type === 'parallel-to-bases') return connectorChecks(keys, shape as RoundShape, longestDimensionMm, section);
+  if (section.type === 'parallel-to-bases') return connectorChecks(keys, shape as RoundShape, longestDimensionMm, section, edits);
   const solid = shape as RoundShape;
   const scale = { longestDimensionMm };
   if (section.type === 'horizontal')
@@ -782,11 +961,12 @@ function sectionChecks(
       section,
       ballOffsetLimitPercent(scale),
       ballRadiusMm(scale),
+      edits,
     );
-  if (section.type === 'oblique-apex') return apexChecks(keys, shape as ConeShape, longestDimensionMm, section);
+  if (section.type === 'oblique-apex') return apexChecks(keys, shape as ConeShape, longestDimensionMm, section, edits);
   if (section.type === 'oblique') {
     const reach = obliqueSplitReach(solid, scale, section);
-    if (satisfies(reach)) return connectorChecks(keys, solid, longestDimensionMm, section);
+    if (satisfies(reach)) return connectorChecks(keys, solid, longestDimensionMm, section, edits);
     const contained = obliquePlaneContainsAxis(solid, section.inclinationDeg, section.directionDeg);
     const { oblique } = planarKeysOf(keys);
     const field = contained ? oblique.inclination : oblique.position;
@@ -806,6 +986,7 @@ function sectionChecks(
     section,
     verticalOffsetLimitPercent(solid, scale),
     roundDimensionsMm(solid, scale).radius,
+    edits,
   );
 }
 
@@ -817,17 +998,16 @@ function offsetChecks(
   section: Extract<Section, { type: 'vertical' | 'horizontal' }>,
   limit: number,
   radius: number,
-): { errors: ParameterErrors; ranges: SectionRanges } {
+  edits: ConnectorEdits | undefined,
+): SectionCheck {
   const ranges: SectionRanges = { [keys.offset]: { min: -limit, max: limit } };
   if (Math.abs(sectionOffsetMm(section.offsetPercent, radius)) > sectionOffsetMm(limit, radius) + CONSTRAINT_ROUNDOFF_MM) {
     const shown = percentRange({ min: -limit, max: limit }, 1);
     const allowed = `Допустимі значення — від ${formatDecimal(shown.min)} % до ${formatDecimal(shown.max)} %: `;
     return { errors: { [keys.offset]: `${allowed}обидві частини мають лишатися придатними до друку.` }, ranges };
   }
-  const connector = connectorChecks(keys, shape, longestDimensionMm, section);
-  return connector === undefined
-    ? { errors: {}, ranges }
-    : { errors: connector.errors, ranges: { ...ranges, ...connector.ranges } };
+  const connector = connectorChecks(keys, shape, longestDimensionMm, section, edits);
+  return connector === undefined ? { errors: {}, ranges } : { ...connector, ranges: { ...ranges, ...connector.ranges } };
 }
 
 /**
@@ -839,7 +1019,8 @@ function apexChecks(
   shape: ConeShape,
   longestDimensionMm: number,
   section: Extract<Section, { type: 'oblique-apex' }>,
-): { errors: ParameterErrors; ranges: SectionRanges } {
+  edits: ConnectorEdits | undefined,
+): SectionCheck {
   const scale = { longestDimensionMm };
   const bounds = coneApexAngleBounds(shape, scale, section.directionDeg);
   const ranges: SectionRanges = { [coneApexKeys.inclination]: bounds };
@@ -862,10 +1043,8 @@ function apexChecks(
       : 'За цього кута площина лише торкається конуса й не ділить його.';
     return { errors: { [coneApexKeys.inclination]: `${reason} ${allowed}` }, ranges };
   }
-  const connector = connectorChecks(keys, shape, longestDimensionMm, section);
-  return connector === undefined
-    ? { errors: {}, ranges }
-    : { errors: connector.errors, ranges: { ...ranges, ...connector.ranges } };
+  const connector = connectorChecks(keys, shape, longestDimensionMm, section, edits);
+  return connector === undefined ? { errors: {}, ranges } : { ...connector, ranges: { ...ranges, ...connector.ranges } };
 }
 
 /**
@@ -898,14 +1077,19 @@ const APEX_START_INCREMENT_DEG = 5;
  * The connector's feasible ranges and its problems, explained at the fields that can repair them, from the same checks
  * the engine applies before it builds anything. A field outside its range names what fails and the values it allows
  * with the other settings as they are; a problem that no connector setting repairs, such as too little material under
- * a plug, is explained at the cut's own field. Nothing is shrunk, moved or rescaled to make the connector fit.
+ * a plug, is explained at the cut's own field. All of it holds for the dimensions a round connector actually gets, see
+ * `resolveRound`.
  */
 function connectorChecks(
   keys: SectionKeys,
   shape: SectionedShape,
   longestDimensionMm: number,
-  section: Section,
-): { errors: ParameterErrors; ranges: SectionRanges } | undefined {
+  stated: Section,
+  edits: ConnectorEdits | undefined,
+): SectionCheck | undefined {
+  const resolved = resolveRound(keys, shape, longestDimensionMm, stated, edits);
+  if (resolved?.status.unavailable !== undefined) return { errors: {}, ranges: {}, resolved };
+  const section = resolved?.section ?? stated;
   const { connector } = section;
   if (connector === undefined) return undefined;
   const feasibility = cachedFeasibility(shape, longestDimensionMm, section);
@@ -933,7 +1117,7 @@ function connectorChecks(
   const explain = (issue: DovetailIssue | RoundConnectorIssue) =>
     connector.type === 'dovetail'
       ? dovetailIssueMessage(issue as DovetailIssue, wording)
-      : roundConnectorIssueMessage(issue as RoundConnectorIssue, connector.type, connector.count, wording);
+      : roundConnectorIssueMessage(issue as RoundConnectorIssue, connector.type, connector.count, wording, connector.profile);
   const parameters = feasibility.parameters as Readonly<
     Record<string, ParameterFeasibility<DovetailIssue | RoundConnectorIssue>>
   >;
@@ -957,7 +1141,7 @@ function connectorChecks(
     };
     errors[cutField[section.type]] = feasibility.unattributed.map(explain).join(' ');
   }
-  return { errors, ranges };
+  return { errors, ranges, resolved };
 }
 
 /** The values a connector field allows now, in the millimetres it shows, rounded as its slider shows them. */
@@ -999,13 +1183,18 @@ export function roundConnectorIssueMessage(
   type: 'plug' | 'dowel',
   count: 1 | 2 = 1,
   cut: CutWording = 'parallel-to-bases',
+  profile: ConnectorProfile = 'circle',
 ): string {
   const shortfall = `${millimetres(issue.valueMm)}, потрібно щонайменше ${millimetres(issue.minimumMm)}`;
-  const diameter = type === 'plug' ? 'діаметр виступу' : 'діаметр штифта';
+  const circular = profile === 'circle';
+  const pin = type === 'plug' ? 'виступу' : 'штифта';
+  const diameter = `${circular ? 'діаметр' : 'розмір'} ${pin}`;
   const length = type === 'plug' ? 'висоту виступу' : 'довжину штифта';
   switch (issue.code) {
     case 'pin-too-thin':
-      return `Найменший ${diameter} — ${shortfall}. Збільште ${diameter}.`;
+      return circular
+        ? `Найменший ${diameter} — ${shortfall}. Збільште ${diameter}.`
+        : `Найвужче місце ${pin} — ${shortfall}. Збільште ${diameter}.`;
     case 'engagement-short':
       return (
         `Після фасок${type === 'dowel' ? ' й осьового зміщення' : ''} пряма ділянка в отворі — ${shortfall}. ` +
@@ -1014,7 +1203,7 @@ export function roundConnectorIssueMessage(
     case 'keying-lost':
       return (
         `Більший ${type === 'plug' ? 'виступ' : 'штифт'} ширший за менший отвір на ${shortfall}, інакше частини можна ` +
-        `з’єднати, повернувши на 180°. Зменште збільшення діаметра отворів або збільште ${diameter}.`
+        `з’єднати, повернувши на 180°. Зменште збільшення ${circular ? 'діаметра ' : ''}отворів або збільште ${diameter}.`
       );
     case 'hole-wall-thin':
       return (
@@ -1116,9 +1305,10 @@ type SectionKeys = {
     readonly length: 'cylinderDovetailLengthPercent' | 'coneDovetailLengthPercent' | 'ballDovetailLengthPercent';
     readonly clearance: 'cylinderDovetailClearanceMm' | 'coneDovetailClearanceMm' | 'ballDovetailClearanceMm';
   };
-  /** Plugs and dowels share the count, spacing and multipliers; each keeps its own clearances. */
+  /** Plugs and dowels share the count, profile, spacing and multipliers; each keeps its own clearances. */
   readonly round: {
     readonly count: 'cylinderRoundCount' | 'coneRoundCount' | 'ballRoundCount';
+    readonly profile: 'cylinderRoundProfile' | 'coneRoundProfile' | 'ballRoundProfile';
     readonly spacing: 'cylinderRoundSpacingPercent' | 'coneRoundSpacingPercent' | 'ballRoundSpacingPercent';
     readonly diameter: 'cylinderRoundDiameter' | 'coneRoundDiameter' | 'ballRoundDiameter';
     readonly depth: 'cylinderRoundDepth' | 'coneRoundDepth' | 'ballRoundDepth';
@@ -1195,6 +1385,7 @@ export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys | Plana
     },
     round: {
       count: 'ballRoundCount',
+      profile: 'ballRoundProfile',
       spacing: 'ballRoundSpacingPercent',
       diameter: 'ballRoundDiameter',
       depth: 'ballRoundDepth',
@@ -1221,6 +1412,7 @@ export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys | Plana
     },
     round: {
       count: 'cylinderRoundCount',
+      profile: 'cylinderRoundProfile',
       spacing: 'cylinderRoundSpacingPercent',
       diameter: 'cylinderRoundDiameter',
       depth: 'cylinderRoundDepth',
@@ -1247,6 +1439,7 @@ export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys | Plana
     },
     round: {
       count: 'coneRoundCount',
+      profile: 'coneRoundProfile',
       spacing: 'coneRoundSpacingPercent',
       diameter: 'coneRoundDiameter',
       depth: 'coneRoundDepth',
@@ -1373,6 +1566,7 @@ function resolveSection(
   const { dovetail, round } = keys;
   const shared = {
     count,
+    profile: choices[round.profile],
     diameterFactor: read(round.diameter),
     depthFactor: read(round.depth),
     ...(count === 2 ? { spacingPercent: read(round.spacing) } : {}),
@@ -1641,7 +1835,7 @@ export const shapeParameterKeys: Readonly<
       'cylinderDowelLowerClearanceMm',
       'cylinderDowelUpperClearanceMm',
     ],
-    choices: ['cylinderSection', 'cylinderPartsSeparated', 'cylinderConnector', 'cylinderRoundCount'],
+    choices: ['cylinderSection', 'cylinderPartsSeparated', 'cylinderConnector', 'cylinderRoundCount', 'cylinderRoundProfile'],
   },
   cone: {
     texts: [
@@ -1665,7 +1859,15 @@ export const shapeParameterKeys: Readonly<
       'coneDowelLowerClearanceMm',
       'coneDowelUpperClearanceMm',
     ],
-    choices: ['coneSection', 'coneObliqueThrough', 'coneApexStarted', 'conePartsSeparated', 'coneConnector', 'coneRoundCount'],
+    choices: [
+      'coneSection',
+      'coneObliqueThrough',
+      'coneApexStarted',
+      'conePartsSeparated',
+      'coneConnector',
+      'coneRoundCount',
+      'coneRoundProfile',
+    ],
   },
   ball: {
     texts: [
@@ -1680,7 +1882,7 @@ export const shapeParameterKeys: Readonly<
       'ballDowelLowerClearanceMm',
       'ballDowelUpperClearanceMm',
     ],
-    choices: ['ballSection', 'ballPartsSeparated', 'ballConnector', 'ballRoundCount'],
+    choices: ['ballSection', 'ballPartsSeparated', 'ballConnector', 'ballRoundCount', 'ballRoundProfile'],
   },
 };
 
@@ -1689,13 +1891,38 @@ export type ParameterState = {
   readonly choices: ParameterChoices;
   readonly exact?: ParameterExact | undefined;
   readonly tiltModes?: TiltModes | undefined;
+  readonly connectorEdits?: ConnectorEdits | undefined;
 };
+
+/**
+ * What happens before a field of a round connector is edited by hand: what the fields show becomes what is stored, so that
+ * no other value jumps, and the current context becomes the one those values count in as they are. Nothing happens while no
+ * connector fits, whose dimensions there are none to keep: a new clearance then still gets dimensions from the section.
+ */
+export function commitConnectorEdit(kind: ShapeKind, state: ParameterState, request: ModelRequest | undefined): ParameterState {
+  const keys = sectionKeys[kind];
+  const status = request?.connectorStatus;
+  const type = activeConnector(kind, state.choices);
+  if (keys === undefined || (type !== 'plug' && type !== 'dowel') || status?.unavailable !== undefined) return state;
+  const current = state.connectorEdits?.[kind];
+  // While the plane or another value is not valid there is no context yet: an empty one matches none later.
+  if (status === undefined)
+    return current === undefined ? { ...state, connectorEdits: { ...state.connectorEdits, [kind]: '' } } : state;
+  if (current === status.context) return state;
+  const texts = { ...state.texts };
+  for (const key of [keys.round.diameter, keys.round.depth, keys.round.spacing]) {
+    const value = request?.values[key];
+    if (value !== undefined) texts[key] = formatSteppedDecimal(value);
+  }
+  return { ...state, texts, connectorEdits: { ...state.connectorEdits, [kind]: status.context } };
+}
 
 /**
  * The state after "Скинути параметри фігури": the shape's own fields and choices, also of its inactive base variants,
  * of both tilt modes and of its section, return to their initial values, drafts included: no section, at 50 %, with
- * the parts apart and without a connector, whose settings return to k = 1, 50 % and 0,2 mm. The print size, every other shape and the tilt input mode keep theirs, so a reset in the angle
- * mode shows 90°.
+ * the parts apart and without a connector, whose settings return to their defaults; a round connector's dimensions then
+ * follow from its section again. The print size, every other shape and the tilt input mode keep theirs, so a reset in the
+ * angle mode shows 90°.
  */
 export function resetShapeParameters(kind: ShapeKind, state: ParameterState): ParameterState {
   const [initialTexts, initialChoices] = [initialParameterTexts(), initialParameterChoices()];
@@ -1704,10 +1931,12 @@ export function resetShapeParameters(kind: ShapeKind, state: ParameterState): Pa
   for (const key of keys) texts[key] = initialTexts[key];
   const choices: ParameterChoices = { ...state.choices };
   for (const key of choiceKeys) Object.assign(choices, { [key]: initialChoices[key] });
-  if (state.exact === undefined) return { ...state, texts, choices };
+  const { [kind]: _edited, ...otherEdits } = state.connectorEdits ?? {};
+  const edits = state.connectorEdits === undefined ? {} : { connectorEdits: otherEdits };
+  if (state.exact === undefined) return { ...state, texts, choices, ...edits };
   const exact = { ...state.exact };
   for (const key of keys) delete exact[key];
-  return { ...state, texts, choices, exact };
+  return { ...state, texts, choices, exact, ...edits };
 }
 
 const isTiltSolid = (kind: ShapeKind): kind is TiltSolid => Object.hasOwn(tiltKeys, kind);
@@ -1734,7 +1963,7 @@ function inactiveSectionKeys(kind: ShapeKind, choices: ParameterChoices): (keyof
   const connectorFields: (keyof ParameterChoices | ParameterKey)[] = connectorTextKeys(keys).filter(
     (key) => !activeFields.has(key),
   );
-  if (connector !== 'plug' && connector !== 'dowel') connectorFields.push(keys.round.count);
+  if (connector !== 'plug' && connector !== 'dowel') connectorFields.push(keys.round.count, keys.round.profile);
   const section = activeSection(kind, choices);
   const planar = 'position' in keys ? (keys as PlanarSectionKeys) : undefined;
   const obliqueFields = planar === undefined ? [] : Object.values(planar.oblique);
@@ -1761,7 +1990,10 @@ function inactiveSectionKeys(kind: ShapeKind, choices: ParameterChoices): (keyof
 export function canResetShapeParameters(kind: ShapeKind, state: ParameterState): boolean {
   const reset = resetShapeParameters(kind, state);
   const inactive = new Set<string>([...inactiveTiltKeys(kind, state), ...inactiveSectionKeys(kind, state.choices)]);
+  const connector = activeConnector(kind, state.choices);
+  const editedConnector = (connector === 'plug' || connector === 'dowel') && state.connectorEdits?.[kind] !== undefined;
   return (
+    editedConnector ||
     shapeParameterKeys[kind].texts.some((key) => !inactive.has(key) && reset.texts[key] !== state.texts[key]) ||
     shapeParameterKeys[kind].choices.some((key) => !inactive.has(key) && reset.choices[key] !== state.choices[key])
   );

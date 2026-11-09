@@ -139,7 +139,6 @@ test('a hole that fits at the section but not deeper in keeps its settings, expl
   await entry(page, 'Тип кріплення').selectOption({ label: 'Виступ і отвір' });
   await entry(page, POSITION).fill('80');
   await expectReady(page);
-  await expect(entry(page, 'Висота виступу, мм')).toHaveValue('4');
   await entry(page, 'Висота виступу, мм').fill('12');
   await expect(
     parameterSection(page, 'Кріплення')
@@ -165,15 +164,11 @@ test('near the apex no connector value may fit: the controls say so and smooth s
   await expectReady(page);
   await entry(page, 'Тип кріплення').selectOption({ label: 'Виступ і отвір' });
   await entry(page, POSITION).fill('90');
-  await expect(
-    parameterSection(page, 'Кріплення')
-      .getByText(/жодне значення/)
-      .first(),
-  ).toBeVisible();
-  await expect(slider(page, 'Діаметр виступу, мм')).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'Діаметр виступу, мм: збільшити', exact: true })).toBeDisabled();
+  await expect(parameterSection(page, 'Кріплення').getByText(/^Кріплення не вміщується/)).toBeVisible();
+  await expect(previewViewport(page)).toHaveAttribute('data-preview-status', 'loaded', { timeout: 30_000 });
+  await expect(entry(page, 'Діаметр вихідного кола, мм')).toHaveCount(0);
   await expect(partsButton(page)).toBeDisabled();
-  await entry(page, 'Тип кріплення').selectOption({ label: 'Без кріплення' });
+  await page.getByRole('button', { name: 'Обрати «Без кріплення»', exact: true }).click();
   await expectReady(page);
   const { objects } = await download(page);
   expect(objects).toHaveLength(2);
@@ -272,11 +267,11 @@ test('on a narrow phone every field is reachable and the page fits', async ({ pa
   await entry(page, 'Кількість').selectOption({ label: '2' });
   for (const label of [
     POSITION,
-    'Діаметр штифта, мм',
+    'Діаметр вихідного кола, мм',
     'Від центра до осі кріплення, мм',
     'Повна довжина штифта, мм',
-    'Збільшення діаметра нижніх отворів, мм',
-    'Збільшення діаметра верхніх отворів, мм',
+    'Збільшення нижніх отворів, мм',
+    'Збільшення верхніх отворів, мм',
   ]) {
     await slider(page, label).scrollIntoViewIfNeeded();
     await expect(slider(page, label)).toBeInViewport();

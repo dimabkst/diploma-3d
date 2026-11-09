@@ -2,12 +2,15 @@ import {
   DOVETAIL_PROPORTIONS,
   obliquePlaneContainsAxis,
   ROUND_CONNECTOR_PROPORTIONS,
+  ROUND_CONNECTOR_STEPS_MM,
   type TrapezoidKind,
   trapezoidKind,
 } from '@diploma-3d/engine';
 import {
   BASE_ANGLE_LIMITS,
   BASE_SHIFT_LIMITS,
+  CONNECTOR_PROFILES,
+  type ConnectorProfile,
   DIAMETRAL_CLEARANCE_LIMITS,
   DOVETAIL_CLEARANCE_LIMITS,
   defaultModelSpecs,
@@ -40,6 +43,7 @@ import {
   activeSection,
   type ChoiceKey,
   type ConnectorChoice,
+  type ConnectorStatus,
   canSwitchTiltMode,
   coneApexKeys,
   type ParameterChoices,
@@ -98,6 +102,8 @@ export type NumericField = {
   readonly disabled?: boolean;
   /** The id of a note that explains why it is disabled. */
   readonly describedBy?: string;
+  /** A setting of a round connector: editing it by hand ends what the section's capacity decided for it. */
+  readonly editsRoundConnector?: boolean;
 };
 
 /** A parameter picked from fixed options, such as the base type or the regular polygon. */
@@ -154,9 +160,21 @@ export type NoteField = {
   readonly type: 'note';
   readonly key: string;
   readonly text: string;
+  /** `status`: announced as it changes, such as an automatic correction; `alert`: also shown as an error. */
+  readonly tone?: 'status' | 'alert';
 };
 
-export type ParameterField = NumericField | ChoiceField | ToggleField | NoteField | TiltGroup | TrapezoidGroup;
+/** A button among the fields, whose effect belongs to the page. */
+export type ActionField = {
+  readonly type: 'action';
+  readonly key: string;
+  readonly label: string;
+  readonly action: PanelAction;
+};
+
+export type PanelAction = 'download-pins' | 'choose-no-connector';
+
+export type ParameterField = NumericField | ChoiceField | ToggleField | NoteField | ActionField | TiltGroup | TrapezoidGroup;
 
 /** A collapsible group of the sidebar, such as "Основа" or "Нахил". */
 export type ParameterSection = {
@@ -370,6 +388,8 @@ export type PanelContext = {
   readonly values?: ParameterValues | undefined;
   /** The scale that turns connector settings into millimetres; the connector group needs it. */
   readonly connectorScale?: ConnectorScale | undefined;
+  /** What became of a round connector's stored dimensions. */
+  readonly connectorStatus?: ConnectorStatus | undefined;
   /** The feasible millimetres of the connector's fields, see `SectionRanges`. */
   readonly sectionRanges?: SectionRanges | undefined;
 };
@@ -652,7 +672,16 @@ const connectorNames: Readonly<Record<ConnectorChoice, string>> = {
   dowel: 'Знімні штифти',
 };
 
-// Dimensions move in steps of 0,25 mm, clearances in 0,05 mm; typed values between the steps are kept.
+const CONNECTOR_PROFILE_NAMES: Readonly<Record<ConnectorProfile, string>> = {
+  circle: 'Круг',
+  triangle: 'Трикутник',
+  square: 'Квадрат',
+  hexagon: 'Шестикутник',
+  'flatted-circle': 'Круг зі зрізаним боком',
+};
+
+// A dovetail's dimensions move in steps of 0,25 mm, clearances in 0,05 mm, a round connector's as the engine's defaults are
+// rounded; typed values between the steps are kept.
 const DIMENSION_INCREMENT_MM = 0.25;
 const dovetailClearanceRange: StepRange = { ...DOVETAIL_CLEARANCE_LIMITS, increment: 0.05 };
 const diametralClearanceRange: StepRange = { ...DIAMETRAL_CLEARANCE_LIMITS, increment: 0.05 };
@@ -799,8 +828,36 @@ const withBallNote = (help: Help): Help => ({ ...help, text: `${help.text}\n\n${
 
 const SCALE_NOTE =
   'Показано фактичні розміри для поточного масштабу моделі. Розміри кріплення змінюються разом із найбільшим габаритом.';
-const COUNT_NOTE =
-  'Одне кругле кріплення дозволяє повертати половинки. Два кріплення різного діаметра задають їхнє взаємне положення.';
+const ROUND_SCALE_NOTE =
+  'Показано фактичні розміри кріплення. Спочатку їх визначає місце в обох частинах; задані вручну змінюються разом із ' +
+  'найбільшим габаритом, а якщо вже не вміщуються, зменшуються автоматично.';
+// A hole is the pin's outline moved outwards, whatever its shape; the circle's help above says it in diameters.
+const PROFILE_CLEARANCE_HELP =
+  'Отвір має той самий контур, що й кріплення, зсунутий назовні на половину значення збільшення, тому кожна грань отримує ' +
+  'однаковий зазор, а кути отвору лишаються гострими й не зменшують його.';
+const TRIAL_VALUES_HELP =
+  'Початкові збільшення отворів — лише орієнтир для пробного друку, а не перевірене налаштування принтера чи матеріалу.';
+const CLEARANCE_NOTE = 'Значення 0,4 мм дає зазор 0,2 мм з кожного боку.';
+
+/** What one connector of this profile leaves free; a pair of different sizes leaves one position, whatever the profile. */
+const countNote = (profile: ConnectorProfile): string => {
+  const pair = 'Два кріплення різного розміру задають їхнє взаємне положення.';
+  if (profile === 'circle')
+    return 'Одне кругле кріплення дозволяє повертати половинки. Два кріплення різного діаметра задають їхнє взаємне положення.';
+  if (profile === 'flatted-circle')
+    return 'Зрізаний бік допускає лише одне положення половинок уже за одного кріплення. Невеликий люфт через зазор нормальний.';
+  const turns = { triangle: '120°', square: '90°', hexagon: '60°' }[profile];
+  return `Одне таке кріплення дозволяє складати половинки з поворотом на ${turns}. ${pair}`;
+};
+
+/** What the nominal size of a profile measures: never a side or the width across flats. */
+const sizeNote = (profile: ConnectorProfile): string | undefined => {
+  if (profile === 'circle') return undefined;
+  if (profile === 'flatted-circle') return 'Розмір — діаметр вихідного кола, з якого зрізано один бік.';
+  return profile === 'square'
+    ? 'Розмір — діаметр описаного кола, тобто діагональ квадрата.'
+    : 'Розмір — діаметр описаного кола, а не довжина сторони.';
+};
 
 /** A millimetre value for the linked lines; "—" while the setting it follows is not valid. */
 const millimetres = (value: number | undefined): string =>
@@ -839,13 +896,14 @@ function connectorSection(
     return interval === undefined ? fallback : physicalRange(interval, increment);
   };
   /** A stored multiplier or percentage shown in millimetres, over its feasible range. */
-  const millimetreField = (key: ScaledConnectorKey, label: string): NumericField => ({
+  const millimetreField = (key: ScaledConnectorKey, label: string, increment = DIMENSION_INCREMENT_MM): NumericField => ({
     type: 'number',
     key,
     label,
     suffix: '',
     unit: units[key],
-    range: rangeOf(key, DIMENSION_INCREMENT_MM),
+    range: rangeOf(key, increment),
+    ...(chosen === 'plug' || chosen === 'dowel' ? { editsRoundConnector: true } : {}),
   });
   const clearanceField = (key: ParameterKey, label: string, window: StepRange): NumericField => ({
     type: 'number',
@@ -853,6 +911,7 @@ function connectorSection(
     label,
     suffix: '',
     range: rangeOf(key, window.increment, window),
+    ...(chosen === 'plug' || chosen === 'dowel' ? { editsRoundConnector: true } : {}),
   });
   const shown = (key: ScaledConnectorKey) => {
     const value = values[key];
@@ -863,32 +922,64 @@ function connectorSection(
   const height = shown(dovetail.size);
   const pair = choices[round.count] === 2;
   const diameter = shown(round.diameter);
-  const diameterLabel = chosen === 'plug' ? 'Діаметр виступу, мм' : 'Діаметр штифта, мм';
-  const roundFields = (lengthField: NumericField, lengthNote: NoteField[]): ParameterField[] => [
-    scaleNote,
-    {
-      type: 'choice',
-      key: round.count,
-      label: 'Кількість',
-      options: [
-        { value: 1, label: '1' },
-        { value: 2, label: '2' },
-      ],
-    },
-    note('connector-count', COUNT_NOTE),
-    millimetreField(round.diameter, diameterLabel),
-    ...(pair
+  const profile = choices[round.profile];
+  const circular = profile === 'circle';
+  const pinName = chosen === 'plug' ? 'виступу' : 'штифта';
+  const diameterLabel =
+    profile === 'flatted-circle'
+      ? 'Діаметр вихідного кола, мм'
+      : circular
+        ? `Діаметр ${pinName}, мм`
+        : 'Діаметр описаного кола, мм';
+  const enlargement = circular ? 'Збільшення діаметра' : 'Збільшення';
+  const unavailable = context.connectorStatus?.unavailable;
+  const corrections = (context.connectorStatus?.corrections ?? []).map(
+    (text, index): NoteField => ({ ...note(`connector-correction-${index}`, text), tone: 'status' }),
+  );
+  const size = sizeNote(profile);
+  const profileField: ChoiceField = {
+    type: 'choice',
+    key: round.profile,
+    label: 'Профіль',
+    options: CONNECTOR_PROFILES.map((value) => ({ value, label: CONNECTOR_PROFILE_NAMES[value] })),
+  };
+  const countField: ChoiceField = {
+    type: 'choice',
+    key: round.count,
+    label: 'Кількість',
+    options: [
+      { value: 1, label: '1' },
+      { value: 2, label: '2' },
+    ],
+  };
+  const roundFields = (lengthField: NumericField, lengthNote: NoteField[]): ParameterField[] =>
+    unavailable !== undefined
       ? [
-          note(
-            'connector-second-diameter',
-            `Друге кріплення: діаметр ${millimetres(diameter === undefined ? undefined : ROUND_CONNECTOR_PROPORTIONS.secondaryDiameter * diameter)}.`,
-          ),
-          millimetreField(round.spacing, 'Від центра до осі кріплення, мм'),
+          profileField,
+          countField,
+          { ...note('connector-unavailable', unavailable), tone: 'alert' },
+          { type: 'action', key: `${kind}-choose-no-connector`, label: 'Обрати «Без кріплення»', action: 'choose-no-connector' },
         ]
-      : []),
-    lengthField,
-    ...lengthNote,
-  ];
+      : [
+          note('connector-scale', ROUND_SCALE_NOTE),
+          profileField,
+          countField,
+          note('connector-count', countNote(profile)),
+          ...corrections,
+          millimetreField(round.diameter, diameterLabel, ROUND_CONNECTOR_STEPS_MM.size),
+          ...(size === undefined ? [] : [note('connector-size', size)]),
+          ...(pair
+            ? [
+                note(
+                  'connector-second-diameter',
+                  `Друге кріплення: ${circular ? 'діаметр' : 'розмір'} ${millimetres(diameter === undefined ? undefined : ROUND_CONNECTOR_PROPORTIONS.secondaryDiameter * diameter)}.`,
+                ),
+                millimetreField(round.spacing, 'Від центра до осі кріплення, мм', ROUND_CONNECTOR_STEPS_MM.spacing),
+              ]
+            : []),
+          lengthField,
+          ...lengthNote,
+        ];
   const fields: Record<ConnectorChoice, ParameterField[]> = {
     none: [],
     dovetail: [
@@ -903,23 +994,30 @@ function connectorSection(
       clearanceField(dovetail.clearance, 'Зазор між поверхнями, мм', dovetailClearanceRange),
     ],
     plug: [
-      ...roundFields(millimetreField(round.depth, 'Висота виступу, мм'), []),
-      clearanceField(round.plugClearance, 'Збільшення діаметра отвору, мм', diametralClearanceRange),
+      ...roundFields(millimetreField(round.depth, 'Висота виступу, мм', ROUND_CONNECTOR_STEPS_MM.length), [
+        note('plug-height', 'Висота від площини перерізу: на стільки виступ заходить в отвір другої частини.'),
+      ]),
+      clearanceField(round.plugClearance, `${enlargement} отвору, мм`, diametralClearanceRange),
+      note('connector-clearance', CLEARANCE_NOTE),
     ],
     dowel: [
-      ...roundFields(millimetreField(round.depth, 'Повна довжина штифта, мм'), [
+      ...roundFields(millimetreField(round.depth, 'Повна довжина штифта, мм', ROUND_CONNECTOR_STEPS_MM.length), [
         note('dowel-insertion', `У кожну половинку штифт входить на ${millimetres(shownHalf(shown(round.depth)))}.`),
       ]),
       clearanceField(
         round.dowelLowerClearance,
-        numbered ? 'Збільшення діаметра отворів частини 1, мм' : 'Збільшення діаметра нижніх отворів, мм',
+        numbered ? `${enlargement} отворів частини 1, мм` : `${enlargement} нижніх отворів, мм`,
         diametralClearanceRange,
       ),
       clearanceField(
         round.dowelUpperClearance,
-        numbered ? 'Збільшення діаметра отворів частини 2, мм' : 'Збільшення діаметра верхніх отворів, мм',
+        numbered ? `${enlargement} отворів частини 2, мм` : `${enlargement} верхніх отворів, мм`,
         diametralClearanceRange,
       ),
+      note('connector-clearance', CLEARANCE_NOTE),
+      ...(unavailable === undefined
+        ? [{ type: 'action', key: `${kind}-download-pins`, label: 'Завантажити лише штифти', action: 'download-pins' } as const]
+        : []),
     ],
   };
   const helps: Record<SectionType, Record<Exclude<ConnectorChoice, 'none'>, Help>> = {
@@ -961,10 +1059,20 @@ function connectorSection(
     const printNote = cut === 'vertical' ? VERTICAL_PRINT_NOTE : OBLIQUE_PRINT_NOTE;
     return (type === 'plug' ? numberedPlugHelp : numberedDowelHelp)(CONE_VERTICAL_NOTE + printNote);
   };
+  const withRoundNotes = (type: Exclude<ConnectorChoice, 'none'>, help: Help): Help =>
+    type === 'dovetail'
+      ? help
+      : {
+          ...help,
+          text: [help.text, ...(circular ? [] : [PROFILE_CLEARANCE_HELP]), TRIAL_VALUES_HELP].join('\n\n'),
+        };
   return [
     section(`${kind}-connector`, 'Кріплення', [selector, ...printNote, ...fields[chosen]], {
-      help: chosen === 'none' ? undefined : helpOf(chosen),
-      status: { text: chosen === 'none' ? 'немає' : connectorNames[chosen].toLowerCase(), highlighted: chosen !== 'none' },
+      help: chosen === 'none' ? undefined : withRoundNotes(chosen, helpOf(chosen)),
+      status:
+        chosen !== 'none' && unavailable !== undefined && chosen !== 'dovetail'
+          ? { text: 'не вміщується', highlighted: true }
+          : { text: chosen === 'none' ? 'немає' : connectorNames[chosen].toLowerCase(), highlighted: chosen !== 'none' },
     }),
   ];
 }

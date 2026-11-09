@@ -1,5 +1,6 @@
 import type { ModelSpecInput } from '@diploma-3d/schema';
 import { obliqueAxes } from './connectors/frame.ts';
+import type { RoundConnectorPlan } from './connectors/round.ts';
 import { createPreviewGlb, type PreviewObject } from './export/glb.ts';
 import { arrangeInRow, restOnFlatFace, rotateHalfTurn, rotateOntoZ } from './export/layout.ts';
 import type { ThreeMfObject } from './export/three-mf.ts';
@@ -18,7 +19,17 @@ export interface ModelArtifacts {
    * plugs and dowels, along the sliding direction, off the tongue, for a dovetail.
    */
   readonly separatedPreviewGlb?: Uint8Array<ArrayBuffer>;
-  readonly printFile: { readonly fileName: string; readonly bytes: Uint8Array<ArrayBuffer> };
+  readonly printFile: PrintFile;
+  /**
+   * With removable dowels only: the dowels alone, for reprinting them. The same meshes as in `printFile`, moved rigidly, so
+   * that a replacement has the exact size of the assembly's own; nothing fits them to the model's longest dimension.
+   */
+  readonly pinsFile?: PrintFile;
+}
+
+export interface PrintFile {
+  readonly fileName: string;
+  readonly bytes: Uint8Array<ArrayBuffer>;
 }
 
 /**
@@ -42,12 +53,30 @@ export const CONNECTOR_PREVIEW_GAP_RELATIVE = 0.5;
  */
 export async function buildModelArtifacts(kernel: GeometryKernel, spec: ModelSpecInput): Promise<ModelArtifacts> {
   const model = generateModel(kernel, spec);
-  const objects = printObjects(model);
+  const oriented = printOrientation(model);
+  // An uncut solid stays where it was built; the parts of a section lie in a row.
+  const objects = model.solids.length === 1 ? oriented : arrangeInRow(oriented);
   const printFile = { fileName: `${model.name}.3mf`, bytes: createThreeMf(objects, { title: model.name }) };
   const previewGlb = await createPreviewGlb(previewObjects(model, 0));
   if (model.section === undefined) return { model, previewGlb, printFile };
   const separatedPreviewGlb = await createPreviewGlb(previewObjects(model, previewSeparation(model)));
-  return { model, previewGlb, separatedPreviewGlb, printFile };
+  const pins = oriented.filter((object) => object.part === 'dowel');
+  const connector = model.section.connector;
+  if (pins.length === 0 || connector === undefined || connector.type === 'dovetail') {
+    return { model, previewGlb, separatedPreviewGlb, printFile };
+  }
+  const pinsName = pinsFileName(connector);
+  const pinsFile = { fileName: `${pinsName}.3mf`, bytes: createThreeMf(arrangeInRow(pins), { title: pinsName }) };
+  return { model, previewGlb, separatedPreviewGlb, printFile, pinsFile };
+}
+
+/** Millimetres for a file name: thousandths at most, with a point, and no trailing zeros. */
+const fileMillimetres = (value: number): string => String(Number(value.toFixed(3)));
+
+/** What a replacement must match: the profile, each pin's nominal size and the whole length, e.g. "dowels-square-d8-d6.4-L24mm". */
+export function pinsFileName({ profile, sites, insertion }: RoundConnectorPlan): string {
+  const sizes = sites.map(({ pinDiameter }) => `d${fileMillimetres(pinDiameter)}`).join('-');
+  return `dowels-${profile}-${sizes}-L${fileMillimetres(2 * insertion)}mm`;
 }
 
 /** The part on the positive side of a section's plane: the one with the holes or the groove. */
@@ -100,7 +129,8 @@ function previewObjects({ solids, section }: GeneratedModel, gap: number): Previ
 const scaled = (a: Vec3, factor: number): Vec3 => [a[0] * factor, a[1] * factor, a[2] * factor];
 
 /**
- * The print file's objects, side by side on the build plate. Flat cut faces keep the parts as they are. With a parallel
+ * The print file's objects in their print orientation, by proper rotations only, before they are laid out side by side on
+ * the build plate. Flat cut faces keep the parts as they are. With a parallel
  * cut's connector both connector faces print upwards: the lower part stands on its lower base, and the upper part is
  * turned half a turn about u onto its upper base, which also keeps a dovetail groove's flanks at 45° overhangs. An upper
  * cone has an apex instead of that base: it stays upright on its cut face, with its holes or groove opening towards the
@@ -110,17 +140,15 @@ const scaled = (a: Vec3, factor: number): Vec3 => [a[0] * factor, a[1] * factor,
  * their own resting face, see `restOnFlatFace`; the parts of a plane through a cone's apex both keep some of the base,
  * and stay upright on it. Removable dowels stand upright on an end face.
  */
-function printObjects({ solids, section, spec }: GeneratedModel): readonly ThreeMfObject[] {
+function printOrientation({ solids, section, spec }: GeneratedModel): readonly (Solid & ThreeMfObject)[] {
   if (solids.length === 1) return solids;
   const connector = section?.connector;
   if (spec.shape.kind === 'ball') {
     // No base to stand on, and nothing is flattened to make one: each part rests on its cut face if that is free, so the
     // lower part turns over; with a plug or a tongue on it, it keeps its cut face up, on its curved side and on supports.
     const protrudes = connector?.type === 'plug' || connector?.type === 'dovetail';
-    return arrangeInRow(
-      solids.map((solid) =>
-        solid.part === 'lower' && !protrudes ? { ...solid, mesh: rotateHalfTurn(solid.mesh, [1, 0, 0]) } : solid,
-      ),
+    return solids.map((solid) =>
+      solid.part === 'lower' && !protrudes ? { ...solid, mesh: rotateHalfTurn(solid.mesh, [1, 0, 0]) } : solid,
     );
   }
   if (spec.section?.type === 'oblique' && (spec.shape.kind === 'cylinder' || spec.shape.kind === 'cone')) {
@@ -129,29 +157,25 @@ function printObjects({ solids, section, spec }: GeneratedModel): readonly Three
     const { n, v } = obliqueAxes(spec.section.inclinationDeg, spec.section.directionDeg);
     // Whichever part keeps the base or the apex, a plug or a tongue on the cut face could not rest on the bed.
     const protrudes = connector?.type === 'plug' || connector?.type === 'dovetail';
-    return arrangeInRow(
-      solids.map((solid) => {
-        if (solid.part === 'dowel') return { ...solid, mesh: rotateOntoZ(solid.mesh, n) };
-        const outward = solid.part === 'part-1' ? n : scaled(n, -1);
-        const cutFaceFree = isCone ? !(protrudes && solid.part === 'part-1') : connector === undefined;
-        return {
-          ...solid,
-          mesh: restOnFlatFace(solid.mesh, {
-            baseHeight,
-            turnAxis: v,
-            ...(cutFaceFree ? { cutFaceOutward: outward } : {}),
-            ...(isCone && !cutFaceFree ? { connectorFace: outward } : {}),
-          }),
-        };
-      }),
-    );
-  }
-  if (connector === undefined) return arrangeInRow(solids);
-  const { u, n } = connector.frame;
-  return arrangeInRow(
-    solids.map((solid) => {
+    return solids.map((solid) => {
       if (solid.part === 'dowel') return { ...solid, mesh: rotateOntoZ(solid.mesh, n) };
-      return solid.part === 'upper' && spec.shape.kind !== 'cone' ? { ...solid, mesh: rotateHalfTurn(solid.mesh, u) } : solid;
-    }),
-  );
+      const outward = solid.part === 'part-1' ? n : scaled(n, -1);
+      const cutFaceFree = isCone ? !(protrudes && solid.part === 'part-1') : connector === undefined;
+      return {
+        ...solid,
+        mesh: restOnFlatFace(solid.mesh, {
+          baseHeight,
+          turnAxis: v,
+          ...(cutFaceFree ? { cutFaceOutward: outward } : {}),
+          ...(isCone && !cutFaceFree ? { connectorFace: outward } : {}),
+        }),
+      };
+    });
+  }
+  if (connector === undefined) return solids;
+  const { u, n } = connector.frame;
+  return solids.map((solid) => {
+    if (solid.part === 'dowel') return { ...solid, mesh: rotateOntoZ(solid.mesh, n) };
+    return solid.part === 'upper' && spec.shape.kind !== 'cone' ? { ...solid, mesh: rotateHalfTurn(solid.mesh, u) } : solid;
+  });
 }

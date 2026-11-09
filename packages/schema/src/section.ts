@@ -60,27 +60,40 @@ export const dovetailConnectorSchema = z.strictObject({
 
 export type DovetailConnector = z.infer<typeof dovetailConnectorSchema>;
 
-// Round connectors: one or a keyed pair, and the calibration window for print trials of their diametral fit clearances
-// in millimetres, a policy rather than a geometric limit. The multipliers of the diameter d = 0,0625·M and of the
-// insertion length e = 0,05·M and a pair's distance from the centre in percent of the section's half span along u have
-// no fixed limits; the cylinder, the cut and the construction constraints bound them, and the engine checks them before
-// building.
+// Round connectors: one or a keyed pair, and the window of their hole enlargements Δ in millimetres, a policy rather than a
+// geometric limit. The multipliers of the nominal size d = 0,0625·M and of the insertion length e = 0,05·M and a pair's
+// distance from the centre in percent of the section's half span along u have no fixed limits; the solid, the cut and the
+// construction constraints bound them, and the engine checks them before building.
 export const ROUND_CONNECTOR_COUNTS = [1, 2] as const;
-export const DIAMETRAL_CLEARANCE_LIMITS = { min: 0, max: 0.4 } as const;
+export const DIAMETRAL_CLEARANCE_LIMITS = { min: 0, max: 1 } as const;
 
 export const DEFAULT_ROUND_CONNECTOR = { count: 1, diameterFactor: 1, depthFactor: 1, spacingPercent: 45 } as const;
-export const DEFAULT_PLUG_CLEARANCE_MM = 0.2;
-export const DEFAULT_DOWEL_CLEARANCES_MM = { lower: 0.1, upper: 0.2 } as const;
+// Provisional starting points for print trials, not a validated printer or material preset.
+export const DEFAULT_PLUG_CLEARANCE_MM = 0.5;
+export const DEFAULT_DOWEL_CLEARANCES_MM = { lower: 0.4, upper: 0.5 } as const;
+
+/**
+ * The cross-section of a plug, a dowel and their holes, in the cut plane's coordinates (x, y) = (v, u), for the nominal size
+ * d = 2r: a circle of radius r; a regular polygon with circumradius r; or `flatted-circle`, x² + y² ≤ r² with x ≤ r/2.
+ */
+export const CONNECTOR_PROFILES = ['circle', 'triangle', 'square', 'hexagon', 'flatted-circle'] as const;
+
+export type ConnectorProfile = (typeof CONNECTOR_PROFILES)[number];
+
+/** What a newly created connector starts with: its one flat side leaves a single way to join the parts. */
+export const DEFAULT_CONNECTOR_PROFILE: ConnectorProfile = 'flatted-circle';
 
 const diametralClearanceSchema = z.number().min(DIAMETRAL_CLEARANCE_LIMITS.min).max(DIAMETRAL_CLEARANCE_LIMITS.max);
 
 /**
  * The fields that plugs and dowels share. One connector sits at the section's centre; a pair sits at ±s along the
- * section's u direction, with diameters d and 0,8d, so that the parts cannot be joined turned by 180°. The spacing
+ * section's u direction, with nominal sizes d and 0,8d, so that the parts cannot be joined turned by 180°. The spacing
  * belongs to a pair only.
  */
 const roundConnectorFields = {
   count: z.union([z.literal(1), z.literal(2)]),
+  /** Missing in a configuration saved before there was a choice, and then a circle. */
+  profile: z.enum(CONNECTOR_PROFILES).optional(),
   diameterFactor: z.number().positive(),
   depthFactor: z.number().positive(),
   spacingPercent: z.number().positive().optional(),
@@ -91,15 +104,15 @@ const spacingOfPairsOnly = (connector: { count: 1 | 2; spacingPercent?: number |
 const spacingMessage = { message: 'A pair needs its spacing; a single connector has none.', path: ['spacingPercent'] };
 
 /**
- * Integral plugs: a cylindrical protrusion of length e on the lower part and a blind hole in the upper part. The
- * clearance is diametral: the hole is that much wider than the plug, half of it on each side.
+ * Integral plugs: a protrusion of length e on the lower part and a blind hole in the upper part. The clearance Δ is
+ * diametral: each side surface of the hole lies Δ/2 outside the plug's, whatever the profile.
  */
 export const plugConnectorSchema = z
   .strictObject({ type: z.literal('plug'), ...roundConnectorFields, holeClearanceMm: diametralClearanceSchema })
   .refine(spacingOfPairsOnly, spacingMessage);
 
 /**
- * Separate removable dowels of length 2e in blind holes of both parts, with diametral clearances per part: a tighter
+ * Separate removable dowels of length 2e in blind holes of both parts, with clearances per part as for plugs: a tighter
  * lower hole is meant to keep the dowel in the lower part, which only a print can confirm.
  */
 export const dowelConnectorSchema = z

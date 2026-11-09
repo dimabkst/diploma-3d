@@ -157,6 +157,10 @@ test('vertical section: plugs and dowels lie along the normal, within bounds tha
   await chooseVertical(page);
   await entry(page, 'Тип кріплення').selectOption({ label: 'Виступ і отвір' });
   const connector = parameterSection(page, 'Кріплення');
+  await entry(page, 'Профіль').selectOption({ label: 'Круг' });
+  await entry(page, 'Діаметр виступу, мм').fill('5');
+  await entry(page, 'Висота виступу, мм').fill('4');
+  await entry(page, 'Збільшення діаметра отвору, мм').fill('0,2');
 
   // The depth runs towards the curved surface: √(38,75² − 2,6²) − 0,3 mm on the axis, less as the plane moves away.
   await expect(slider(page, 'Висота виступу, мм')).toHaveAttribute('min', '2.8');
@@ -171,16 +175,16 @@ test('vertical section: plugs and dowels lie along the normal, within bounds tha
   // Part 2 stands on its base, not turned over.
   expect(file.objects[1]?.size[2]).toBeCloseTo(80, 3);
 
-  // An 8 mm plug fits on the axis; near the side of part 2 the entrance still fits, but the depth does not.
+  // An 8 mm plug fits on the axis; near the side of part 2 the entrance still fits, but the depth does not, so the plug
+  // gets what the part leaves and says so; the former height returns with the plane.
   await entry(page, 'Висота виступу, мм').fill('8');
   await expectReady(page);
   await entry(page, OFFSET).fill('80');
-  await expect(page.locator('#cylinderRoundDepth-error')).toHaveText(
-    /^Під дном отвору у частині 2 лишається .* Зменште висоту виступу, діаметр виступу або зміщення від осі\./,
-  );
-  await expect(entry(page, 'Висота виступу, мм')).toHaveValue('8');
-  await expect(partsButton(page)).toBeDisabled();
+  await expect(connector.getByText(/^Висоту виступу зменшено до .* мм через товщину частини\.$/)).toBeVisible();
+  await expect(entry(page, 'Висота виступу, мм')).not.toHaveValue('8');
+  await expectReady(page);
   await entry(page, OFFSET).fill('0');
+  await expect(entry(page, 'Висота виступу, мм')).toHaveValue('8');
   await expectReady(page);
   await entry(page, 'Висота виступу, мм').fill('4');
 
@@ -194,8 +198,8 @@ test('vertical section: plugs and dowels lie along the normal, within bounds tha
 
   // Removable dowels are separate objects, printed upright; the receiving parts have their own clearances.
   await entry(page, 'Тип кріплення').selectOption({ label: 'Знімні штифти' });
-  await expect(entry(page, 'Збільшення діаметра отворів частини 1, мм')).toHaveValue('0,1');
-  await expect(entry(page, 'Збільшення діаметра отворів частини 2, мм')).toHaveValue('0,2');
+  await expect(entry(page, 'Збільшення діаметра отворів частини 1, мм')).toHaveValue('0,4');
+  await expect(entry(page, 'Збільшення діаметра отворів частини 2, мм')).toHaveValue('0,5');
   await expect(entry(page, 'Збільшення діаметра нижніх отворів, мм')).toHaveCount(0);
   await expectReady(page);
   file = await download(page);
@@ -271,8 +275,8 @@ for (const [name, width, height] of [
     await entry(page, 'Тип кріплення').selectOption({ label: 'Знімні штифти' });
     await entry(page, 'Кількість').selectOption({ label: '2' });
     await entry(page, OFFSET).fill('85');
-    await expect(entry(page, 'Збільшення діаметра отворів частини 2, мм')).toBeVisible();
-    await entry(page, 'Збільшення діаметра отворів частини 2, мм').scrollIntoViewIfNeeded();
+    await expect(entry(page, 'Збільшення отворів частини 2, мм')).toBeVisible();
+    await entry(page, 'Збільшення отворів частини 2, мм').scrollIntoViewIfNeeded();
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     expect(overflow).toBe(0);
     // «Вписати модель» still works on the separated parts.

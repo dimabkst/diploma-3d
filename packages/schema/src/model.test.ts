@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   BASE_ANGLE_LIMITS,
   BASE_SHIFT_LIMITS,
+  CONNECTOR_PROFILES,
+  DEFAULT_CONNECTOR_PROFILE,
   DEFAULT_DOVETAIL,
   DEFAULT_DOWEL_CLEARANCES_MM,
   DEFAULT_LONGEST_DIMENSION_MM,
@@ -872,10 +874,10 @@ describe('plug and dowel connectors', () => {
   const plug = { type: 'plug', count: 1, diameterFactor: 1, depthFactor: 1, holeClearanceMm: 0.2 };
   const dowel = { type: 'dowel', count: 1, diameterFactor: 1, depthFactor: 1, lowerClearanceMm: 0.1, upperClearanceMm: 0.2 };
 
-  it('starts at one connector, both multipliers 1, a pair at 45 % and diametral clearances 0,2 / 0,1 / 0,2 mm', () => {
+  it('starts at one connector, both multipliers 1, a pair at 45 % and hole enlargements 0,5 / 0,4 / 0,5 mm', () => {
     expect(DEFAULT_ROUND_CONNECTOR).toEqual({ count: 1, diameterFactor: 1, depthFactor: 1, spacingPercent: 45 });
-    expect(DEFAULT_PLUG_CLEARANCE_MM).toBe(0.2);
-    expect(DEFAULT_DOWEL_CLEARANCES_MM).toEqual({ lower: 0.1, upper: 0.2 });
+    expect(DEFAULT_PLUG_CLEARANCE_MM).toBe(0.5);
+    expect(DEFAULT_DOWEL_CLEARANCES_MM).toEqual({ lower: 0.4, upper: 0.5 });
     expect(parse(plug)).toBe(true);
     expect(parse(dowel)).toBe(true);
   });
@@ -889,7 +891,20 @@ describe('plug and dowel connectors', () => {
     for (const spacingPercent of [0, -10, Number.NaN]) expect(parse({ ...dowel, count: 2, spacingPercent })).toBe(false);
   });
 
-  it('takes any positive multipliers, bounds the clearances to 0–0,4 mm, and keeps each type’s own clearances', () => {
+  it('takes a known profile or none, which a configuration saved before the choice leaves out', () => {
+    for (const profile of CONNECTOR_PROFILES) {
+      expect(parse({ ...plug, profile })).toBe(true);
+      expect(parse({ ...dowel, profile })).toBe(true);
+    }
+    expect(CONNECTOR_PROFILES).toEqual(['circle', 'triangle', 'square', 'hexagon', 'flatted-circle']);
+    expect(DEFAULT_CONNECTOR_PROFILE).toBe('flatted-circle');
+    expect(parse(plug)).toBe(true);
+    expect(parse({ ...plug, profile: 'pentagon' })).toBe(false);
+    // A dovetail has no such choice.
+    expect(parse({ type: 'dovetail', sizeFactor: 1, lengthPercent: 50, clearanceMm: 0.2, profile: 'circle' })).toBe(false);
+  });
+
+  it('takes any positive multipliers, bounds the clearances to 0–1 mm, and keeps each type’s own clearances', () => {
     for (const key of ['diameterFactor', 'depthFactor'] as const) {
       expect([0.5, 0.75, 1.5, 4].map((value) => parse({ ...plug, [key]: value }))).toEqual([true, true, true, true]);
       expect([0, -0.5, Number.NaN, Number.POSITIVE_INFINITY].map((value) => parse({ ...plug, [key]: value }))).toEqual([
@@ -899,7 +914,7 @@ describe('plug and dowel connectors', () => {
         false,
       ]);
     }
-    expect([0, 0.4, -0.01, 0.41, Number.NaN].map((value) => parse({ ...plug, holeClearanceMm: value }))).toEqual([
+    expect([0, 1, -0.01, 1.01, Number.NaN].map((value) => parse({ ...plug, holeClearanceMm: value }))).toEqual([
       true,
       true,
       false,
@@ -909,6 +924,6 @@ describe('plug and dowel connectors', () => {
     expect(parse({ ...plug, lowerClearanceMm: 0.1 })).toBe(false);
     expect(parse({ ...dowel, holeClearanceMm: 0.2 })).toBe(false);
     expect(parse({ ...dowel, clearanceMm: 0.2 })).toBe(false);
-    expect(DIAMETRAL_CLEARANCE_LIMITS).toEqual({ min: 0, max: 0.4 });
+    expect(DIAMETRAL_CLEARANCE_LIMITS).toEqual({ min: 0, max: 1 });
   });
 });

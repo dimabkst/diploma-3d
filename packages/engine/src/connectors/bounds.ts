@@ -54,7 +54,7 @@ const reaches = ({ valueMm, minimumMm }: Measurement): boolean => valueMm >= min
 const BISECTION_STEPS = 200;
 
 /** The satisfied end of the bracket [satisfied, unsatisfied], narrowed until the two ends are adjacent doubles. */
-function bisect(holds: (value: number) => boolean, satisfied: number, unsatisfied: number): number {
+export function bisect(holds: (value: number) => boolean, satisfied: number, unsatisfied: number): number {
   let [good, bad] = [satisfied, unsatisfied];
   for (let step = 0; step < BISECTION_STEPS; step += 1) {
     const middle = (good + bad) / 2;

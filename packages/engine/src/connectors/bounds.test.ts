@@ -199,8 +199,8 @@ describe('the diameter', () => {
       0.34,
       9,
     );
-    // 0,2 × 4,6 − 0,5 = 0,42 mm lies beyond the window: the policy limit applies.
-    expect(roundBounds(cylinder(2), 50, plug(2, { diameterFactor: diameterFactor(4.6) }), 'upperClearance')).toEqual({
+    // 0,2 × 8 − 0,5 = 1,1 mm lies beyond the window: the policy limit applies.
+    expect(roundBounds(cylinder(2), 50, plug(2, { diameterFactor: diameterFactor(8) }), 'upperClearance')).toEqual({
       ...DIAMETRAL_CLEARANCE_LIMITS,
       blocked: false,
     });

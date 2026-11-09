@@ -82,8 +82,10 @@ export {
   verticalOffsetLimitMm,
   verticalOffsetLimitPercent,
 } from './connectors/frame.ts';
+export { profileMinWidth, profileReach, profileRing, profileSupport } from './connectors/profile.ts';
 export {
   buildRoundConnectors,
+  leastInsertion,
   PLUG_ROOT_OVERLAP_MM,
   planRoundConnectors,
   ROUND_CONNECTOR_CHAMFER,
@@ -102,6 +104,15 @@ export {
   roundConnectorFeasibility,
   verifyRoundConnectors,
 } from './connectors/round.ts';
+export {
+  defaultRoundConnector,
+  normalizeRoundConnector,
+  ROUND_CONNECTOR_DEFAULT_SHARE,
+  ROUND_CONNECTOR_STEPS_MM,
+  type RoundConnectorOutcome,
+  type RoundConnectorResolution,
+  type RoundConnectorUnavailable,
+} from './connectors/round-capacity.ts';
 export {
   ConnectorUnsuitableError,
   ConnectorVerificationError,
