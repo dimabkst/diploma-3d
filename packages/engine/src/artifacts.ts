@@ -90,7 +90,7 @@ function previewObjects({ solids, section }: GeneratedModel, gap: number): Previ
   if (section === undefined || gap === 0) return [...solids];
   const { connector, plane, type } = section;
   const sliding = connector?.type === 'dovetail' ? connector : undefined;
-  const tongueMoves = sliding !== undefined && type !== 'parallel-to-bases';
+  const tongueMoves = sliding !== undefined && type !== 'parallel-to-bases' && type !== 'horizontal';
   const direction = sliding === undefined ? plane.normal : tongueMoves ? scaled(sliding.frame.u, -1) : sliding.frame.u;
   const offset = scaled(direction, (sliding?.exitDistance ?? 0) + gap);
   const moves = (solid: Solid) => (tongueMoves ? solid.part === 'part-1' : onPositiveSide(solid));
@@ -113,6 +113,16 @@ const scaled = (a: Vec3, factor: number): Vec3 => [a[0] * factor, a[1] * factor,
 function printObjects({ solids, section, spec }: GeneratedModel): readonly ThreeMfObject[] {
   if (solids.length === 1) return solids;
   const connector = section?.connector;
+  if (spec.shape.kind === 'ball') {
+    // No base to stand on, and nothing is flattened to make one: each part rests on its cut face if that is free, so the
+    // lower part turns over; with a plug or a tongue on it, it keeps its cut face up, on its curved side and on supports.
+    const protrudes = connector?.type === 'plug' || connector?.type === 'dovetail';
+    return arrangeInRow(
+      solids.map((solid) =>
+        solid.part === 'lower' && !protrudes ? { ...solid, mesh: rotateHalfTurn(solid.mesh, [1, 0, 0]) } : solid,
+      ),
+    );
+  }
   if (spec.section?.type === 'oblique' && (spec.shape.kind === 'cylinder' || spec.shape.kind === 'cone')) {
     const isCone = spec.shape.kind === 'cone';
     const baseHeight = roundDimensionsMm(spec.shape, spec.scale).height;

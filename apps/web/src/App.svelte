@@ -86,7 +86,8 @@ $effect.pre(() => {
       current.obliqueSpanMm !== last?.obliqueSpanMm ||
       current.parallelSpanMm !== last?.parallelSpanMm ||
       current.verticalSpanMm !== last?.verticalSpanMm ||
-      current.apexSpanMm !== last?.apexSpanMm)
+      current.apexSpanMm !== last?.apexSpanMm ||
+      current.horizontalSpanMm !== last?.horizontalSpanMm)
   ) {
     lastConnectorScales = { ...untrack(() => lastConnectorScales), [selectedKind]: current };
   }

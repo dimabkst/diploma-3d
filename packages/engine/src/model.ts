@@ -10,6 +10,8 @@ import {
 import type { Manifold } from 'manifold-3d';
 import { buildDovetail, type DovetailPlan, planDovetail, verifyDovetail } from './connectors/dovetail.ts';
 import {
+  ballOffsetLimitPercent,
+  ballSection,
   CONSTRAINT_ROUNDOFF_MM,
   coneApexChord,
   coneObliqueSection,
@@ -63,7 +65,7 @@ export interface Solid {
    */
   readonly smoothingShear?: readonly [number, number];
   /**
-   * Which part of a sectioned solid this is: below or above a plane parallel to the bases, on the negative (1) or
+   * Which part of a sectioned solid this is: below or above a horizontal plane or one parallel to the bases, on the negative (1) or
    * positive (2) side of the normal of a vertical or oblique plane, or a separate removable dowel.
    */
   readonly part?: SectionPart;
@@ -119,6 +121,7 @@ const sectionNames: Readonly<Record<SectionType, string>> = {
   vertical: 'vertical-section',
   oblique: 'oblique-section',
   'oblique-apex': 'apex-section',
+  horizontal: 'horizontal-section',
 };
 
 /** The names of a section's parts in the order of the plane's negative and positive side, and their object names. */
@@ -127,6 +130,7 @@ const partNames: Readonly<Record<SectionType, readonly [SectionPart, SectionPart
   vertical: ['part-1', 'part-2'],
   oblique: ['part-1', 'part-2'],
   'oblique-apex': ['part-1', 'part-2'],
+  horizontal: ['lower', 'upper'],
 };
 const partObjectName = (name: string, part: SectionPart): string =>
   part === 'lower' || part === 'upper' ? `${name}-${part}-part` : `${name}-${part}`;
@@ -235,11 +239,21 @@ function cutPlaneOf({ shape, scale, section }: ModelSpec): Plane {
   if ((section?.type === 'oblique' || section?.type === 'oblique-apex') && shape.kind === 'cone') {
     return coneObliqueSection(shape, scale, section).plane;
   }
-  throw new GeometryError('Expected a vertical or oblique cut of a round solid.');
+  if (section?.type === 'horizontal' && shape.kind === 'ball') return ballSection(scale, section.offsetPercent).plane;
+  throw new GeometryError('Expected a cut that this solid offers.');
 }
 
 /** A vertical plane within the distance from the axis that leaves both parts usable; see `verticalOffsetLimitMm`. */
 function assertVerticalOffset({ shape, scale, section }: ModelSpec): void {
+  if (section?.type === 'horizontal') {
+    const limit = ballOffsetLimitPercent(scale);
+    if (Math.abs(section.offsetPercent) > limit + CONSTRAINT_ROUNDOFF_MM) {
+      throw new InvalidModelSpecError([
+        `section.offsetPercent: ${section.offsetPercent} % is beyond the ${limit} % that leave two usable parts.`,
+      ]);
+    }
+    return;
+  }
   if (section?.type !== 'vertical' || (shape.kind !== 'cylinder' && shape.kind !== 'cone')) return;
   const offset = sectionOffsetMm(section.offsetPercent, roundDimensionsMm(shape, scale).radius);
   const limit = verticalOffsetLimitMm(shape, scale);
@@ -273,7 +287,9 @@ function assertObliqueSplit({ shape, scale, section }: ModelSpec): void {
 /** The connector's plan; refuses the specification before any geometry is built when the connector does not fit. */
 function planConnector({ shape, scale, section }: ModelSpec): ConnectorPlan | undefined {
   if (section?.connector === undefined) return undefined;
-  if (shape.kind !== 'cylinder' && shape.kind !== 'cone') throw new ConnectorUnsuitableError([{ code: 'unsupported-shape' }]);
+  if (shape.kind !== 'cylinder' && shape.kind !== 'cone' && shape.kind !== 'ball') {
+    throw new ConnectorUnsuitableError([{ code: 'unsupported-shape' }]);
+  }
   const { connector } = section;
   const cut = cutOfSection(section);
   const plan =

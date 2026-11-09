@@ -191,6 +191,16 @@ describe('resolveModelRequest', () => {
       conePlugClearanceMm: '0,2',
       coneDowelLowerClearanceMm: '0,1',
       coneDowelUpperClearanceMm: '0,2',
+      ballSectionOffsetPercent: '0',
+      ballDovetailSize: '1',
+      ballDovetailLengthPercent: '50',
+      ballDovetailClearanceMm: '0,2',
+      ballRoundSpacingPercent: '45',
+      ballRoundDiameter: '1',
+      ballRoundDepth: '1',
+      ballPlugClearanceMm: '0,2',
+      ballDowelLowerClearanceMm: '0,1',
+      ballDowelUpperClearanceMm: '0,2',
       cylinderSectionPercent: '50',
       cylinderSectionOffsetPercent: '0',
       cylinderObliquePositionPercent: '50',
@@ -221,6 +231,10 @@ describe('resolveModelRequest', () => {
       coneRoundCount: 1,
       coneObliqueThrough: 'axis',
       coneApexStarted: false,
+      ballSection: 'none',
+      ballConnector: 'none',
+      ballRoundCount: 1,
+      ballPartsSeparated: true,
     });
     expect(resolveModelRequest('cuboid', initialParameterTexts(), triangle).spec).toEqual({
       shape: { kind: 'cuboid', widthRatio: 1.5, heightRatio: 2 },
@@ -2822,5 +2836,154 @@ describe('an oblique section of the cone', () => {
     // Having once entered the mode is no setting of its own.
     expect(canResetShapeParameters('cone', { texts: texts({}), choices: { ...triangle, coneApexStarted: true } })).toBe(false);
     expect(canResetShapeParameters('cone', { texts: edited.texts, choices: triangle })).toBe(false);
+  });
+});
+
+describe('a horizontal section of the ball', () => {
+  const sectioned = { ...triangle, ballSection: 'horizontal' } as const;
+  const choose = (ballConnector: 'dovetail' | 'plug' | 'dowel', ballRoundCount: 1 | 2 = 1) =>
+    ({ ...sectioned, ballConnector, ballRoundCount }) as const;
+  const request = (overrides: Partial<ParameterTexts> = {}, choices: typeof triangle = sectioned) =>
+    resolveModelRequest('ball', texts(overrides), choices);
+  const groupsOf = (choices: typeof triangle, overrides: Partial<ParameterTexts> = {}) => {
+    const { values, sectionRanges } = request(overrides, choices);
+    const panel = shapePanel('ball', choices, { values, sectionRanges });
+    return panel.type === 'parameters' ? panel.sections : [];
+  };
+  const group = (choices: typeof triangle, title: string, overrides: Partial<ParameterTexts> = {}) => {
+    const found = groupsOf(choices, overrides).find((part) => part.title === title);
+    if (found === undefined) throw new Error(`No group ${title}`);
+    return found;
+  };
+
+  it('starts whole, with a collapsed group and its fixed proportions noted', () => {
+    expect(request({}, triangle).spec).toEqual({ shape: { kind: 'ball' }, scale: { longestDimensionMm: 80 } });
+    const panel = shapePanel('ball', triangle);
+    expect(panel).toMatchObject({ type: 'parameters', note: 'Суцільна куля. Пропорції фіксовані.' });
+    expect(group(triangle, 'Переріз').initiallyOpen).toBe(false);
+    expect(group(triangle, 'Переріз').status).toEqual({ text: 'немає', highlighted: false });
+    expect(sectionNumberFields(group(triangle, 'Переріз'))).toEqual([]);
+  });
+
+  it('offers one plane, through the centre at first, with the offset in percent of r', () => {
+    const result = request();
+    expect(result.errors).toEqual({});
+    expect(result.spec?.section).toEqual({ type: 'horizontal', offsetPercent: 0 });
+    const cut = group(sectioned, 'Переріз');
+    expect(cut.status).toEqual({ text: 'горизонтальний', highlighted: true });
+    expect(cut.fields[0]).toMatchObject({
+      options: [
+        { value: 'none', label: 'Без перерізу' },
+        { value: 'horizontal', label: 'Горизонтальний' },
+      ],
+    });
+    expect(sectionNumberFields(cut)).toMatchObject([
+      {
+        key: 'ballSectionOffsetPercent',
+        label: 'Зміщення від центра',
+        suffix: '% r',
+        range: { min: -80, max: 80, increment: 5 },
+      },
+    ]);
+    expect(cut.help?.label).toBe('Як задано переріз?');
+    expect(cut.help?.text).toContain(
+      'Переріз кулі площиною — круг. За зміщення 0% площина проходить через центр і ділить кулю на дві півкулі. Додатне значення піднімає площину, від’ємне — опускає. Що далі площина від центра, то менший круг перерізу.',
+    );
+    expect(cut.fields.at(-1)).toMatchObject({ type: 'toggle', key: 'ballPartsSeparated' });
+    const titles = groupsOf(choose('plug')).map(({ title }) => title);
+    expect(titles).toEqual(['Переріз', 'Кріплення']);
+  });
+
+  it('holds typed offsets to the same bounds, and keeps the percentage when the model is scaled', () => {
+    expect(request({ ballSectionOffsetPercent: '-80' }).spec?.section).toMatchObject({ offsetPercent: -80 });
+    expect(request({ ballSectionOffsetPercent: '80' }).spec?.section).toMatchObject({ offsetPercent: 80 });
+    expect(request({ ballSectionOffsetPercent: '12,5' }).spec?.section).toMatchObject({ offsetPercent: 12.5 });
+    expect(request({ ballSectionOffsetPercent: '80,5' }).errors.ballSectionOffsetPercent).toMatch(/від -80 % до 80 %/);
+    expect(request({ ballSectionOffsetPercent: '80,5' }).spec).toBeUndefined();
+    expect(request({ ballSectionOffsetPercent: '' }).errors.ballSectionOffsetPercent).toBe('Введіть значення.');
+    const [small, large] = [
+      request({ ballSectionOffsetPercent: '25' }),
+      request({ ballSectionOffsetPercent: '25', printSizeMm: '160' }),
+    ];
+    expect(large.spec?.section).toEqual(small.spec?.section);
+    // A small ball's wall narrows the limit.
+    expect(request({ printSizeMm: '10', ballSectionOffsetPercent: '77' }).errors.ballSectionOffsetPercent).toMatch(
+      /від -76 % до 76 %/,
+    );
+  });
+
+  it.each([
+    ['dovetail', 1],
+    ['plug', 1],
+    ['plug', 2],
+    ['dowel', 1],
+    ['dowel', 2],
+  ] as const)('takes a %s × %d at its defaults, with lower and upper parts by name', (connector, count) => {
+    const result = request({}, choose(connector, count));
+    expect(result.errors).toEqual({});
+    expect(result.spec?.section?.connector?.type).toBe(connector);
+    for (const range of Object.values(result.sectionRanges ?? {})) expect(range).not.toBeNull();
+    const labels = sectionNumberFields(group(choose(connector, count), 'Кріплення')).map(({ label }) => label);
+    expect(labels.join(' ')).not.toMatch(/частини [12]/);
+  });
+
+  it('notes the curved support for a part with a plug or a tongue, and not otherwise', () => {
+    const note = 'Частина з виступом розміщена перерізом догори. Перед друком налаштуйте підтримки під її округлою поверхнею.';
+    const notes = (choices: typeof triangle) =>
+      group(choices, 'Кріплення').fields.flatMap((field) => (field.type === 'note' ? [field.text] : []));
+    expect(notes(choose('plug'))).toContain(note);
+    expect(notes(choose('dovetail'))).toContain(note);
+    expect(notes(choose('dowel'))).not.toContain(note);
+    expect(notes(sectioned)).not.toContain(note);
+    const help = group(choose('dowel'), 'Кріплення').help?.text;
+    expect(help).toMatch(/можуть потребувати підтримок/);
+    expect(help).toMatch(/розширюється над столом/);
+  });
+
+  it('explains a hole that the curving sphere cuts short, keeping the settings and blocking the model', () => {
+    const result = request({ ballSectionOffsetPercent: '70', ballRoundDepth: '3' }, choose('plug'));
+    expect(result.spec).toBeUndefined();
+    expect(result.errors.ballRoundDepth).toMatch(/куля звужується/);
+    expect(result.errors.ballRoundDepth).toMatch(/у верхній частині/);
+    expect(result.errors.ballRoundDepth).toMatch(/наблизьте переріз до центра кулі/);
+    expect(result.errors.ballRoundDepth).toMatch(/Зараз допустимо/);
+    expect(result.values.ballRoundDepth).toBe(3);
+    const roof = request(
+      { ballSectionOffsetPercent: '80', ballDovetailSize: '3', ballDovetailLengthPercent: '20' },
+      choose('dovetail'),
+    );
+    expect(roof.errors.ballDovetailSize).toMatch(/Над пазом лишається/);
+    const stop = request({ ballDovetailLengthPercent: '99' }, choose('dovetail'));
+    expect(stop.errors.ballDovetailLengthPercent).toMatch(/За упором паза лишається/);
+  });
+
+  it('reports no value at all on a thin cap, without reversed bounds, and smooth surfaces stay', () => {
+    const edited = { printSizeMm: '20', ballSectionOffsetPercent: '80' };
+    const result = request(edited, choose('plug'));
+    expect(result.spec).toBeUndefined();
+    expect(result.sectionRanges?.ballRoundDepth).toBeNull();
+    const field = sectionNumberFields(group(choose('plug'), 'Кріплення', edited)).find(({ key }) => key === 'ballRoundDepth');
+    expect(field?.range).toBeUndefined();
+    expect(request(edited).spec).toBeDefined();
+  });
+
+  it('resets its own settings and keeps the print size; a hidden offset offers no reset', () => {
+    const edited: ParameterState = {
+      texts: texts({ printSizeMm: '120', ballSectionOffsetPercent: '40' }),
+      choices: choose('plug', 2),
+    };
+    expect(canResetShapeParameters('ball', edited)).toBe(true);
+    const reset = resetShapeParameters('ball', edited);
+    expect(reset.texts).toEqual(texts({ printSizeMm: '120' }));
+    expect(reset.choices).toMatchObject({
+      ballSection: 'none',
+      ballConnector: 'none',
+      ballRoundCount: 1,
+      ballPartsSeparated: true,
+    });
+    expect(canResetShapeParameters('ball', { texts: edited.texts, choices: triangle })).toBe(false);
+    expect(activeSection('ball', sectioned)).toBe('horizontal');
+    expect(activeConnector('ball', choose('dowel'))).toBe('dowel');
+    expect(partsSeparated('ball', { ...sectioned, ballPartsSeparated: false })).toBe(false);
   });
 });

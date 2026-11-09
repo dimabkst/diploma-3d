@@ -1,4 +1,7 @@
 import {
+  ballOffsetLimitPercent,
+  ballRadiusMm,
+  ballSection,
   coneApexChord,
   coneObliqueSection,
   coneSection,
@@ -26,6 +29,8 @@ export type ConnectorScale = {
   readonly verticalSpanMm?: number | undefined;
   /** The same of a plane through a cone's apex. */
   readonly apexSpanMm?: number | undefined;
+  /** The same of a ball's horizontal cut. */
+  readonly horizontalSpanMm?: number | undefined;
 };
 
 /** The fields whose stored value is a multiplier or a percentage, shown in millimetres. */
@@ -39,7 +44,12 @@ export type ScaledConnectorKey =
   | 'coneDovetailLengthPercent'
   | 'coneRoundDiameter'
   | 'coneRoundDepth'
-  | 'coneRoundSpacingPercent';
+  | 'coneRoundSpacingPercent'
+  | 'ballDovetailSize'
+  | 'ballDovetailLengthPercent'
+  | 'ballRoundDiameter'
+  | 'ballRoundDepth'
+  | 'ballRoundSpacingPercent';
 
 /**
  * Millimetres per unit of each stored setting, following the engine's formulas: the dovetail's height h = 0,025·M·k and
@@ -50,7 +60,16 @@ export type ScaledConnectorKey =
  * scales every connector as before and a new radius, height or plane keeps the proportions.
  */
 export function connectorUnits(
-  { longestDimensionMm: m, radiusMm: r, heightMm, obliqueSpanMm, parallelSpanMm, verticalSpanMm, apexSpanMm }: ConnectorScale,
+  {
+    longestDimensionMm: m,
+    radiusMm: r,
+    heightMm,
+    obliqueSpanMm,
+    parallelSpanMm,
+    verticalSpanMm,
+    apexSpanMm,
+    horizontalSpanMm,
+  }: ConnectorScale,
   roundType: 'plug' | 'dowel',
   sectionType: SectionType = 'parallel-to-bases',
 ): Readonly<Record<ScaledConnectorKey, number>> {
@@ -61,7 +80,9 @@ export function connectorUnits(
         ? (obliqueSpanMm ?? 2 * r)
         : sectionType === 'oblique-apex'
           ? (apexSpanMm ?? 2 * r)
-          : (parallelSpanMm ?? 2 * r);
+          : sectionType === 'horizontal'
+            ? (horizontalSpanMm ?? 2 * r)
+            : (parallelSpanMm ?? 2 * r);
   const size = DOVETAIL_PROPORTIONS.height * m;
   const length = span / 100;
   const diameter = ROUND_CONNECTOR_PROPORTIONS.diameter * m;
@@ -78,6 +99,11 @@ export function connectorUnits(
     coneRoundDiameter: diameter,
     coneRoundDepth: depth,
     coneRoundSpacingPercent: spacing,
+    ballDovetailSize: size,
+    ballDovetailLengthPercent: length,
+    ballRoundDiameter: diameter,
+    ballRoundDepth: depth,
+    ballRoundSpacingPercent: spacing,
   };
 }
 
@@ -180,13 +206,32 @@ export function coneConnectorScale(
   };
 }
 
+/** The ball's scale: its radius, and the actual span of a cut within the limit; `previous` keeps the last span otherwise. */
+export function ballConnectorScale(
+  values: { readonly printSizeMm?: number | undefined; readonly ballSectionOffsetPercent?: number | undefined },
+  previous?: ConnectorScale,
+): ConnectorScale | undefined {
+  const { printSizeMm, ballSectionOffsetPercent: offset } = values;
+  if (printSizeMm === undefined) return undefined;
+  const scale = { longestDimensionMm: printSizeMm };
+  const radiusMm = ballRadiusMm(scale);
+  const horizontalSpanMm =
+    offset === undefined || Math.abs(offset) > ballOffsetLimitPercent(scale)
+      ? previous?.horizontalSpanMm
+      : ballSection(scale, offset).span;
+  return { longestDimensionMm: printSizeMm, radiusMm, heightMm: 2 * radiusMm, horizontalSpanMm };
+}
+
 /** The scale of the solid's connector settings; undefined for a solid without them, or while a value it needs is invalid. */
 export function connectorScaleOf(
   kind: ShapeKind,
-  values: Parameters<typeof cylinderConnectorScale>[0] & Parameters<typeof coneConnectorScale>[0],
+  values: Parameters<typeof cylinderConnectorScale>[0] &
+    Parameters<typeof coneConnectorScale>[0] &
+    Parameters<typeof ballConnectorScale>[0],
   previous?: ConnectorScale,
 ): ConnectorScale | undefined {
   if (kind === 'cylinder') return cylinderConnectorScale(values, previous);
+  if (kind === 'ball') return ballConnectorScale(values, previous);
   return kind === 'cone' ? coneConnectorScale(values, previous) : undefined;
 }
 

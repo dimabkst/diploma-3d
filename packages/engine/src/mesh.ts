@@ -37,6 +37,27 @@ export type MeshDefect =
 // Relative to the squared bounding-box diagonal, so the check does not depend on the physical scale.
 const DEGENERATE_AREA_TOLERANCE = 1e-12;
 
+// A float32 coordinate rounds by half a unit in the last place, 2^-24 of its size; a few of those are no measurable height.
+const ROUNDING_HEIGHT_RELATIVE = 4 * 2 ** -24;
+
+/**
+ * A triangle is degenerate when it is both tiny and flat, its height within the rounding of its coordinates: three points on
+ * one line. A small triangle of good shape, such as the corner a plane cuts off just above a vertex of a fine mesh, is a face
+ * like any other, however small against the whole solid.
+ */
+function degenerateTriangles(mesh: TriangleMesh): (triangle: number) => boolean {
+  const { size, bounds } = measureMesh(mesh);
+  const minimumDoubleArea = 2 * DEGENERATE_AREA_TOLERANCE * dot(size, size);
+  const minimumHeight = ROUNDING_HEIGHT_RELATIVE * Math.max(...bounds.min.map(Math.abs), ...bounds.max.map(Math.abs));
+  return (triangle) => {
+    const doubleArea = length(triangleAreaVector(mesh, triangle));
+    if (doubleArea > minimumDoubleArea) return false;
+    const corners = triangleAt(mesh, triangle).map((vertex) => vertexAt(mesh, vertex));
+    const longest = Math.max(...corners.map((corner, index) => length(subtract(corner, corners[(index + 1) % 3] as Vec3))));
+    return longest === 0 || doubleArea / longest <= minimumHeight;
+  };
+}
+
 export const vertexCount = (mesh: TriangleMesh): number => mesh.positions.length / 3;
 export const triangleCount = (mesh: TriangleMesh): number => mesh.triangles.length / 3;
 
@@ -175,21 +196,22 @@ export function measureMesh(mesh: TriangleMesh): MeshMeasurements {
  * Checks that the mesh is a closed, consistently oriented edge-manifold with positive volume: every edge is shared by
  * exactly two triangles that traverse it in opposite directions. Self-intersections are not detected here.
  */
-// Edges this much shorter than the mesh's largest coordinate lie within a few float32 rounding steps of nothing.
+// An edge this much shorter than the mesh's largest coordinate lies within a few float32 rounding steps of nothing.
 const ROUNDING_EDGE_RELATIVE = 1e-6;
 
 /**
  * Removes the slivers that rounding leaves in a part: a plane through a vertex can leave the kernel a copy of it a
  * billionth of a millimetre away, which float32 keeps as a separate vertex, one rounding step apart, with zero-area
- * triangles between them. Only an edge of a degenerate triangle no longer than a few rounding steps collapses, into its
- * first vertex: no geometry that a print could show moves, and a mesh without such slivers comes back as it is.
+ * triangles between them. The shortest edge of each degenerate triangle collapses, if it is no longer than a few rounding
+ * steps: no geometry that a print could show moves. A mesh without such slivers comes back as it is, and so does one that
+ * the collapse would not leave a valid closed solid, for the validation to report.
  */
 export function collapseRoundingSlivers<Marked extends { readonly mesh: TriangleMesh; readonly newFaces: Uint8Array }>(
   marked: Marked,
 ): Marked {
   const { mesh, newFaces } = marked;
-  const { size, bounds } = measureMesh(mesh);
-  const minimumDoubleArea = 2 * DEGENERATE_AREA_TOLERANCE * dot(size, size);
+  const isDegenerate = degenerateTriangles(mesh);
+  const { bounds } = measureMesh(mesh);
   const shortest = ROUNDING_EDGE_RELATIVE * Math.max(...bounds.min.map(Math.abs), ...bounds.max.map(Math.abs));
   const parent = Array.from({ length: vertexCount(mesh) }, (_, vertex) => vertex);
   const rootOf = (vertex: number): number => {
@@ -199,14 +221,16 @@ export function collapseRoundingSlivers<Marked extends { readonly mesh: Triangle
   };
   let collapsed = false;
   for (let triangle = 0; triangle < triangleCount(mesh); triangle += 1) {
-    if (length(triangleAreaVector(mesh, triangle)) > minimumDoubleArea) continue;
+    if (!isDegenerate(triangle)) continue;
     const corners = triangleAt(mesh, triangle);
-    corners.forEach((vertex, corner) => {
+    const edges = corners.map((vertex, corner) => {
       const next = corners[(corner + 1) % 3] as number;
-      if (length(subtract(vertexAt(mesh, vertex), vertexAt(mesh, next))) > shortest) return;
-      parent[rootOf(next)] = rootOf(vertex);
-      collapsed = true;
+      return { vertex, next, size: length(subtract(vertexAt(mesh, vertex), vertexAt(mesh, next))) };
     });
+    const smallest = edges.reduce((best, edge) => (edge.size < best.size ? edge : best));
+    if (smallest.size > shortest) continue;
+    parent[rootOf(smallest.next)] = rootOf(smallest.vertex);
+    collapsed = true;
   }
   if (!collapsed) return marked;
   const kept = Array.from({ length: triangleCount(mesh) }, (_, triangle) => triangle).filter((triangle) => {
@@ -226,11 +250,9 @@ export function collapseRoundingSlivers<Marked extends { readonly mesh: Triangle
     return index;
   };
   const triangles = kept.flatMap((triangle) => triangleAt(mesh, triangle).map(indexOf));
-  return {
-    ...marked,
-    mesh: { positions: Float32Array.from(positions), triangles: Uint32Array.from(triangles) },
-    newFaces: Uint8Array.from(kept, (triangle) => newFaces[triangle] as number),
-  };
+  const result = { positions: Float32Array.from(positions), triangles: Uint32Array.from(triangles) };
+  if (findMeshDefects(result).length > 0) return marked;
+  return { ...marked, mesh: result, newFaces: Uint8Array.from(kept, (triangle) => newFaces[triangle] as number) };
 }
 
 export function findMeshDefects(mesh: TriangleMesh): MeshDefect[] {
@@ -250,12 +272,11 @@ export function findMeshDefects(mesh: TriangleMesh): MeshDefect[] {
     return ['index-out-of-range'];
   }
 
-  const { size } = measureMesh(mesh);
-  const minimumDoubleArea = 2 * DEGENERATE_AREA_TOLERANCE * dot(size, size);
+  const isDegenerate = degenerateTriangles(mesh);
   const directedEdges = new Map<number, number>();
   for (let triangle = 0; triangle < triangleCount(mesh); triangle += 1) {
     const corners = triangleAt(mesh, triangle);
-    if (length(triangleAreaVector(mesh, triangle)) <= minimumDoubleArea) {
+    if (isDegenerate(triangle)) {
       defects.add('degenerate-triangle');
     }
     for (let corner = 0; corner < 3; corner += 1) {

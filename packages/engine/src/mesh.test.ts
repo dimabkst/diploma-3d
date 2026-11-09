@@ -116,3 +116,26 @@ describe('collapseRoundingSlivers', () => {
     expect(collapseRoundingSlivers(marked).mesh.positions).toHaveLength(15);
   });
 });
+
+describe('a degenerate triangle', () => {
+  it('is three points on a line, not a small face of good shape', () => {
+    // A tetrahedron 80 mm wide, with its apex cut off a tenth of a millimetre below the tip: a tiny, well-shaped top.
+    const [tip, size] = [80, 1e-4];
+    const truncated: TriangleMesh = {
+      positions: Float32Array.from([0, 0, 0, tip, 0, 0, 0, tip, 0, 0, 0, tip - size, size, 0, tip - size, 0, size, tip - size]),
+      triangles: Uint32Array.from([0, 2, 1, 3, 4, 5, 0, 1, 4, 0, 4, 3, 1, 2, 5, 1, 5, 4, 2, 0, 3, 2, 3, 5]),
+    };
+    expect(findMeshDefects(truncated)).toEqual([]);
+    // Flat on its line, it is degenerate at the same size.
+    const flat: TriangleMesh = {
+      positions: Float32Array.from([0, 0, 0, tip, 0, 0, 0, tip, 0, 0, 0, tip, 0, 2 ** -16, tip - 2 ** -16]),
+      triangles: Uint32Array.from([0, 2, 1, 1, 2, 4, 2, 3, 4, 0, 1, 3, 1, 4, 3, 2, 0, 3]),
+    };
+    expect(findMeshDefects(flat)).toContain('degenerate-triangle');
+  });
+
+  it('leaves a clean mesh as it is, the same object', () => {
+    const marked = { mesh: rightTetrahedron(10, 20, 30), newFaces: Uint8Array.from([0, 0, 0, 0]) };
+    expect(collapseRoundingSlivers(marked)).toBe(marked);
+  });
+});

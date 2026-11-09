@@ -1,6 +1,7 @@
 import { dovetailProfileMm, planDovetail, planRoundConnectors, roundDimensionsMm } from '@diploma-3d/engine';
 import { describe, expect, it } from 'vitest';
 import {
+  ballConnectorScale,
   coneConnectorScale,
   connectorScaleOf,
   connectorUnits,
@@ -209,6 +210,32 @@ describe('connector settings on an oblique plane', () => {
       0.8,
       12,
     );
+  });
+});
+
+describe('connector settings on a ball', () => {
+  it('measures lengths on the actual section, narrower off the centre, and the profile and pins on M', () => {
+    const [central, off] = [0, 50].map((ballSectionOffsetPercent) =>
+      ballConnectorScale({ printSizeMm: 80, ballSectionOffsetPercent }),
+    );
+    expect(central?.radiusMm).toBe(40);
+    expect(Math.abs((central?.horizontalSpanMm as number) - 80)).toBeLessThan(0.1);
+    expect(Math.abs((off?.horizontalSpanMm as number) - 40 * Math.sqrt(3))).toBeLessThan(0.2);
+    const units = connectorUnits(off as NonNullable<typeof off>, 'plug', 'horizontal');
+    expect(units.ballDovetailLengthPercent).toBeCloseTo((off?.horizontalSpanMm as number) / 100, 12);
+    expect(units.ballRoundSpacingPercent).toBeCloseTo((off?.horizontalSpanMm as number) / 200, 12);
+    expect(units.ballRoundDiameter).toBe(5);
+    expect(connectorUnits(off as NonNullable<typeof off>, 'dowel', 'horizontal').ballRoundDepth).toBe(8);
+  });
+
+  it('keeps the last span for a plane beyond the limit, and has nothing without a size', () => {
+    const last = ballConnectorScale({ printSizeMm: 80, ballSectionOffsetPercent: 25 });
+    expect(ballConnectorScale({ printSizeMm: 80, ballSectionOffsetPercent: 95 }, last)?.horizontalSpanMm).toBe(
+      last?.horizontalSpanMm,
+    );
+    expect(ballConnectorScale({ printSizeMm: 80 }, last)?.horizontalSpanMm).toBe(last?.horizontalSpanMm);
+    expect(ballConnectorScale({})).toBeUndefined();
+    expect(connectorScaleOf('ball', { printSizeMm: 80 })?.radiusMm).toBe(40);
   });
 });
 

@@ -284,6 +284,28 @@ for (const [name, oblique] of [
   });
 }
 
+test('ball: its section, offset and connectors never turn the camera', async ({ page }) => {
+  await installRecorder(page);
+  await page.goto('/');
+  await shapeSelect(page).selectOption({ label: 'Куля' });
+  await openSection(page, 'Переріз');
+  await expect(page.getByText(/^Габарити: /)).toBeVisible({ timeout: 30_000 });
+  await expectLoaded(page);
+  await turnCamera(page);
+  const direction = await orbit(page);
+  for (const label of ['Горизонтальний', 'Без перерізу', 'Горизонтальний']) {
+    expectSteadyTransition(await framesOf(page, () => cut(page, label)), direction);
+  }
+  const offset = page.getByLabel('Зміщення від центра', { exact: true });
+  for (const value of ['25', '-25', '0']) expectSteadyTransition(await framesOf(page, () => offset.fill(value)), direction);
+  for (const label of ['Ластівчин хвіст', 'Виступ і отвір', 'Знімні штифти', 'Без кріплення']) {
+    expectSteadyTransition(await framesOf(page, () => connector(page, label)), direction);
+  }
+  const separation = page.getByRole('checkbox', { name: 'Розсунути частини', exact: true });
+  expectSteadyTransition(await framesOf(page, () => separation.uncheck()), direction);
+  expectSteadyTransition(await framesOf(page, () => separation.check()), direction);
+});
+
 test('rapid offsets of a cone end on the last one, whatever finished in between', async ({ page }) => {
   await installRecorder(page);
   await page.goto('/');

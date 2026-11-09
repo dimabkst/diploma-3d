@@ -5,9 +5,10 @@ import type { GeometryKernel } from '../kernel.ts';
 import type { Vec3 } from '../mesh.ts';
 import type { Track } from '../scope.ts';
 import type { Vec2 } from '../shapes/polygon.ts';
-import type { RoundShape } from '../shapes/round.ts';
 import { type ConnectorFeasibility, connectorFeasibility } from './bounds.ts';
 import {
+  type BallHorizontalSection,
+  ballPointWall,
   CONNECTOR_MIN_WALL_MM,
   type ConeObliqueSection,
   type ConeParallelSection,
@@ -22,6 +23,7 @@ import {
   type ObliqueCylinderSection,
   type ParallelCylinderSection,
   pointWall,
+  type SectionedShape,
   type SectionFrame,
   type SolidCut,
   type SolidFace,
@@ -230,6 +232,8 @@ function wallsOf(
       return verticalWalls(section, dimensions, groove);
     case 'oblique':
       return obliqueWalls(section, dimensions, groove);
+    case 'ball-horizontal':
+      return ballWalls(section, dimensions, groove);
     case 'cone-parallel':
       return coneWalls(section, dimensions, groove, 1);
     case 'cone-vertical':
@@ -375,6 +379,38 @@ function coneWalls(
   ];
 }
 
+/**
+ * A ball curves in above and below the cut, so the section's radius says nothing about the groove's top. The engaged groove
+ * is a convex prism, so that its corners at the closed end and at the seated tongue's end bound it, measured to the sphere
+ * inside the polyhedron: at the closed end the stop, at the other end the side walls at the cut and the roof at the groove's
+ * top. Behind the tongue's root overlap, the lower part keeps 1,2 mm as well. Towards the entrance the channel leaves the
+ * ball beyond the tongue, the one opening meant to exist; the other pieces each meet the stop's material at the closed
+ * end's corners, as in a cone, so that nothing comes loose.
+ */
+function ballWalls(
+  section: BallHorizontalSection,
+  { height, length, clearance }: DovetailDimensions,
+  groove: ReturnType<typeof grooveExtent>,
+): DovetailIssue[] {
+  const { wall } = DOVETAIL_MINIMUMS_MM;
+  const closedEnd = length / 2 + clearance;
+  const openEnd = -length / 2;
+  const wallOfCorners = (points: readonly FramePosition[]) =>
+    Math.min(...points.map(([along, across, normal]) => ballPointWall(section, along, across, normal)));
+  const root = dovetailProfileOfHeight(height).rootWidth / 2 - DOVETAIL_ROOT_OVERLAP_MM;
+  const rootCorners = [length / 2, -length / 2].map((along): FramePosition => [along, root, -DOVETAIL_ROOT_OVERLAP_MM]);
+  return [
+    { code: 'groove-wall-thin', valueMm: wallOfCorners(neckCorners(openEnd, groove)), minimumMm: wall },
+    {
+      code: 'stop-thin',
+      valueMm: wallOfCorners([...neckCorners(closedEnd, groove), ...topCorners(closedEnd, groove)]),
+      minimumMm: wall,
+    },
+    { code: 'backing-thin', valueMm: wallOfCorners(topCorners(openEnd, groove)), minimumMm: wall },
+    { code: 'base-thin', valueMm: wallOfCorners(rootCorners), minimumMm: wall },
+  ];
+}
+
 type FramePosition = readonly [along: number, across: number, normal: number];
 
 /** The groove's corners at the cut, at this position along u. */
@@ -418,7 +454,7 @@ export function dovetailDimensions(
 
 /** The frame the dovetail is built in: the u of a vertical or oblique cut turned downhill, see `DovetailFrame`. */
 function dovetailFrame({ type, frame }: SolidSection): DovetailFrame {
-  if (type === 'parallel-to-bases' || type === 'cone-parallel') return frame;
+  if (type === 'parallel-to-bases' || type === 'cone-parallel' || type === 'ball-horizontal') return frame;
   const [u, v]: Vec3[] = [scaleVec(frame.u, -1), scaleVec(frame.v, -1)];
   return { ...frame, u: u as Vec3, v: v as Vec3 };
 }
@@ -437,14 +473,19 @@ function dovetailFrame({ type, frame }: SolidSection): DovetailFrame {
  * off by moving straight up, and is seated by moving down until the tongue meets the stop. The section reaches H/2
  * above the centroid, where a right cylinder's channel opens through the upper base.
  *
- * A cone's cut parallel to its base slides like a cylinder's parallel cut, with the stop at +u and the entrance at −u; its
+ * A ball's horizontal cut slides like a cylinder's parallel cut too. A cone's cut parallel to its base slides like one, with the stop at +u and the entrance at −u; its
  * vertical cut like a cylinder's, with part A coming off straight up, whatever the cone's lean; its oblique cut along the
  * plane, uphill, with the stop downhill, also through the apex.
  *
  * An oblique cut does the same along the plane: part A comes off uphill and is seated downhill, the entrance uphill and
  * the stop downhill, whatever the plane's direction. See `dovetailChecks` for the constraints.
  */
-export function planDovetail(shape: RoundShape, scale: PhysicalScale, cut: SolidCut, connector: DovetailConnector): DovetailPlan {
+export function planDovetail(
+  shape: SectionedShape,
+  scale: PhysicalScale,
+  cut: SolidCut,
+  connector: DovetailConnector,
+): DovetailPlan {
   const section = solidCut(shape, scale, cut);
   const dimensions = dovetailDimensions(connector, scale.longestDimensionMm, section.span / 2);
   const { height, length: tongueLength, clearance } = dimensions;
@@ -473,6 +514,12 @@ export function planDovetail(shape: RoundShape, scale: PhysicalScale, cut: Solid
  * the span in a symmetric section of a cylinder; otherwise the part's actual extent within the groove's depth.
  */
 function grooveReach(section: SolidSection, dimensions: DovetailDimensions): number {
+  if (section.type === 'ball-horizontal') {
+    // The ball is widest where the groove's layer comes closest to its centre.
+    const [low, high] = [section.offset, section.offset + grooveExtent(dimensions).top];
+    const nearest = low > 0 ? low : Math.min(high, 0);
+    return Math.sqrt(section.radius ** 2 - Math.min(section.radius, Math.abs(nearest)) ** 2);
+  }
   return isFaceted(section) ? section.entranceReachWithin(grooveExtent(dimensions).top) : section.span / 2;
 }
 
@@ -486,7 +533,7 @@ export type DovetailParameter = 'height' | 'length' | 'clearance';
  * within its calibration window, a policy for print trials rather than a geometric limit.
  */
 export function dovetailFeasibility(
-  shape: RoundShape,
+  shape: SectionedShape,
   scale: PhysicalScale,
   cut: SolidCut,
   connector: DovetailConnector,

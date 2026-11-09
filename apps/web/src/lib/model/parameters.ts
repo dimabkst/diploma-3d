@@ -1,5 +1,7 @@
 import {
   apexChordCrossesBase,
+  ballOffsetLimitPercent,
+  ballRadiusMm,
   CONSTRAINT_ROUNDOFF_MM,
   type ConnectorFeasibility,
   coneApexAngleBounds,
@@ -18,6 +20,7 @@ import {
   type RoundShape,
   roundConnectorFeasibility,
   roundDimensionsMm,
+  type SectionedShape,
   satisfies,
   sectionOffsetMm,
   verticalOffsetLimitPercent,
@@ -178,7 +181,17 @@ export type ParameterKey =
   | 'coneRoundDepth'
   | 'conePlugClearanceMm'
   | 'coneDowelLowerClearanceMm'
-  | 'coneDowelUpperClearanceMm';
+  | 'coneDowelUpperClearanceMm'
+  | 'ballSectionOffsetPercent'
+  | 'ballDovetailSize'
+  | 'ballDovetailLengthPercent'
+  | 'ballDovetailClearanceMm'
+  | 'ballRoundSpacingPercent'
+  | 'ballRoundDiameter'
+  | 'ballRoundDepth'
+  | 'ballPlugClearanceMm'
+  | 'ballDowelLowerClearanceMm'
+  | 'ballDowelUpperClearanceMm';
 
 /** Raw field text, kept separately from parsed values so that empty and partially typed input stays editable. */
 export type ParameterTexts = Record<ParameterKey, string>;
@@ -211,10 +224,14 @@ export type ParameterChoices = {
   coneObliqueThrough: ObliqueThrough;
   /** Whether a plane through the apex has its first valid angle yet, which depends on the cone when it is first chosen. */
   coneApexStarted: boolean;
+  ballSection: SectionChoice;
+  ballConnector: ConnectorChoice;
+  ballRoundCount: 1 | 2;
+  ballPartsSeparated: boolean;
 };
 
 /** The switches among the choices. */
-export type ToggleKey = 'cylinderPartsSeparated' | 'conePartsSeparated';
+export type ToggleKey = 'cylinderPartsSeparated' | 'conePartsSeparated' | 'ballPartsSeparated';
 
 /** The choices picked from options. */
 export type ChoiceKey = Exclude<keyof ParameterChoices, ToggleKey | 'coneApexStarted'>;
@@ -326,6 +343,16 @@ export const initialParameterTexts = (): ParameterTexts => ({
   conePlugClearanceMm: formatDecimal(DEFAULT_PLUG_CLEARANCE_MM),
   coneDowelLowerClearanceMm: formatDecimal(DEFAULT_DOWEL_CLEARANCES_MM.lower),
   coneDowelUpperClearanceMm: formatDecimal(DEFAULT_DOWEL_CLEARANCES_MM.upper),
+  ballSectionOffsetPercent: formatDecimal(DEFAULT_SECTION_OFFSET_PERCENT),
+  ballDovetailSize: formatDecimal(DEFAULT_DOVETAIL.sizeFactor),
+  ballDovetailLengthPercent: formatDecimal(DEFAULT_DOVETAIL.lengthPercent),
+  ballDovetailClearanceMm: formatDecimal(DEFAULT_DOVETAIL.clearanceMm),
+  ballRoundSpacingPercent: formatDecimal(DEFAULT_ROUND_CONNECTOR.spacingPercent),
+  ballRoundDiameter: formatDecimal(DEFAULT_ROUND_CONNECTOR.diameterFactor),
+  ballRoundDepth: formatDecimal(DEFAULT_ROUND_CONNECTOR.depthFactor),
+  ballPlugClearanceMm: formatDecimal(DEFAULT_PLUG_CLEARANCE_MM),
+  ballDowelLowerClearanceMm: formatDecimal(DEFAULT_DOWEL_CLEARANCES_MM.lower),
+  ballDowelUpperClearanceMm: formatDecimal(DEFAULT_DOWEL_CLEARANCES_MM.upper),
 });
 
 export const initialParameterChoices = (): ParameterChoices => ({
@@ -344,6 +371,10 @@ export const initialParameterChoices = (): ParameterChoices => ({
   conePartsSeparated: true,
   coneObliqueThrough: 'axis',
   coneApexStarted: false,
+  ballSection: 'none',
+  ballConnector: 'none',
+  ballRoundCount: DEFAULT_ROUND_CONNECTOR.count,
+  ballPartsSeparated: true,
 });
 
 type Validation = { value: number } | { error: string };
@@ -527,6 +558,16 @@ const validators: Readonly<Record<IndependentKey, (text: string, exact?: number)
   conePlugClearanceMm: validateDiametralClearance,
   coneDowelLowerClearanceMm: validateDiametralClearance,
   coneDowelUpperClearanceMm: validateDiametralClearance,
+  ballSectionOffsetPercent: validateSectionOffset,
+  ballDovetailSize: validateConnectorDimension,
+  ballDovetailLengthPercent: validateConnectorDimension,
+  ballDovetailClearanceMm: validateDovetailClearance,
+  ballRoundSpacingPercent: validateConnectorDimension,
+  ballRoundDiameter: validateConnectorDimension,
+  ballRoundDepth: validateConnectorDimension,
+  ballPlugClearanceMm: validateDiametralClearance,
+  ballDowelLowerClearanceMm: validateDiametralClearance,
+  ballDowelUpperClearanceMm: validateDiametralClearance,
 };
 
 /** The exact value behind a field's text while the field still shows that value's formatted text. */
@@ -700,7 +741,7 @@ const feasibilityCache = new Map<
   ConnectorFeasibility<string, DovetailIssue> | ConnectorFeasibility<string, RoundConnectorIssue>
 >();
 
-function cachedFeasibility(shape: RoundShape, longestDimensionMm: number, section: Section) {
+function cachedFeasibility(shape: SectionedShape, longestDimensionMm: number, section: Section) {
   const { connector } = section;
   if (connector === undefined) return undefined;
   const cut = cutOfSection(section);
@@ -729,16 +770,26 @@ function sectionChecks(
   section: Section,
 ): { errors: ParameterErrors; ranges: SectionRanges } | undefined {
   const keys = sectionKeys[kind];
-  if (keys === undefined || (shape.kind !== 'cylinder' && shape.kind !== 'cone')) return undefined;
+  if (keys === undefined || (shape.kind !== 'cylinder' && shape.kind !== 'cone' && shape.kind !== 'ball')) return undefined;
   if (section.type === 'parallel-to-bases') return connectorChecks(keys, shape as RoundShape, longestDimensionMm, section);
   const solid = shape as RoundShape;
   const scale = { longestDimensionMm };
+  if (section.type === 'horizontal')
+    return offsetChecks(
+      keys,
+      shape as SectionedShape,
+      longestDimensionMm,
+      section,
+      ballOffsetLimitPercent(scale),
+      ballRadiusMm(scale),
+    );
   if (section.type === 'oblique-apex') return apexChecks(keys, shape as ConeShape, longestDimensionMm, section);
   if (section.type === 'oblique') {
     const reach = obliqueSplitReach(solid, scale, section);
     if (satisfies(reach)) return connectorChecks(keys, solid, longestDimensionMm, section);
     const contained = obliquePlaneContainsAxis(solid, section.inclinationDeg, section.directionDeg);
-    const field = contained ? keys.oblique.inclination : keys.oblique.position;
+    const { oblique } = planarKeysOf(keys);
+    const field = contained ? oblique.inclination : oblique.position;
     return {
       errors: {
         [field]:
@@ -748,15 +799,32 @@ function sectionChecks(
       ranges: {},
     };
   }
-  const limit = verticalOffsetLimitPercent(solid, scale);
+  return offsetChecks(
+    keys,
+    solid,
+    longestDimensionMm,
+    section,
+    verticalOffsetLimitPercent(solid, scale),
+    roundDimensionsMm(solid, scale).radius,
+  );
+}
+
+/** A plane given by its distance from an axis or a centre: within that distance's limit, and only then a connector's checks. */
+function offsetChecks(
+  keys: SectionKeys,
+  shape: SectionedShape,
+  longestDimensionMm: number,
+  section: Extract<Section, { type: 'vertical' | 'horizontal' }>,
+  limit: number,
+  radius: number,
+): { errors: ParameterErrors; ranges: SectionRanges } {
   const ranges: SectionRanges = { [keys.offset]: { min: -limit, max: limit } };
-  const { radius } = roundDimensionsMm(solid, scale);
   if (Math.abs(sectionOffsetMm(section.offsetPercent, radius)) > sectionOffsetMm(limit, radius) + CONSTRAINT_ROUNDOFF_MM) {
     const shown = percentRange({ min: -limit, max: limit }, 1);
     const allowed = `Допустимі значення — від ${formatDecimal(shown.min)} % до ${formatDecimal(shown.max)} %: `;
     return { errors: { [keys.offset]: `${allowed}обидві частини мають лишатися придатними до друку.` }, ranges };
   }
-  const connector = connectorChecks(keys, solid, longestDimensionMm, section);
+  const connector = connectorChecks(keys, shape, longestDimensionMm, section);
   return connector === undefined
     ? { errors: {}, ranges }
     : { errors: connector.errors, ranges: { ...ranges, ...connector.ranges } };
@@ -834,7 +902,7 @@ const APEX_START_INCREMENT_DEG = 5;
  */
 function connectorChecks(
   keys: SectionKeys,
-  shape: RoundShape,
+  shape: SectionedShape,
   longestDimensionMm: number,
   section: Section,
 ): { errors: ParameterErrors; ranges: SectionRanges } | undefined {
@@ -879,10 +947,12 @@ function connectorChecks(
     if (issues.length > 0) errors[key] = [...issues.map(explain), rangeSentence(bounds, shown)].join(' ');
   }
   if (feasibility.unattributed.length > 0) {
+    const planar = 'position' in keys ? (keys as PlanarSectionKeys) : undefined;
     const cutField = {
-      'parallel-to-bases': keys.position,
+      'parallel-to-bases': planar?.position ?? keys.offset,
       vertical: keys.offset,
-      oblique: keys.oblique.inclination,
+      horizontal: keys.offset,
+      oblique: planar?.oblique.inclination ?? keys.offset,
       'oblique-apex': coneApexKeys.inclination,
     };
     errors[cutField[section.type]] = feasibility.unattributed.map(explain).join(' ');
@@ -908,6 +978,8 @@ function rangeSentence(bounds: ParameterBounds, shown: number): string {
 
 /** Which words a message uses: a cone's cut parallel to the base is limited by the narrowing above it, hence its own. */
 export type CutWording = SectionType | 'cone';
+
+const BALL_REPAIR = 'наблизьте переріз до центра кулі';
 
 /** A plane through the apex reads like any oblique one, but for the position it does not have. */
 const wordingOf = (cut: CutWording): Exclude<CutWording, 'oblique-apex'> => (cut === 'oblique-apex' ? 'oblique' : cut);
@@ -948,11 +1020,17 @@ export function roundConnectorIssueMessage(
       return (
         `Стінка біля отвору ${partInMessage(issue.part, cut)} — ${shortfall}. ` +
         `Зменште ${diameter}${count === 2 ? ' або відстань від центра до осей' : ''}` +
-        `${cut === 'cone' ? ' чи опустіть переріз' : ''}.`
+        `${cut === 'cone' ? ' чи опустіть переріз' : cut === 'horizontal' ? ` чи ${BALL_REPAIR}` : ''}.`
       );
     case 'holes-too-close':
       return `Між отворами ${partInMessage(issue.part, cut)} лишається ${shortfall}. Збільште відстань від центра до осей або зменште ${diameter}.`;
     case 'hole-bottom-thin':
+      if (cut === 'horizontal') {
+        return (
+          `Біля дна отвору ${partInMessage(issue.part, cut)} куля звужується, і стінка лишається ${shortfall}. ` +
+          `Зменште ${length} чи ${diameter} або ${BALL_REPAIR}.`
+        );
+      }
       if (cut === 'cone') {
         return issue.part === 'upper'
           ? `Біля дна отвору ${partInMessage(issue.part, cut)} конус звужується, і стінка лишається ${shortfall}. ` +
@@ -966,6 +1044,7 @@ export function roundConnectorIssueMessage(
           oblique: `Зменште ${length} чи ${diameter} або ${changePlane(cut)}.`,
           'parallel-to-bases': `Зменште ${length} або ${issue.part === 'upper' ? 'опустіть' : 'підніміть'} переріз.`,
           cone: `Зменште ${length} або ${issue.part === 'upper' ? 'опустіть' : 'підніміть'} переріз.`,
+          horizontal: `Зменште ${length} або ${BALL_REPAIR}.`,
         }[wordingOf(cut)]
       );
     case 'base-thin':
@@ -974,6 +1053,7 @@ export function roundConnectorIssueMessage(
         oblique: `За виступом у частині 1 лишається ${shortfall}. Зменште ${diameter} або ${changePlane(cut)}.`,
         'parallel-to-bases': `Під виступом лишається ${shortfall} нижньої частини. Підніміть переріз або збільште найбільший габарит.`,
         cone: `Під виступом лишається ${shortfall} нижньої частини. Підніміть переріз або збільште найбільший габарит.`,
+        horizontal: `Під виступом лишається ${shortfall} нижньої частини. Зменште ${diameter} або ${BALL_REPAIR}.`,
       }[wordingOf(cut)];
   }
 }
@@ -999,12 +1079,17 @@ export function dovetailIssueMessage(issue: DovetailIssue, cut: CutWording = 'pa
         oblique: `Стінка біля паза — ${shortfall}. Зменште висоту чи довжину виступу або ${changePlane(cut)}.`,
         'parallel-to-bases': `Стінка біля закритого кінця паза — ${shortfall}. Зменште довжину або висоту виступу.`,
         cone: `Стінка біля паза — ${shortfall}. Зменште довжину чи висоту виступу або опустіть переріз.`,
+        horizontal: `Стінка біля паза — ${shortfall}. Зменште довжину чи висоту виступу або ${BALL_REPAIR}.`,
       }[wordingOf(cut)];
     case 'stop-thin':
+      if (cut === 'horizontal')
+        return `За упором паза лишається ${shortfall}. Зменште довжину виступу чи зазор або ${BALL_REPAIR}.`;
       return cut === 'cone'
         ? `За упором паза лишається ${shortfall}. Зменште довжину виступу чи зазор або опустіть переріз.`
         : `Під нижнім упором паза лишається ${shortfall}. Зменште довжину виступу або зазор.`;
     case 'backing-thin':
+      if (cut === 'horizontal')
+        return `Над пазом лишається ${shortfall} верхньої частини. Зменште висоту виступу або ${BALL_REPAIR}.`;
       if (cut === 'vertical') return `За пазом у частині 2 лишається ${shortfall}. Зменште висоту виступу або зміщення від осі.`;
       if (cut === 'oblique' || cut === 'oblique-apex') {
         return `За пазом у частині 2 лишається ${shortfall}. Зменште висоту чи довжину виступу або ${changePlane(cut)}.`;
@@ -1016,37 +1101,48 @@ export function dovetailIssueMessage(issue: DovetailIssue, cut: CutWording = 'pa
         oblique: `За виступом у частині 1 лишається ${shortfall}. Зменште висоту чи довжину виступу або ${changePlane(cut)}.`,
         'parallel-to-bases': `Під виступом лишається ${shortfall} нижньої частини. Підніміть переріз або збільште найбільший габарит.`,
         cone: `Під виступом лишається ${shortfall} нижньої частини. Підніміть переріз або збільште найбільший габарит.`,
+        horizontal: `Під виступом лишається ${shortfall} нижньої частини. Зменште висоту чи довжину виступу або ${BALL_REPAIR}.`,
       }[wordingOf(cut)];
   }
 }
 
 type SectionKeys = {
-  readonly choice: 'cylinderSection' | 'coneSection';
+  readonly choice: 'cylinderSection' | 'coneSection' | 'ballSection';
+  readonly offset: 'cylinderSectionOffsetPercent' | 'coneSectionOffsetPercent' | 'ballSectionOffsetPercent';
+  readonly separated: ToggleKey;
+  readonly connector: 'cylinderConnector' | 'coneConnector' | 'ballConnector';
+  readonly dovetail: {
+    readonly size: 'cylinderDovetailSize' | 'coneDovetailSize' | 'ballDovetailSize';
+    readonly length: 'cylinderDovetailLengthPercent' | 'coneDovetailLengthPercent' | 'ballDovetailLengthPercent';
+    readonly clearance: 'cylinderDovetailClearanceMm' | 'coneDovetailClearanceMm' | 'ballDovetailClearanceMm';
+  };
+  /** Plugs and dowels share the count, spacing and multipliers; each keeps its own clearances. */
+  readonly round: {
+    readonly count: 'cylinderRoundCount' | 'coneRoundCount' | 'ballRoundCount';
+    readonly spacing: 'cylinderRoundSpacingPercent' | 'coneRoundSpacingPercent' | 'ballRoundSpacingPercent';
+    readonly diameter: 'cylinderRoundDiameter' | 'coneRoundDiameter' | 'ballRoundDiameter';
+    readonly depth: 'cylinderRoundDepth' | 'coneRoundDepth' | 'ballRoundDepth';
+    readonly plugClearance: 'cylinderPlugClearanceMm' | 'conePlugClearanceMm' | 'ballPlugClearanceMm';
+    readonly dowelLowerClearance: 'cylinderDowelLowerClearanceMm' | 'coneDowelLowerClearanceMm' | 'ballDowelLowerClearanceMm';
+    readonly dowelUpperClearance: 'cylinderDowelUpperClearanceMm' | 'coneDowelUpperClearanceMm' | 'ballDowelUpperClearanceMm';
+  };
+};
+
+/** The further fields of the solids with an axis: a plane parallel to their base and a plane through a point on the axis. */
+export type PlanarSectionKeys = SectionKeys & {
   readonly position: 'cylinderSectionPercent' | 'coneSectionPercent';
-  readonly offset: 'cylinderSectionOffsetPercent' | 'coneSectionOffsetPercent';
   readonly oblique: {
     readonly position: 'cylinderObliquePositionPercent' | 'coneObliquePositionPercent';
     readonly inclination: 'cylinderObliqueInclinationDeg' | 'coneObliqueInclinationDeg';
     readonly direction: 'cylinderObliqueDirectionDeg' | 'coneObliqueDirectionDeg';
   };
-  readonly separated: ToggleKey;
-  readonly connector: 'cylinderConnector' | 'coneConnector';
-  readonly dovetail: {
-    readonly size: 'cylinderDovetailSize' | 'coneDovetailSize';
-    readonly length: 'cylinderDovetailLengthPercent' | 'coneDovetailLengthPercent';
-    readonly clearance: 'cylinderDovetailClearanceMm' | 'coneDovetailClearanceMm';
-  };
-  /** Plugs and dowels share the count, spacing and multipliers; each keeps its own clearances. */
-  readonly round: {
-    readonly count: 'cylinderRoundCount' | 'coneRoundCount';
-    readonly spacing: 'cylinderRoundSpacingPercent' | 'coneRoundSpacingPercent';
-    readonly diameter: 'cylinderRoundDiameter' | 'coneRoundDiameter';
-    readonly depth: 'cylinderRoundDepth' | 'coneRoundDepth';
-    readonly plugClearance: 'cylinderPlugClearanceMm' | 'conePlugClearanceMm';
-    readonly dowelLowerClearance: 'cylinderDowelLowerClearanceMm' | 'coneDowelLowerClearanceMm';
-    readonly dowelUpperClearance: 'cylinderDowelUpperClearanceMm' | 'coneDowelUpperClearanceMm';
-  };
 };
+
+/** The fields of the cuts that a ball does not offer, which only a cylinder's or a cone's sections reach. */
+function planarKeysOf(keys: SectionKeys): PlanarSectionKeys {
+  if (!('position' in keys)) throw new Error('This solid offers no plane with a position along an axis.');
+  return keys as PlanarSectionKeys;
+}
 
 /** The scale of the default cylinder at the default size, for messages before any valid one exists. */
 const INITIAL_CONNECTOR_SCALE = cylinderConnectorScale({
@@ -1062,6 +1158,11 @@ export const scaledConnectorDefaults: Readonly<Record<ScaledConnectorKey, number
   cylinderRoundDiameter: DEFAULT_ROUND_CONNECTOR.diameterFactor,
   cylinderRoundDepth: DEFAULT_ROUND_CONNECTOR.depthFactor,
   cylinderRoundSpacingPercent: DEFAULT_ROUND_CONNECTOR.spacingPercent,
+  ballDovetailSize: DEFAULT_DOVETAIL.sizeFactor,
+  ballDovetailLengthPercent: DEFAULT_DOVETAIL.lengthPercent,
+  ballRoundDiameter: DEFAULT_ROUND_CONNECTOR.diameterFactor,
+  ballRoundDepth: DEFAULT_ROUND_CONNECTOR.depthFactor,
+  ballRoundSpacingPercent: DEFAULT_ROUND_CONNECTOR.spacingPercent,
   coneDovetailSize: DEFAULT_DOVETAIL.sizeFactor,
   coneDovetailLengthPercent: DEFAULT_DOVETAIL.lengthPercent,
   coneRoundDiameter: DEFAULT_ROUND_CONNECTOR.diameterFactor,
@@ -1081,7 +1182,27 @@ function scaledError(key: ScaledConnectorKey, text: string, unit: number): strin
 export const coneApexKeys = { inclination: 'coneApexInclinationDeg', direction: 'coneApexDirectionDeg' } as const;
 
 /** The fields of the plane section and its connector, for the shapes that offer one. */
-export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys>>> = {
+export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys | PlanarSectionKeys>>> = {
+  ball: {
+    choice: 'ballSection',
+    offset: 'ballSectionOffsetPercent',
+    separated: 'ballPartsSeparated',
+    connector: 'ballConnector',
+    dovetail: {
+      size: 'ballDovetailSize',
+      length: 'ballDovetailLengthPercent',
+      clearance: 'ballDovetailClearanceMm',
+    },
+    round: {
+      count: 'ballRoundCount',
+      spacing: 'ballRoundSpacingPercent',
+      diameter: 'ballRoundDiameter',
+      depth: 'ballRoundDepth',
+      plugClearance: 'ballPlugClearanceMm',
+      dowelLowerClearance: 'ballDowelLowerClearanceMm',
+      dowelUpperClearance: 'ballDowelUpperClearanceMm',
+    },
+  },
   cylinder: {
     choice: 'cylinderSection',
     position: 'cylinderSectionPercent',
@@ -1216,10 +1337,12 @@ function resolveSection(
   const fields = activeConnectorKeys(keys, connectorType, count) as IndependentKey[];
   // A plane parallel to the bases has a position along the height, a vertical one a distance from the axis, an oblique
   // one a point on the axis and two angles, a plane through an apex those angles alone.
+  const planar = 'position' in keys ? (keys as PlanarSectionKeys) : undefined;
   const cutFields: Readonly<Record<SectionType, readonly IndependentKey[]>> = {
-    'parallel-to-bases': [keys.position],
+    'parallel-to-bases': planar === undefined ? [] : [planar.position],
     vertical: [keys.offset],
-    oblique: Object.values(keys.oblique),
+    horizontal: [keys.offset],
+    oblique: planar === undefined ? [] : Object.values(planar.oblique),
     'oblique-apex': Object.values(coneApexKeys),
   };
   const cutKeys = cutFields[type];
@@ -1231,19 +1354,19 @@ function resolveSection(
       errors[key] = scaledError(key, texts[key], units[key]) ?? errors[key];
     }
   }
-  const { inclination, direction, position } = keys.oblique;
-  const [inclinationDeg, directionDeg] = [values[inclination], values[direction]];
   // The position cannot change a plane that contains the whole axis and its field is disabled, so an invalid draft of it
   // blocks nothing; it stays as typed for when the plane no longer does.
-  if (
-    type === 'oblique' &&
-    (shape?.kind === 'cylinder' || shape?.kind === 'cone') &&
-    inclinationDeg !== undefined &&
-    directionDeg !== undefined &&
-    obliquePlaneContainsAxis(shape as RoundShape, inclinationDeg, directionDeg)
-  ) {
-    delete errors[position];
-    values[position] ??= DEFAULT_OBLIQUE_SECTION.positionPercent;
+  if (type === 'oblique' && planar !== undefined && (shape?.kind === 'cylinder' || shape?.kind === 'cone')) {
+    const { inclination, direction, position } = planar.oblique;
+    const [inclinationDeg, directionDeg] = [values[inclination], values[direction]];
+    if (
+      inclinationDeg !== undefined &&
+      directionDeg !== undefined &&
+      obliquePlaneContainsAxis(shape as RoundShape, inclinationDeg, directionDeg)
+    ) {
+      delete errors[position];
+      values[position] ??= DEFAULT_OBLIQUE_SECTION.positionPercent;
+    }
   }
   if ([...cutKeys, ...fields].some((key) => values[key] === undefined)) return { values, errors, section: undefined };
   const read = (key: ParameterKey) => values[key] as number;
@@ -1276,10 +1399,12 @@ function resolveSection(
   const sectionOf = (): Section => {
     switch (type) {
       case 'vertical':
+      case 'horizontal':
         return { type, offsetPercent: read(keys.offset), ...joining };
       case 'parallel-to-bases':
-        return { type, positionPercent: read(keys.position), ...joining };
-      case 'oblique':
+        return { type, positionPercent: read(planarKeysOf(keys).position), ...joining };
+      case 'oblique': {
+        const { position, inclination, direction } = planarKeysOf(keys).oblique;
         return {
           type,
           positionPercent: read(position),
@@ -1288,6 +1413,7 @@ function resolveSection(
           directionDeg: read(direction) % OBLIQUE_DIRECTION_LIMITS.max,
           ...joining,
         };
+      }
       case 'oblique-apex':
         return {
           type,
@@ -1541,7 +1667,21 @@ export const shapeParameterKeys: Readonly<
     ],
     choices: ['coneSection', 'coneObliqueThrough', 'coneApexStarted', 'conePartsSeparated', 'coneConnector', 'coneRoundCount'],
   },
-  ball: { texts: [], choices: [] },
+  ball: {
+    texts: [
+      'ballSectionOffsetPercent',
+      'ballDovetailSize',
+      'ballDovetailLengthPercent',
+      'ballDovetailClearanceMm',
+      'ballRoundSpacingPercent',
+      'ballRoundDiameter',
+      'ballRoundDepth',
+      'ballPlugClearanceMm',
+      'ballDowelLowerClearanceMm',
+      'ballDowelUpperClearanceMm',
+    ],
+    choices: ['ballSection', 'ballPartsSeparated', 'ballConnector', 'ballRoundCount'],
+  },
 };
 
 export type ParameterState = {
@@ -1596,11 +1736,13 @@ function inactiveSectionKeys(kind: ShapeKind, choices: ParameterChoices): (keyof
   );
   if (connector !== 'plug' && connector !== 'dowel') connectorFields.push(keys.round.count);
   const section = activeSection(kind, choices);
-  const obliqueFields = Object.values(keys.oblique);
+  const planar = 'position' in keys ? (keys as PlanarSectionKeys) : undefined;
+  const obliqueFields = planar === undefined ? [] : Object.values(planar.oblique);
   const apexFields = Object.values(coneApexKeys);
   const cutFields: Readonly<Record<SectionType, readonly (keyof ParameterChoices | ParameterKey)[]>> = {
-    'parallel-to-bases': [keys.position],
+    'parallel-to-bases': planar === undefined ? [] : [planar.position],
     vertical: [keys.offset],
+    horizontal: [keys.offset],
     oblique: [...obliqueFields, 'coneObliqueThrough'],
     'oblique-apex': [...apexFields, 'coneObliqueThrough'],
   };

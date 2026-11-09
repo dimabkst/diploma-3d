@@ -246,13 +246,13 @@ test('reset: one click recovers from an invalid draft in a prism field and leave
 
 test('reset: solids without parameters of their own offer no reset, whatever the size', async ({ page }) => {
   await page.goto('/');
-  for (const label of ['Куб', 'Додекаедр', 'Куля']) {
+  for (const label of ['Додекаедр', 'Куб']) {
     await shapeSelect(page).selectOption({ label });
     await expect(sizeField(page)).toBeVisible();
     await expect(resetButton(page)).toHaveCount(0);
   }
   await sizeField(page).fill('40');
-  await expectPreviewOf(page, 'Куля · 40 × 40 × 40 мм');
+  await expectPreviewOf(page, 'Куб · 40 × 40 × 40 мм');
   await expect(resetButton(page)).toHaveCount(0);
   await expect(page.getByRole('button', { name: /Скинути/ })).toHaveCount(0);
 });

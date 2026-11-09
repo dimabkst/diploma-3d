@@ -156,7 +156,8 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
   {#if panel.type === 'fixed'}
     <p class="note">{panel.note}</p>
   {:else}
-    <HelpToggle id="reference-help" help={panel.help} />
+    {#if panel.note !== undefined}<p class="note">{panel.note}</p>{/if}
+    {#if panel.help !== undefined}<HelpToggle id="reference-help" help={panel.help} />{/if}
     <div class="sections">
       {#each panel.sections as section (section.key)}
         {@const tilt = tiltOf(section)}

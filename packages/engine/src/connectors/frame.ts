@@ -1,5 +1,7 @@
 import {
   APEX_INCLINATION_MAX_DEG,
+  BALL_OFFSET_LIMITS,
+  type BallShape,
   type ConeShape,
   type CylinderShape,
   type PhysicalScale,
@@ -10,6 +12,7 @@ import type { Manifold, Mat4 } from 'manifold-3d';
 import { GeometryError } from '../errors.ts';
 import { cross, dot, length, type Vec3 } from '../mesh.ts';
 import { cosSinDeg } from '../shapes/angle.ts';
+import { ballCentreMm, ballInradiusMm, ballPolyhedron, ballRadiusMm } from '../shapes/ball.ts';
 import { circularSegments, type RoundShape, roundDimensionsMm } from '../shapes/round.ts';
 
 /**
@@ -146,7 +149,22 @@ export interface ConeObliqueSection extends FacetedSection {
   readonly throughApex: boolean;
 }
 
+/**
+ * A ball's horizontal cut: the lower part lies below the plane, the upper part above it, with the frame of a cylinder's
+ * parallel cut. Contour and centroid are the actual polyhedron's. Walls follow from `inradius`, a sphere inside it: the
+ * polyhedron has thousands of faces, and that sphere lies within its finest deviation of them, on the safe side.
+ */
+export interface BallHorizontalSection extends CutGeometry {
+  readonly type: 'ball-horizontal';
+  /** The signed distance of the plane above the centre, in millimetres. */
+  readonly offset: number;
+  readonly plane: { readonly normal: Vec3; readonly offset: number };
+  readonly contour: readonly Vec3[];
+  readonly area: number;
+}
+
 export type SolidSection =
+  | BallHorizontalSection
   | ParallelCylinderSection
   | VerticalCylinderSection
   | ObliqueCylinderSection
@@ -157,8 +175,8 @@ export type SolidSection =
 /** Whether the section was read off the actual solid's faces. */
 export const isFaceted = (section: SolidSection): section is SolidSection & FacetedSection => 'faces' in section;
 
-/** A vertical cut's position: the signed distance from the axis in percent of the radius. */
-export interface VerticalCut {
+/** A cut's signed distance, from a vertical plane to the axis or a ball's horizontal plane to the centre, in percent of the radius. */
+export interface OffsetCut {
   readonly offsetPercent: number;
 }
 
@@ -176,7 +194,7 @@ export interface ApexCut {
 }
 
 /** Where a round solid is cut: a plane parallel to the base at this percentage of the height, or another plane. */
-export type SolidCut = number | VerticalCut | ObliqueCut | ApexCut;
+export type SolidCut = number | OffsetCut | ObliqueCut | ApexCut;
 
 const normalised = (a: Vec3): Vec3 => {
   const norm = length(a);
@@ -638,6 +656,69 @@ export function coneApexAngleBounds(
 }
 
 /**
+ * A ball's horizontal cut at z = centre + offset, its contour read off the actual polyhedron. The mesh has the octahedron's
+ * mirror symmetries, so the contour's area centroid lies on the vertical through the centre; it comes from the contour all
+ * the same. The frame is a parallel cut's: u is +Y, the groove's entrance at −u.
+ */
+export function ballSection(scale: PhysicalScale, offsetPercent: number): BallHorizontalSection {
+  const radius = ballRadiusMm(scale);
+  const centre = ballCentreMm(scale);
+  const n: Vec3 = [0, 0, 1];
+  const u: Vec3 = [0, 1, 0];
+  const v = cross(u, n);
+  const offset = sectionOffsetMm(offsetPercent, radius);
+  const { vertices, edges } = ballPolyhedron(radius);
+  const contour = planeContour(vertices, edges, { n, u, v }, offset).map(
+    ([x, y, z]): Vec3 => [x + centre[0], y + centre[1], z + centre[2]],
+  );
+  if (contour.length < 3) throw new GeometryError('The plane does not cut the ball.');
+  const { area, centroid } = polygonCentroid(contour, u, v);
+  const alongPlane = contour.map((corner) => dot(corner, u));
+  return {
+    type: 'ball-horizontal',
+    frame: { origin: centroid, u, v, n },
+    radius,
+    inradius: ballInradiusMm(scale),
+    span: Math.max(...alongPlane) - Math.min(...alongPlane),
+    depthExtent: 2 * radius,
+    offset,
+    plane: { normal: n, offset: centre[2] + offset },
+    contour,
+    area,
+  };
+}
+
+/**
+ * How far a ball's plane may lie from the centre, in percent of the radius: the rule of a vertical cut, a tenth of the
+ * extent and at least one wall on the thinner side, which at ordinary sizes gives the interface's ±80 %.
+ */
+export function ballOffsetLimitPercent(scale: PhysicalScale): number {
+  const radius = ballRadiusMm(scale);
+  const thinnest = Math.max((SECTION_POSITION_LIMITS.min / 100) * 2 * radius, CONNECTOR_MIN_WALL_MM);
+  return Math.min(BALL_OFFSET_LIMITS.max, Math.max(0, sectionOffsetPercent(radius - thinnest, radius)));
+}
+
+/**
+ * The wall around a circle of a hole in a ball, `normal` from the plane along n with its axis `along` from the centroid:
+ * R − √((|along| + radius)² + (offset + normal)²), with R the sphere inside the polyhedron. Its farthest point from the
+ * centre sets it, on any convex cavity one of its extreme circles.
+ */
+export const ballDiscWall = (
+  { inradius, offset }: BallHorizontalSection,
+  along: number,
+  normal: number,
+  radius: number,
+): number => inradius - Math.hypot(Math.abs(along) + radius, offset + normal);
+
+/** The same for a point (along u, across v, along n) in the frame. */
+export const ballPointWall = (
+  { inradius, offset }: BallHorizontalSection,
+  along: number,
+  across: number,
+  normal: number,
+): number => inradius - Math.hypot(along, across, offset + normal);
+
+/**
  * The least distance each part must keep from the plane along the normal for a usable part, in millimetres: the rule of
  * a vertical cut, at least one wall and a tenth of the solid's extent. The position's limits already keep that share,
  * since the part's reach from P is a mean of t·|n·a| and the polygon's own reach. An application restriction: it does
@@ -673,6 +754,7 @@ export const facesOfPart = ({ faces }: FacetedSection, part: 'negative' | 'posit
 export const cutOfSection = (section: Section): SolidCut => {
   switch (section.type) {
     case 'vertical':
+    case 'horizontal':
       return { offsetPercent: section.offsetPercent };
     case 'oblique':
       return {
@@ -687,8 +769,15 @@ export const cutOfSection = (section: Section): SolidCut => {
   }
 };
 
+/** The solids whose cuts carry connectors. */
+export type SectionedShape = RoundShape | BallShape;
+
 /** The geometry of the cut. */
-export function solidCut(shape: RoundShape, scale: PhysicalScale, cut: SolidCut): SolidSection {
+export function solidCut(shape: SectionedShape, scale: PhysicalScale, cut: SolidCut): SolidSection {
+  if (shape.kind === 'ball') {
+    if (typeof cut === 'number' || !('offsetPercent' in cut)) throw new GeometryError('A ball offers only a horizontal cut.');
+    return ballSection(scale, cut.offsetPercent);
+  }
   if (shape.kind === 'cone') {
     if (typeof cut === 'number') return coneSection(shape, scale, cut);
     return 'offsetPercent' in cut ? coneVerticalSection(shape, scale, cut.offsetPercent) : coneObliqueSection(shape, scale, cut);

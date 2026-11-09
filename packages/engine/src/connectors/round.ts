@@ -5,9 +5,11 @@ import type { GeometryKernel } from '../kernel.ts';
 import type { Vec3 } from '../mesh.ts';
 import type { Track } from '../scope.ts';
 import type { Vec2 } from '../shapes/polygon.ts';
-import { circularSegments, type RoundShape } from '../shapes/round.ts';
+import { circularSegments } from '../shapes/round.ts';
 import { type ConnectorFeasibility, connectorFeasibility, type ParameterSpec } from './bounds.ts';
 import {
+  type BallHorizontalSection,
+  ballDiscWall,
   CONNECTOR_MIN_WALL_MM,
   connectorVolumeTolerance,
   discWall,
@@ -18,6 +20,7 @@ import {
   insideEnvelope,
   isFaceted,
   lateralWall,
+  type SectionedShape,
   type SectionFrame,
   type SolidCut,
   type SolidSection,
@@ -232,7 +235,8 @@ interface HoleExtent {
  * material, so the farther of its entrance and bottom from the axis plane counts; on the way there the entrance is the
  * thinner anyway. The bases are the planes z = 0 and z = H, at H/2 from the centroid.
  *
- * In an oblique cut and in a cone they are measured to the actual faces that bound the part, see `facetedHoleWalls`.
+ * In an oblique cut and in a cone they are measured to the actual faces that bound the part, see `facetedHoleWalls`; in
+ * a ball to the sphere inside it, see `ballHoleWalls`.
  */
 function holeWalls(section: SolidSection, part: Part, hole: HoleExtent, holeDepth: number) {
   const { along, chamfer, straight, opening } = hole;
@@ -245,6 +249,7 @@ function holeWalls(section: SolidSection, part: Part, hole: HoleExtent, holeDept
     };
   }
   if (isFaceted(section)) return facetedHoleWalls(section, part, hole, holeDepth);
+  if (section.type === 'ball-horizontal') return ballHoleWalls(section, part, hole, holeDepth);
   const { offset, lean, stretch, height } = section;
   const towards = part === 'upper' ? 1 : -1;
   const reachOf = (radius: number) => lean * Math.abs(along) + radius * stretch;
@@ -256,6 +261,20 @@ function holeWalls(section: SolidSection, part: Part, hole: HoleExtent, holeDept
       height / 2 - Math.abs(along) - opening,
     ),
     bottom: lateralWall(section, reachOf(straight), farthest(holeDepth)),
+  };
+}
+
+/**
+ * A hole in a ball: (s + a(z))² + (offset ± z)² ≤ R² at every depth z, with a(z) the cavity's radius and R reduced by the
+ * wall. The distance from the centre is convex, so that the cavity's circles at the entrance, at the end of the chamfer
+ * and at the bottom bound it, and a cavity whose mouth fits with room to spare is still measured where it reaches furthest.
+ */
+function ballHoleWalls(section: BallHorizontalSection, part: Part, hole: HoleExtent, holeDepth: number) {
+  const { along, chamfer, straight, opening } = hole;
+  const towards = part === 'upper' ? 1 : -1;
+  return {
+    side: Math.min(ballDiscWall(section, along, 0, opening), ballDiscWall(section, along, towards * chamfer, straight)),
+    bottom: ballDiscWall(section, along, towards * holeDepth, straight),
   };
 }
 
@@ -277,6 +296,11 @@ function facetedHoleWalls(section: FacetedSection, part: Part, hole: HoleExtent,
 /** What remains behind the root overlap of the plugs in the part that carries them. */
 function plugBacking(section: SolidSection, sites: readonly { along: number; pinDiameter: number }[]): number {
   if (section.type === 'parallel-to-bases') return section.lowerThickness - PLUG_ROOT_OVERLAP_MM;
+  if (section.type === 'ball-horizontal') {
+    return Math.min(
+      ...sites.map(({ along, pinDiameter }) => ballDiscWall(section, along, -PLUG_ROOT_OVERLAP_MM, pinDiameter / 2)),
+    );
+  }
   if (isFaceted(section)) {
     const faces = facesOfPart(section, 'negative');
     return Math.min(
@@ -299,7 +323,7 @@ function plugBacking(section: SolidSection, sites: readonly { along: number; pin
  * `roundConnectorChecks` for the constraints.
  */
 export function planRoundConnectors(
-  shape: RoundShape,
+  shape: SectionedShape,
   scale: PhysicalScale,
   cut: SolidCut,
   connector: RoundConnector,
@@ -332,7 +356,7 @@ export type RoundConnectorParameter = 'diameter' | 'insertion' | 'spacing' | 'lo
  * policy for print trials rather than a geometric limit. A pair has a spacing, dowels a lower clearance.
  */
 export function roundConnectorFeasibility(
-  shape: RoundShape,
+  shape: SectionedShape,
   scale: PhysicalScale,
   cut: SolidCut,
   connector: RoundConnector,

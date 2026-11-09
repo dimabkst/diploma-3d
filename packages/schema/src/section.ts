@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const SECTION_TYPES = ['parallel-to-bases', 'vertical', 'oblique', 'oblique-apex'] as const;
+export const SECTION_TYPES = ['parallel-to-bases', 'vertical', 'oblique', 'oblique-apex', 'horizontal'] as const;
 
 export type SectionType = (typeof SECTION_TYPES)[number];
 
@@ -29,6 +29,10 @@ export const OBLIQUE_INCLINATION_LIMITS = { min: 5, max: 85 } as const;
 export const OBLIQUE_DIRECTION_LIMITS = { min: 0, max: 360 } as const;
 
 export const APEX_INCLINATION_MAX_DEG = 90;
+
+// An application restriction on a ball's horizontal plane, like the parallel cut's 10–90 % of the height: any plane strictly
+// inside ±100 % of the radius would split it.
+export const BALL_OFFSET_LIMITS = { min: -80, max: 80 } as const;
 
 export const DEFAULT_OBLIQUE_SECTION = { positionPercent: 50, inclinationDeg: 45, directionDeg: 0 } as const;
 
@@ -180,11 +184,22 @@ export const apexSectionSchema = z.strictObject({
 
 export type ApexSection = z.infer<typeof apexSectionSchema>;
 
+/** A horizontal plane through a ball, at a signed distance from its centre in percent of the radius, positive upwards. */
+export const horizontalSectionSchema = z.strictObject({
+  type: z.literal('horizontal'),
+  offsetPercent: z.number().min(BALL_OFFSET_LIMITS.min).max(BALL_OFFSET_LIMITS.max).default(DEFAULT_SECTION_OFFSET_PERCENT),
+  /** Joins the parts; without one, both cut faces stay flat. */
+  connector: connectorSchema.optional(),
+});
+
+export type HorizontalSection = z.infer<typeof horizontalSectionSchema>;
+
 export const sectionSchema = z.discriminatedUnion('type', [
   parallelSectionSchema,
   verticalSectionSchema,
   obliqueSectionSchema,
   apexSectionSchema,
+  horizontalSectionSchema,
 ]);
 
 export type Section = z.infer<typeof sectionSchema>;

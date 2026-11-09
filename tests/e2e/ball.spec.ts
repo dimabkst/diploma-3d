@@ -4,7 +4,7 @@ import { collectErrors, downloadButton, downloadThreeMf, expectPreviewOf, expect
 const BALL = 'Куля';
 const BALL_SUMMARY = `${BALL} · 80 × 80 × 80 мм`;
 
-test('ball: a fixed 80 mm ball with no parameter controls', async ({ page }) => {
+test('ball: a fixed 80 mm ball with no shape controls, only its optional section', async ({ page }) => {
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: BALL });
@@ -13,7 +13,7 @@ test('ball: a fixed 80 mm ball with no parameter controls', async ({ page }) => 
   await expect(page.getByRole('slider')).toHaveCount(0);
   await expect(page.getByLabel('Висота h', { exact: true })).toHaveCount(0);
   await expect(page.getByLabel('Тип основи', { exact: true })).toHaveCount(0);
-  await expect(page.locator('details')).toHaveCount(0);
+  await expect(page.locator('details')).toHaveCount(1);
   await expectPreviewOf(page, BALL_SUMMARY);
 
   const { fileName, measurements } = await downloadThreeMf(page);
@@ -49,7 +49,7 @@ test('ball: switching to and from parameterised shapes shows their own controls 
   expect(disabledRightAfterSwitch).toBe(true);
   await expectPreviewOf(page, BALL_SUMMARY);
   await expect(page.getByRole('slider')).toHaveCount(0);
-  await expect(page.locator('details')).toHaveCount(0);
+  await expect(page.locator('details')).toHaveCount(1);
   expect((await downloadThreeMf(page)).fileName).toBe('ball.3mf');
 
   // Rapid switches end on a prism, whose own controls and file return.

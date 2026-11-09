@@ -1,6 +1,7 @@
 import type { PhysicalScale } from '@diploma-3d/schema';
 import type { Manifold } from 'manifold-3d';
 import type { GeometryKernel } from '../kernel.ts';
+import type { Vec3 } from '../mesh.ts';
 import type { Track } from '../scope.ts';
 import { MAX_CIRCLE_DEVIATION_MM } from './round.ts';
 
@@ -31,6 +32,64 @@ export function ballSegments(radiusMm: number): number {
 /** The ball's radius r = L/2 in millimetres: its diameter is the longest dimension. */
 export const ballRadiusMm = (scale: PhysicalScale): number => scale.longestDimensionMm / 2;
 
+/** The ball's centre: it rests on z = 0. */
+export const ballCentreMm = (scale: PhysicalScale): Vec3 => [0, 0, ballRadiusMm(scale)];
+
+/**
+ * The radius of a sphere inside the polyhedron, which no face plane comes closer to the centre than: every point inside it
+ * lies at least (this radius − its distance from the centre) inside the actual solid.
+ */
+export function ballInradiusMm(scale: PhysicalScale): number {
+  const radius = ballRadiusMm(scale);
+  return radius * (1 - DEVIATION_TIMES_SEGMENTS_SQUARED / ballSegments(radius) ** 2);
+}
+
+/**
+ * The polyhedron's corners and edges as manifold-3d 3.5.4 builds them around the origin: each face of an octahedron divided
+ * into a regular grid of N/4 parts per edge, whose points (a, b, c) move to sin(π/2·(a, b, c)), normalised to the radius. The
+ * tests compare them with the actual mesh. Corners on the faces' shared edges repeat, which a plane's section merges again.
+ */
+export function ballPolyhedron(radius: number): {
+  readonly vertices: readonly Vec3[];
+  readonly edges: readonly (readonly [number, number])[];
+} {
+  const parts = ballSegments(radius) / 4;
+  const vertices: Vec3[] = [];
+  const edges: (readonly [number, number])[] = [];
+  for (const [sx, sy, sz] of OCTANTS) {
+    const first = vertices.length;
+    const indexOf = (i: number, j: number) => first + (i * (2 * parts + 3 - i)) / 2 + j;
+    for (let i = 0; i <= parts; i += 1) {
+      for (let j = 0; j <= parts - i; j += 1) {
+        const [x, y, z] = [i, j, parts - i - j].map((step) => Math.sin((Math.PI / 2) * (step / parts))) as [
+          number,
+          number,
+          number,
+        ];
+        const scale = radius / Math.hypot(x, y, z);
+        vertices.push([sx * x * scale, sy * y * scale, sz * z * scale]);
+        if (i + j < parts) {
+          edges.push([indexOf(i, j), indexOf(i, j + 1)]);
+          edges.push([indexOf(i, j), indexOf(i + 1, j)]);
+          edges.push([indexOf(i, j + 1), indexOf(i + 1, j)]);
+        }
+      }
+    }
+  }
+  return { vertices, edges };
+}
+
+const OCTANTS: readonly Vec3[] = [
+  [1, 1, 1],
+  [-1, 1, 1],
+  [1, -1, 1],
+  [-1, -1, 1],
+  [1, 1, -1],
+  [-1, 1, -1],
+  [1, -1, -1],
+  [-1, -1, -1],
+];
+
 export interface BallMeasurements {
   readonly radius: number;
   readonly diameter: number;
@@ -51,5 +110,5 @@ export function ballMeasurements(scale: PhysicalScale): BallMeasurements {
 export function buildBall(kernel: GeometryKernel, track: Track, scale: PhysicalScale): Manifold {
   const radius = ballRadiusMm(scale);
   const centred = track(kernel.Manifold.sphere(radius, ballSegments(radius)));
-  return track(centred.translate([0, 0, radius]));
+  return track(centred.translate([...ballCentreMm(scale)]));
 }

@@ -747,6 +747,7 @@ describe('plane sections', () => {
     expect(SECTIONS_BY_SHAPE).toEqual({
       cylinder: ['parallel-to-bases', 'vertical', 'oblique'],
       cone: ['parallel-to-bases', 'vertical', 'oblique', 'oblique-apex'],
+      ball: ['horizontal'],
     });
     const shape = { kind: 'cone', heightRatio: 2 };
     const cone = modelSpecSchema.safeParse({ shape, scale, section: at(50) });
@@ -762,6 +763,24 @@ describe('plane sections', () => {
     expect(apexOfCylinder.success).toBe(false);
     expect(apexOfCylinder.error?.issues[0]?.path).toEqual(['section']);
     expect(modelSpecSchema.safeParse({ shape: { kind: 'cube' }, scale, section: at(50) }).success).toBe(false);
+  });
+});
+
+describe('a horizontal section', () => {
+  const parse = (section: Record<string, unknown>, shape: Record<string, unknown> = { kind: 'ball' }) =>
+    modelSpecSchema.safeParse({ shape, scale: { longestDimensionMm: 80 }, section: { type: 'horizontal', ...section } });
+
+  it('starts through the centre and takes a signed offset within ±80 % of the radius, on a ball alone', () => {
+    expect(parse({}).data?.section).toEqual({ type: 'horizontal', offsetPercent: 0 });
+    for (const offsetPercent of [-80, -12.5, 0, 45, 80]) expect(parse({ offsetPercent }).success).toBe(true);
+    for (const offsetPercent of [-80.1, 80.1, 100, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(parse({ offsetPercent }).success).toBe(false);
+    }
+    expect(parse({ positionPercent: 50 }).success).toBe(false);
+    expect(parse({}, { kind: 'cylinder', heightRatio: 2 }).success).toBe(false);
+    expect(parse({}, { kind: 'cube' }).success).toBe(false);
+    const plug = { type: 'plug', count: 1, diameterFactor: 1, depthFactor: 1, holeClearanceMm: 0.2 };
+    expect(parse({ connector: plug }).success).toBe(true);
   });
 });
 

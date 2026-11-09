@@ -45,6 +45,7 @@ import {
   type ParameterChoices,
   type ParameterKey,
   type ParameterValues,
+  type PlanarSectionKeys,
   type SectionChoice,
   type SectionRanges,
   sectionKeys,
@@ -176,7 +177,13 @@ export type ParameterSection = {
 /** The sidebar of a shape: one line for fixed proportions, otherwise the reference length's help and the groups. */
 export type ShapePanel =
   | { readonly type: 'fixed'; readonly note: string }
-  | { readonly type: 'parameters'; readonly help: Help; readonly sections: readonly ParameterSection[] };
+  | {
+      readonly type: 'parameters';
+      /** The reference length's explanation; a solid with fixed proportions has a line of its own instead. */
+      readonly help?: Help;
+      readonly note?: string;
+      readonly sections: readonly ParameterSection[];
+    };
 
 export const shapeOptions: readonly ShapeOption[] = [
   { value: 'cube', label: 'Куб' },
@@ -203,7 +210,7 @@ const sizeFormat = new Intl.NumberFormat('uk-UA', { maximumFractionDigits: 1 });
 export const formatSize = (size: readonly number[] | undefined): string =>
   size === undefined ? '— мм' : `${size.map((value) => sizeFormat.format(value)).join(' × ')} мм`;
 
-type FixedShapeKind = 'cube' | 'tetrahedron' | 'octahedron' | 'icosahedron' | 'dodecahedron' | 'ball';
+type FixedShapeKind = 'cube' | 'tetrahedron' | 'octahedron' | 'icosahedron' | 'dodecahedron';
 
 const fixedNotes: Readonly<Record<FixedShapeKind, string>> = {
   cube: 'Усі ребра рівні, грані — квадрати. Пропорції фіксовані.',
@@ -211,8 +218,9 @@ const fixedNotes: Readonly<Record<FixedShapeKind, string>> = {
   octahedron: '8 граней — рівносторонні трикутники; модель лежить на грані. Пропорції фіксовані.',
   icosahedron: '20 граней — рівносторонні трикутники; модель лежить на грані. Пропорції фіксовані.',
   dodecahedron: '12 граней — правильні п’ятикутники; модель лежить на грані. Пропорції фіксовані.',
-  ball: 'Суцільна куля. Пропорції фіксовані.',
 };
+
+const BALL_NOTE = 'Суцільна куля. Пропорції фіксовані.';
 
 /**
  * The shared print size: the longest of the exported model's width, depth and height. Arrow keys step by 5 mm; any
@@ -538,6 +546,7 @@ const sectionNames: Readonly<Record<SectionChoice, string>> = {
   'parallel-to-bases': 'Паралельно основам',
   vertical: 'Вертикальний',
   oblique: 'Похилий',
+  horizontal: 'Горизонтальний',
 };
 
 const parallelSectionHelp: Help = {
@@ -595,6 +604,15 @@ const coneVerticalSectionHelp: Help = {
     'Частини 1 і 2 лежать по різні боки площини й експортуються окремими об’єктами в одному масштабі; розсування змінює ' +
     'лише перегляд. У файлі вони стоять на залишках основи. Межі зміщення відсувають площину від бічної поверхні, але не ' +
     'гарантують, що тонку частину вдасться надрукувати.',
+};
+
+const ballSectionHelp: Help = {
+  label: 'Як задано переріз?',
+  text:
+    'Переріз кулі площиною — круг. За зміщення 0% площина проходить через центр і ділить кулю на дві півкулі. Додатне ' +
+    'значення піднімає площину, від’ємне — опускає. Що далі площина від центра, то менший круг перерізу.\n\n' +
+    'Частини експортуються окремими об’єктами в одному масштабі; розсування змінює лише перегляд. Межі ±80 % відсувають ' +
+    'площину від полюсів, але не гарантують, що тонку частину вдасться надрукувати.',
 };
 
 const coneObliqueSectionHelp: Help = {
@@ -769,6 +787,16 @@ const CONE_VERTICAL_NOTE =
   'Конус звужується догори, а порожнина перетинає різні висоти й іде до вигнутої поверхні, тому повзунки враховують ' +
   'увесь її об’єм, а не лише вхід. ';
 
+const BALL_PRINT_NOTE =
+  'Куля вигинається всередину навколо отвору чи паза, тому повзунки враховують увесь їхній об’єм, а не лише вхід. У файлі ' +
+  'частини лежать перерізом на столі, якщо він вільний. Частина, більша за півкулю, розширюється над столом, а склепіння ' +
+  'отворів і паза можуть потребувати підтримок.';
+
+const PROTRUDING_ON_BALL_NOTE =
+  'Частина з виступом розміщена перерізом догори. Перед друком налаштуйте підтримки під її округлою поверхнею.';
+
+const withBallNote = (help: Help): Help => ({ ...help, text: `${help.text}\n\n${BALL_PRINT_NOTE}` });
+
 const SCALE_NOTE =
   'Показано фактичні розміри для поточного масштабу моделі. Розміри кріплення змінюються разом із найбільшим габаритом.';
 const COUNT_NOTE =
@@ -784,7 +812,11 @@ const millimetres = (value: number | undefined): string =>
  * line each: the dovetail's widths, a pair's second diameter, a dowel's insertion into each part. Shown while a section
  * is chosen; a connector is optional, so its state is summarised.
  */
-function connectorSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, context: PanelContext): ParameterSection[] {
+function connectorSection(
+  kind: 'cylinder' | 'cone' | 'ball',
+  choices: ParameterChoices,
+  context: PanelContext,
+): ParameterSection[] {
   const keys = sectionKeys[kind];
   const scale = context.connectorScale ?? connectorScaleOf(kind, context.values ?? {});
   if (keys === undefined || scale === undefined || activeSection(kind, choices) === undefined) return [];
@@ -799,7 +831,7 @@ function connectorSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, 
   const { dovetail, round } = keys;
   const cut = activeSection(kind, choices) as SectionType;
   // Only a parallel cut has a lower and an upper part wherever it runs; the others number theirs.
-  const numbered = cut !== 'parallel-to-bases';
+  const numbered = cut !== 'parallel-to-bases' && cut !== 'horizontal';
   const units = connectorUnits(scale, chosen === 'dowel' ? 'dowel' : 'plug', cut);
   /** The feasible range that the request computed; the calibration window, or nothing, until it can. */
   const rangeOf = (key: ParameterKey, increment: number, fallback?: StepRange): StepRange | undefined => {
@@ -907,7 +939,17 @@ function connectorSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, 
       plug: numberedPlugHelp(OBLIQUE_PRINT_NOTE),
       dowel: numberedDowelHelp(OBLIQUE_PRINT_NOTE),
     },
+    horizontal: {
+      dovetail: withBallNote(dovetailHelp),
+      plug: withBallNote(plugHelp),
+      dowel: withBallNote(dowelHelp),
+    },
   };
+  // Only this part leaves the bed without a flat face, and it holds for this model, whatever the plane.
+  const printNote =
+    kind === 'ball' && (chosen === 'plug' || chosen === 'dovetail')
+      ? [note('connector-print-placement', PROTRUDING_ON_BALL_NOTE)]
+      : [];
   const helpOf = (type: Exclude<ConnectorChoice, 'none'>): Help => {
     if (kind !== 'cone') return helps[cut][type];
     if (cut === 'parallel-to-bases') return withConeNote(helps[cut][type]);
@@ -920,7 +962,7 @@ function connectorSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, 
     return (type === 'plug' ? numberedPlugHelp : numberedDowelHelp)(CONE_VERTICAL_NOTE + printNote);
   };
   return [
-    section(`${kind}-connector`, 'Кріплення', [selector, ...fields[chosen]], {
+    section(`${kind}-connector`, 'Кріплення', [selector, ...printNote, ...fields[chosen]], {
       help: chosen === 'none' ? undefined : helpOf(chosen),
       status: { text: chosen === 'none' ? 'немає' : connectorNames[chosen].toLowerCase(), highlighted: chosen !== 'none' },
     }),
@@ -949,8 +991,43 @@ function obliqueContainsAxis(
  * "Переріз": optional, so the group starts collapsed with the chosen section in its summary. The position and the
  * separation are shown only while a section is chosen.
  */
+function ballPlaneSection(choices: ParameterChoices, context: PanelContext): ParameterSection {
+  const keys = sectionKeys.ball;
+  if (keys === undefined) throw new Error('No section fields for the ball.');
+  const chosen = choices[keys.choice];
+  const interval = context.sectionRanges?.[keys.offset];
+  const offset: NumericField = {
+    type: 'number',
+    key: keys.offset,
+    label: 'Зміщення від центра',
+    suffix: '% r',
+    range: interval === undefined || interval === null ? undefined : percentRange(interval, SECTION_PERCENT_INCREMENT),
+  };
+  return section(
+    'ball-section',
+    'Переріз',
+    [
+      {
+        type: 'choice',
+        key: keys.choice,
+        label: 'Тип перерізу',
+        options: [
+          { value: 'none', label: sectionNames.none },
+          { value: 'horizontal', label: sectionNames.horizontal },
+        ],
+      },
+      ...(chosen === 'horizontal' ? [offset, { type: 'toggle' as const, key: keys.separated, label: 'Розсунути частини' }] : []),
+    ],
+    {
+      initiallyOpen: false,
+      help: chosen === 'horizontal' ? ballSectionHelp : undefined,
+      status: { text: chosen === 'none' ? 'немає' : sectionNames[chosen].toLowerCase(), highlighted: chosen !== 'none' },
+    },
+  );
+}
+
 function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, context: PanelContext): ParameterSection {
-  const keys = sectionKeys[kind];
+  const keys = sectionKeys[kind] as PlanarSectionKeys | undefined;
   if (keys === undefined) throw new Error(`No section fields for ${kind}.`);
   const chosen = choices[keys.choice];
   // A cone has one base to be parallel to.
@@ -980,6 +1057,7 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
   const throughApex = kind === 'cone' && choices.coneObliqueThrough === 'apex';
   const details: Record<SectionChoice, ParameterField[]> = {
     none: [],
+    horizontal: [],
     'parallel-to-bases': [
       {
         type: 'number',
@@ -1037,6 +1115,7 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
   };
   const help: Record<SectionChoice, Help | undefined> = {
     none: undefined,
+    horizontal: undefined,
     'parallel-to-bases': kind === 'cone' ? coneSectionHelp : parallelSectionHelp,
     vertical: kind === 'cone' ? coneVerticalSectionHelp : verticalSectionHelp,
     oblique: kind === 'cone' ? (throughApex ? coneApexSectionHelp : coneObliqueSectionHelp) : obliqueSectionHelp,
@@ -1056,8 +1135,13 @@ export function shapePanel(kind: ShapeKind, choices: ParameterChoices, context: 
     case 'octahedron':
     case 'icosahedron':
     case 'dodecahedron':
-    case 'ball':
       return { type: 'fixed', note: fixedNotes[kind] };
+    case 'ball':
+      return {
+        type: 'parameters',
+        note: BALL_NOTE,
+        sections: [ballPlaneSection(choices, context), ...connectorSection(kind, choices, context)],
+      };
     case 'cuboid':
       return {
         type: 'parameters',
