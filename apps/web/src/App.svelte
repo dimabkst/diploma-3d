@@ -157,6 +157,7 @@ const separated = $derived(selectedKind !== undefined && partsSeparated(selected
 // The model shown for a connector that does not fit is the plain cut, which nobody asked to print.
 const canDownload = $derived(model.status === 'ready' && request?.connectorStatus?.unavailable === undefined);
 const pinsFile = $derived(model.status === 'ready' && model.key === requestKey ? model.artifacts.pinsFile : undefined);
+const trialFile = $derived(model.status === 'ready' && model.key === requestKey ? model.artifacts.trialFile : undefined);
 
 function withStoredPrintSize() {
   const stored = loadPrintSizeText();
@@ -201,6 +202,10 @@ function commitRoundEdit() {
 function runPanelAction(action: PanelAction) {
   if (action === 'download-pins') {
     if (pinsFile !== undefined) saveFile(pinsFile.bytes, pinsFile.fileName, THREE_MF_MEDIA_TYPE);
+    return;
+  }
+  if (action === 'download-trial') {
+    if (trialFile !== undefined) saveFile(trialFile.bytes, trialFile.fileName, THREE_MF_MEDIA_TYPE);
     return;
   }
   const key = selectedKind === undefined ? undefined : sectionKeys[selectedKind]?.connector;
@@ -303,6 +308,7 @@ function downloadPrintFile() {
         onreset={resetParameters}
         ontiltmode={changeTiltMode}
         pinsReady={pinsFile !== undefined}
+        trialReady={trialFile !== undefined}
         onaction={runPanelAction}
         onroundedit={commitRoundEdit}
       />

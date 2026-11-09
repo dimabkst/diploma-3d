@@ -3,7 +3,7 @@ import type { HTMLSelectAttributes } from 'svelte/elements';
 
 type Props = Omit<HTMLSelectAttributes, 'class' | 'value' | 'children'> & {
   value: Value;
-  options: readonly { readonly value: Value; readonly label: string }[];
+  options: readonly { readonly value: Value; readonly label: string; readonly disabled?: boolean | undefined }[];
 };
 
 let { value = $bindable(), options, ...rest }: Props = $props();
@@ -12,7 +12,7 @@ let { value = $bindable(), options, ...rest }: Props = $props();
 <!-- A native select: keyboard operation and the platform popup are kept; only the closed control is themed. -->
 <select {...rest} class="select" bind:value>
   {#each options as option (option.value)}
-    <option value={option.value}>{option.label}</option>
+    <option value={option.value} disabled={option.disabled}>{option.label}</option>
   {/each}
 </select>
 

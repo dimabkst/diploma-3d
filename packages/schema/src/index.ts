@@ -93,6 +93,7 @@ export {
   DEFAULT_ROUND_CONNECTOR,
   DEFAULT_SECTION_OFFSET_PERCENT,
   DEFAULT_SECTION_POSITION_PERCENT,
+  DEFAULT_TWIST,
   DIAMETRAL_CLEARANCE_LIMITS,
   DOVETAIL_CLEARANCE_LIMITS,
   type DovetailConnector,
@@ -118,6 +119,10 @@ export {
   sectionOffsetSchema,
   sectionPositionSchema,
   sectionSchema,
+  TWIST_AXIAL_CLEARANCE_LIMITS,
+  TWIST_CLEARANCE_LIMITS,
+  type TwistConnector,
+  twistConnectorSchema,
   type VerticalSection,
   verticalSectionSchema,
 } from './section.ts';

@@ -1,13 +1,30 @@
 import type { ModelSpecInput } from '@diploma-3d/schema';
 import { obliqueAxes } from './connectors/frame.ts';
 import type { RoundConnectorPlan } from './connectors/round.ts';
+import {
+  buildTwistTrial,
+  TWIST_TRAVEL_DEG,
+  TWIST_TRIAL_FRAME,
+  type TwistLayout,
+  type TwistPlan,
+  verifyTwist,
+} from './connectors/twist.ts';
 import { createPreviewGlb, type PreviewObject } from './export/glb.ts';
 import { arrangeInRow, restOnFlatFace, rotateHalfTurn, rotateOntoZ } from './export/layout.ts';
 import type { ThreeMfObject } from './export/three-mf.ts';
 import { createThreeMf } from './export/three-mf.ts';
 import type { GeometryKernel } from './kernel.ts';
-import { type Vec3, vertexAt, vertexCount } from './mesh.ts';
+import {
+  assertValidSolidMesh,
+  collapseRoundingSlivers,
+  meshFromManifold,
+  triangleCount,
+  type Vec3,
+  vertexAt,
+  vertexCount,
+} from './mesh.ts';
 import { type GeneratedModel, generateModel, type Solid } from './model.ts';
+import { withScope } from './scope.ts';
 import { roundDimensionsMm } from './shapes/round.ts';
 
 export interface ModelArtifacts {
@@ -25,6 +42,11 @@ export interface ModelArtifacts {
    * that a replacement has the exact size of the assembly's own; nothing fits them to the model's longest dimension.
    */
   readonly pinsFile?: PrintFile;
+  /**
+   * With a twist connector only: two low holders around the same male and recess, for trying the fit before printing the model.
+   * Built by the same builders from the same millimetres; nothing fits them to the model's longest dimension.
+   */
+  readonly trialFile?: PrintFile;
 }
 
 export interface PrintFile {
@@ -55,19 +77,58 @@ export async function buildModelArtifacts(kernel: GeometryKernel, spec: ModelSpe
   const model = generateModel(kernel, spec);
   const oriented = printOrientation(model);
   // An uncut solid stays where it was built; the parts of a section lie in a row.
-  const objects = model.solids.length === 1 ? oriented : arrangeInRow(oriented);
+  const objects = model.solids.length === 1 ? oriented : withoutRoundingSlivers(model, arrangeInRow(oriented));
   const printFile = { fileName: `${model.name}.3mf`, bytes: createThreeMf(objects, { title: model.name }) };
   const previewGlb = await createPreviewGlb(previewObjects(model, 0));
   if (model.section === undefined) return { model, previewGlb, printFile };
   const separatedPreviewGlb = await createPreviewGlb(previewObjects(model, previewSeparation(model)));
   const pins = oriented.filter((object) => object.part === 'dowel');
   const connector = model.section.connector;
+  if (connector?.type === 'twist') {
+    return { model, previewGlb, separatedPreviewGlb, printFile, trialFile: twistTrialFile(kernel, connector) };
+  }
   if (pins.length === 0 || connector === undefined || connector.type === 'dovetail') {
     return { model, previewGlb, separatedPreviewGlb, printFile };
   }
   const pinsName = pinsFileName(connector);
   const pinsFile = { fileName: `${pinsName}.3mf`, bytes: createThreeMf(arrangeInRow(pins), { title: pinsName }) };
   return { model, previewGlb, separatedPreviewGlb, printFile, pinsFile };
+}
+
+/**
+ * A twist connector's small features, moved far along the plate in a large model's row, may round to slivers in float32 that they
+ * did not have where they were built.
+ */
+const withoutRoundingSlivers = ({ section }: GeneratedModel, objects: readonly ThreeMfObject[]): readonly ThreeMfObject[] =>
+  section?.connector?.type === 'twist' ? objects.map(collapsed) : objects;
+
+const collapsed = <T extends ThreeMfObject>(object: T): T => ({
+  ...object,
+  mesh: collapseRoundingSlivers({ mesh: object.mesh, newFaces: new Uint8Array(triangleCount(object.mesh)) }).mesh,
+});
+
+/** What a trial must identify: its size and both clearances, e.g. "twist-trial-S14-d0.5-a0.2mm". */
+export function twistTrialFileName({ size, holeClearance, axialClearance }: TwistLayout): string {
+  return `twist-trial-S${fileMillimetres(size)}-d${fileMillimetres(holeClearance)}-a${fileMillimetres(axialClearance)}mm`;
+}
+
+/**
+ * The trial holders in the model's print orientation, the male upwards and the recess's mouth on the bed. They pass the same 3D
+ * checks as the model's parts, within their own surroundings.
+ */
+function twistTrialFile(kernel: GeometryKernel, { layout }: TwistPlan): PrintFile {
+  const objects = withScope((track) => {
+    const { male, female, whole } = buildTwistTrial(kernel, track, layout);
+    verifyTwist(kernel, track, whole, { lower: male, upper: female }, { frame: TWIST_TRIAL_FRAME, layout });
+    return [
+      { name: 'twist-trial-male', mesh: meshFromManifold(male) },
+      { name: 'twist-trial-female', mesh: meshFromManifold(female) },
+    ];
+  });
+  const arranged = arrangeInRow(objects).map(collapsed);
+  for (const { mesh } of arranged) assertValidSolidMesh(mesh);
+  const name = twistTrialFileName(layout);
+  return { fileName: `${name}.3mf`, bytes: createThreeMf(arranged, { title: name }) };
 }
 
 /** Millimetres for a file name: thousandths at most, with a point, and no trailing zeros. */
@@ -118,6 +179,12 @@ export function previewSeparation({ solids, section, size }: GeneratedModel): nu
 function previewObjects({ solids, section }: GeneratedModel, gap: number): PreviewObject[] {
   if (section === undefined || gap === 0) return [...solids];
   const { connector, plane, type } = section;
+  if (connector?.type === 'twist') {
+    // Locked lugs cannot be pulled through their ledges: the upper part is shown turned to where it comes off, and withdrawn.
+    const displayOffset = scaled(plane.normal, gap);
+    const displayTurn = { angleDeg: -TWIST_TRAVEL_DEG, axis: connector.frame.n, pivot: connector.frame.origin };
+    return solids.map((solid) => (onPositiveSide(solid) ? { ...solid, displayOffset, displayTurn } : solid));
+  }
   const sliding = connector?.type === 'dovetail' ? connector : undefined;
   const tongueMoves = sliding !== undefined && type !== 'parallel-to-bases' && type !== 'horizontal';
   const direction = sliding === undefined ? plane.normal : tongueMoves ? scaled(sliding.frame.u, -1) : sliding.frame.u;
@@ -176,6 +243,8 @@ function printOrientation({ solids, section, spec }: GeneratedModel): readonly (
   const { u, n } = connector.frame;
   return solids.map((solid) => {
     if (solid.part === 'dowel') return { ...solid, mesh: rotateOntoZ(solid.mesh, n) };
-    return solid.part === 'upper' && spec.shape.kind !== 'cone' ? { ...solid, mesh: rotateHalfTurn(solid.mesh, u) } : solid;
+    // A twist connector's recess is made for its mouth on the bed: the ledges are the first layers, the roof slopes at 45°.
+    const turnsOver = solid.part === 'upper' && spec.shape.kind !== 'cone' && connector.type !== 'twist';
+    return turnsOver ? { ...solid, mesh: rotateHalfTurn(solid.mesh, u) } : solid;
   });
 }

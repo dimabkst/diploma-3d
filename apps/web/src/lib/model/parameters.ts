@@ -9,11 +9,13 @@ import {
   cutOfSection,
   type DovetailIssue,
   defaultRoundConnector,
+  defaultTwist,
   dovetailFeasibility,
   hasFeasibleValues,
   type Interval,
   isApexChordUsable,
   normalizeRoundConnector,
+  normalizeTwist,
   obliquePlaneContainsAxis,
   obliqueSplitReach,
   type ParameterBounds,
@@ -27,6 +29,10 @@ import {
   type SectionedShape,
   satisfies,
   sectionOffsetMm,
+  type TwistIssue,
+  type TwistOutcome,
+  twistFeasibility,
+  twistSupported,
   verticalOffsetLimitPercent,
 } from '@diploma-3d/engine';
 import {
@@ -51,6 +57,7 @@ import {
   DEFAULT_SECTION_POSITION_PERCENT,
   DEFAULT_TRAPEZOID_BASE,
   DEFAULT_TRIANGLE_BASE,
+  DEFAULT_TWIST,
   DIAMETRAL_CLEARANCE_LIMITS,
   DOVETAIL_CLEARANCE_LIMITS,
   defaultModelSpecs,
@@ -83,6 +90,9 @@ import {
   type ShapeKind,
   sectionPositionSchema,
   TILT_OFFSET_LIMITS,
+  TWIST_AXIAL_CLEARANCE_LIMITS,
+  TWIST_CLEARANCE_LIMITS,
+  type TwistConnector,
 } from '@diploma-3d/schema';
 import { formatDecimal, formatSteppedDecimal, halfSumDecimal, parseDecimal, snapDecimal } from '../decimal.ts';
 import {
@@ -170,6 +180,9 @@ export type ParameterKey =
   | 'cylinderPlugClearanceMm'
   | 'cylinderDowelLowerClearanceMm'
   | 'cylinderDowelUpperClearanceMm'
+  | 'cylinderTwistSizeMm'
+  | 'cylinderTwistClearanceMm'
+  | 'cylinderTwistAxialMm'
   | 'coneHeightRatio'
   | 'coneOffsetRatio'
   | 'coneInclinationDeg'
@@ -306,6 +319,9 @@ export type ModelRequest = {
   readonly connectorStatus?: ConnectorStatus | undefined;
 } & ({ readonly spec: ModelSpec; readonly key: string } | { readonly spec: undefined; readonly key: undefined });
 
+/** A twist connector's stored size before anything fits it to a section: only a request without edits reads it. */
+const TWIST_PLACEHOLDER_SIZE_MM = 18;
+
 /** The texts every field starts with, and returns to on reset: the single source of the defaults in the interface. */
 export const initialParameterTexts = (): ParameterTexts => ({
   printSizeMm: formatDecimal(DEFAULT_LONGEST_DIMENSION_MM),
@@ -360,6 +376,9 @@ export const initialParameterTexts = (): ParameterTexts => ({
   cylinderPlugClearanceMm: formatDecimal(DEFAULT_PLUG_CLEARANCE_MM),
   cylinderDowelLowerClearanceMm: formatDecimal(DEFAULT_DOWEL_CLEARANCES_MM.lower),
   cylinderDowelUpperClearanceMm: formatDecimal(DEFAULT_DOWEL_CLEARANCES_MM.upper),
+  cylinderTwistSizeMm: formatDecimal(TWIST_PLACEHOLDER_SIZE_MM),
+  cylinderTwistClearanceMm: formatDecimal(DEFAULT_TWIST.holeClearanceMm),
+  cylinderTwistAxialMm: formatDecimal(DEFAULT_TWIST.axialClearanceMm),
   coneSectionPercent: formatDecimal(DEFAULT_SECTION_POSITION_PERCENT),
   coneSectionOffsetPercent: formatDecimal(DEFAULT_SECTION_OFFSET_PERCENT),
   coneObliquePositionPercent: formatDecimal(DEFAULT_OBLIQUE_SECTION.positionPercent),
@@ -578,6 +597,11 @@ const validators: Readonly<Record<IndependentKey, (text: string, exact?: number)
   cylinderPlugClearanceMm: validateDiametralClearance,
   cylinderDowelLowerClearanceMm: validateDiametralClearance,
   cylinderDowelUpperClearanceMm: validateDiametralClearance,
+  cylinderTwistSizeMm: validateConnectorDimension,
+  cylinderTwistClearanceMm: (text, exact) =>
+    validateNumber(text, inclusiveRange(TWIST_CLEARANCE_LIMITS), TWIST_CLEARANCE_LIMITS, '0,5', ' мм', exact),
+  cylinderTwistAxialMm: (text, exact) =>
+    validateNumber(text, inclusiveRange(TWIST_AXIAL_CLEARANCE_LIMITS), TWIST_AXIAL_CLEARANCE_LIMITS, '0,2', ' мм', exact),
   coneSectionPercent: validateSectionPosition,
   coneSectionOffsetPercent: validateSectionOffset,
   coneObliquePositionPercent: validateSectionPosition,
@@ -763,7 +787,9 @@ export function resolveModelRequest(
     }
   }
   const sectionRanges = checked?.ranges;
-  const connectorStatus = checked?.resolved?.status;
+  const connectorStatus = twistElsewhere(kind, choices, resolved.shape)
+    ? { context: '', corrections: [], unavailable: TWIST_UNSUPPORTED_MESSAGE }
+    : checked?.resolved?.status;
   Object.assign(values, checked?.resolved?.values);
   if (Object.keys(errors).length > 0) {
     return { values, errors, sectionRanges, connectorStatus, spec: undefined, key: undefined };
@@ -779,12 +805,39 @@ export function resolveModelRequest(
   return { values, errors, sectionRanges, connectorStatus, spec, key };
 }
 
+/** Why the twist connector is not offered here, for a choice made before the solid or the cut changed. */
+export const TWIST_UNSUPPORTED_MESSAGE =
+  'Поворотне з’єднання поки доступне лише для прямого циліндра з перерізом, паралельним основам. Завантаження вимкнено: змініть ' +
+  'тіло чи переріз або оберіть «Без кріплення».';
+
+/** Whether the solid and the cut are those the twist connector works for; the solid's own values count once they are valid. */
+function twistFits(kind: ShapeKind, type: SectionType | undefined, shape: ShapeInput | undefined): boolean {
+  if (kind !== 'cylinder' || type !== 'parallel-to-bases') return false;
+  return shape?.kind !== 'cylinder' || twistSupported(shape as SectionedShape, 0);
+}
+
+/** Whether the twist connector can be offered now. */
+export const twistAvailable = (kind: ShapeKind, choices: ParameterChoices, values: ParameterValues): boolean =>
+  twistFits(
+    kind,
+    activeSection(kind, choices),
+    kind !== 'cylinder' || values.cylinderOffsetRatio === undefined
+      ? undefined
+      : { kind: 'cylinder', heightRatio: values.cylinderHeightRatio ?? 1, offsetRatio: values.cylinderOffsetRatio },
+  );
+
+/** A twist connector chosen where it does not work: the model is then the plain cut, not offered for download. */
+const twistElsewhere = (kind: ShapeKind, choices: ParameterChoices, shape: ShapeInput | undefined): boolean =>
+  activeConnector(kind, choices) === 'twist' && !twistFits(kind, activeSection(kind, choices), shape);
+
 // Feasibility depends only on the solid, the size, the cut and the connector; the panel and the request read it for every
 // edit of any field, so recent results are kept.
 const FEASIBILITY_CACHE_SIZE = 32;
 const feasibilityCache = new Map<
   string,
-  ConnectorFeasibility<string, DovetailIssue> | ConnectorFeasibility<string, RoundConnectorIssue>
+  | ConnectorFeasibility<string, DovetailIssue>
+  | ConnectorFeasibility<string, RoundConnectorIssue>
+  | ConnectorFeasibility<string, TwistIssue>
 >();
 
 function cachedFeasibility(shape: SectionedShape, longestDimensionMm: number, section: Section) {
@@ -798,7 +851,9 @@ function cachedFeasibility(shape: SectionedShape, longestDimensionMm: number, se
   const result =
     connector.type === 'dovetail'
       ? dovetailFeasibility(shape, scale, cut, connector)
-      : roundConnectorFeasibility(shape, scale, cut, connector);
+      : connector.type === 'twist'
+        ? twistFeasibility(shape, scale, cut, connector)
+        : roundConnectorFeasibility(shape, scale, cut, connector);
   if (feasibilityCache.size >= FEASIBILITY_CACHE_SIZE) feasibilityCache.delete(feasibilityCache.keys().next().value as string);
   feasibilityCache.set(key, result);
   return result;
@@ -908,6 +963,7 @@ function resolveRound(
 ): RoundResolution | undefined {
   const { connector } = section;
   if (edits === undefined || connector === undefined || connector.type === 'dovetail') return undefined;
+  if (connector.type === 'twist') return resolveTwist(shape, longestDimensionMm, section, connector, edits);
   const { type, count, profile } = connector;
   const context = JSON.stringify([shape, longestDimensionMm, cutOfSection(section), type, profile, count]);
   const edited = edits[shape.kind];
@@ -932,6 +988,80 @@ function resolveRound(
       [round.depth]: actual.depthFactor,
       ...(actual.spacingPercent === undefined ? {} : { [round.spacing]: actual.spacingPercent }),
     },
+    section: { ...section, connector: actual },
+  };
+}
+
+const twistOutcomeCache = new Map<string, TwistOutcome>();
+
+/** What a twist connector's correction blames, from what failed at the stored size. */
+function twistCorrectionReason(issues: readonly TwistIssue[]): string {
+  const codes = issues.map(({ code }) => code);
+  if (codes.includes('recess-roof-thin') || codes.includes('base-thin')) return 'через товщину частини';
+  if (codes.includes('recess-wall-thin')) return 'через стінку навколо гнізда';
+  return 'щоб вушка лишалися придатними';
+}
+
+/** Why no usable twist connector fits, from what falls short at its smallest printable size, and the ways on. */
+function twistUnavailableMessage(issues: readonly TwistIssue[]): string {
+  const issue = issues.find(({ code }) => code.startsWith('recess') || code === 'base-thin') ?? issues[0];
+  const shortfall =
+    issue === undefined ? '' : `${millimetres(issue.valueMm)}, потрібно щонайменше ${millimetres(issue.minimumMm)}`;
+  const what: Partial<Record<TwistIssue['code'], string>> = {
+    'recess-roof-thin': `над гніздом лишається ${shortfall}`,
+    'recess-wall-thin': `стінка навколо гнізда — ${shortfall}`,
+    'base-thin': `під кріпленням лишається ${shortfall}`,
+  };
+  const reason = issue === undefined ? undefined : what[issue.code];
+  return (
+    `Поворотне з’єднання не вміщується${reason === undefined ? '' : `: ${reason}`}. Змініть переріз або розмір моделі, зменште ` +
+    'зазори чи оберіть «Без кріплення». Доти завантаження вимкнено.'
+  );
+}
+
+/**
+ * As for plugs and dowels: a new connector's size from the section and the clearances, an edited one as it is in the context
+ * of its last edit, and otherwise corrected if it must be, without overwriting what is stored.
+ */
+function resolveTwist(
+  shape: SectionedShape,
+  longestDimensionMm: number,
+  section: Section,
+  connector: TwistConnector,
+  edits: ConnectorEdits,
+): RoundResolution {
+  const cut = cutOfSection(section);
+  const context = JSON.stringify([shape, longestDimensionMm, cut, 'twist']);
+  const edited = edits[shape.kind];
+  if (edited === context) return { status: { context, corrections: [] }, values: {}, section };
+  const key = JSON.stringify([edited === undefined, shape, longestDimensionMm, cut, connector]);
+  const outcome =
+    twistOutcomeCache.get(key) ??
+    (edited === undefined ? defaultTwist : normalizeTwist)(shape, { longestDimensionMm }, cut, connector);
+  if (twistOutcomeCache.size >= FEASIBILITY_CACHE_SIZE) twistOutcomeCache.delete(twistOutcomeCache.keys().next().value as string);
+  twistOutcomeCache.set(key, outcome);
+  if (outcome.status === 'unavailable') {
+    const { connector: _none, ...plain } = section;
+    return {
+      status: { context, corrections: [], unavailable: twistUnavailableMessage(outcome.issues) },
+      values: {},
+      section: plain as Section,
+    };
+  }
+  const actual = outcome.connector;
+  const changed = actual.sizeMm !== connector.sizeMm;
+  return {
+    status: {
+      context,
+      corrections:
+        outcome.adjusted && changed
+          ? [
+              `Розмір кріплення ${actual.sizeMm < connector.sizeMm ? 'зменшено' : 'збільшено'} до ` +
+                `${formatMillimetres(actual.sizeMm)} мм ${twistCorrectionReason(outcome.issues)}.`,
+            ]
+          : [],
+    },
+    values: { cylinderTwistSizeMm: actual.sizeMm },
     section: { ...section, connector: actual },
   };
 }
@@ -1097,34 +1227,41 @@ function connectorChecks(
   const { dovetail, round } = keys;
   const wording: CutWording = shape.kind === 'cone' && section.type === 'parallel-to-bases' ? 'cone' : section.type;
   const fields: [ParameterKey, string][] =
-    connector.type === 'dovetail'
+    connector.type === 'twist'
       ? [
-          [dovetail.size, 'height'],
-          [dovetail.length, 'length'],
-          [dovetail.clearance, 'clearance'],
+          ['cylinderTwistSizeMm', 'size'],
+          ['cylinderTwistClearanceMm', 'holeClearance'],
+          ['cylinderTwistAxialMm', 'axialClearance'],
         ]
-      : [
-          [round.diameter, 'diameter'],
-          [round.depth, 'insertion'],
-          ...(connector.count === 2 ? ([[round.spacing, 'spacing']] as [ParameterKey, string][]) : []),
-          ...((connector.type === 'plug'
-            ? [[round.plugClearance, 'upperClearance']]
-            : [
-                [round.dowelLowerClearance, 'lowerClearance'],
-                [round.dowelUpperClearance, 'upperClearance'],
-              ]) as [ParameterKey, string][]),
-        ];
-  const explain = (issue: DovetailIssue | RoundConnectorIssue) =>
+      : connector.type === 'dovetail'
+        ? [
+            [dovetail.size, 'height'],
+            [dovetail.length, 'length'],
+            [dovetail.clearance, 'clearance'],
+          ]
+        : [
+            [round.diameter, 'diameter'],
+            [round.depth, 'insertion'],
+            ...(connector.count === 2 ? ([[round.spacing, 'spacing']] as [ParameterKey, string][]) : []),
+            ...((connector.type === 'plug'
+              ? [[round.plugClearance, 'upperClearance']]
+              : [
+                  [round.dowelLowerClearance, 'lowerClearance'],
+                  [round.dowelUpperClearance, 'upperClearance'],
+                ]) as [ParameterKey, string][]),
+          ];
+  type AnyIssue = DovetailIssue | RoundConnectorIssue | TwistIssue;
+  const explain = (issue: AnyIssue) =>
     connector.type === 'dovetail'
       ? dovetailIssueMessage(issue as DovetailIssue, wording)
-      : roundConnectorIssueMessage(issue as RoundConnectorIssue, connector.type, connector.count, wording, connector.profile);
-  const parameters = feasibility.parameters as Readonly<
-    Record<string, ParameterFeasibility<DovetailIssue | RoundConnectorIssue>>
-  >;
+      : connector.type === 'twist'
+        ? twistIssueMessage(issue as TwistIssue)
+        : roundConnectorIssueMessage(issue as RoundConnectorIssue, connector.type, connector.count, wording, connector.profile);
+  const parameters = feasibility.parameters as Readonly<Record<string, ParameterFeasibility<AnyIssue>>>;
   const errors: ParameterErrors = {};
   const ranges: SectionRanges = {};
   for (const [key, parameter] of fields) {
-    const { bounds, issues } = parameters[parameter] as ParameterFeasibility<DovetailIssue | RoundConnectorIssue>;
+    const { bounds, issues } = parameters[parameter] as ParameterFeasibility<AnyIssue>;
     // The engine solves for the insertion e into one part; the field shows a dowel's whole length 2e.
     const shown = key === round.depth && connector.type === 'dowel' ? 2 : 1;
     ranges[key] = hasFeasibleValues(bounds) ? { min: bounds.min * shown, max: bounds.max * shown } : null;
@@ -1247,6 +1384,33 @@ export function roundConnectorIssueMessage(
   }
 }
 
+/** What falls short in a twist connector, by how much, and what to change; in Ukrainian for the interface. */
+export function twistIssueMessage(issue: TwistIssue): string {
+  const shortfall = `${millimetres(issue.valueMm)}, потрібно щонайменше ${millimetres(issue.minimumMm)}`;
+  switch (issue.code) {
+    case 'lug-too-narrow':
+      return `Вужчі вушка мають ширину ${shortfall}. Збільште розмір кріплення.`;
+    case 'keying-lost':
+      return `Ширше вушко ширше за вузький вхід лише на ${shortfall}, тож частини можна з’єднати не в тому положенні. Зменште зазор або збільште розмір.`;
+    case 'bearing-short':
+      return `Вушко заходить за край гнізда на ${shortfall}. Збільште розмір кріплення або зменште зазор.`;
+    case 'engagement-short':
+      return `Вушко в зібраному положенні відступає від свого входу лише на ${shortfall}. Збільште розмір або зменште зазор.`;
+    case 'neck-too-thin':
+      return `Шийка має діаметр ${shortfall}. Збільште розмір кріплення.`;
+    case 'ledge-thin':
+      return `Виступ під вушками — ${shortfall}. Зменште осьовий зазор.`;
+    case 'rib-thin':
+      return `Між каналами гнізда лишається ${shortfall}. Зменште зазор або збільште розмір.`;
+    case 'recess-wall-thin':
+      return `Стінка навколо гнізда — ${shortfall}. Зменште розмір кріплення.`;
+    case 'recess-roof-thin':
+      return `Над гніздом лишається ${shortfall}. Зменште розмір кріплення або опустіть переріз.`;
+    case 'base-thin':
+      return `Під кріпленням лишається ${shortfall} нижньої частини. Підніміть переріз або збільште найбільший габарит.`;
+  }
+}
+
 /** A measured value, rounded down to hundredths so that it never reads as more than there is. */
 const millimetres = (value: number) => `${formatDecimal(Math.max(0, Math.floor(value * 100) / 100))} мм`;
 
@@ -1316,6 +1480,7 @@ type SectionKeys = {
     readonly dowelLowerClearance: 'cylinderDowelLowerClearanceMm' | 'coneDowelLowerClearanceMm' | 'ballDowelLowerClearanceMm';
     readonly dowelUpperClearance: 'cylinderDowelUpperClearanceMm' | 'coneDowelUpperClearanceMm' | 'ballDowelUpperClearanceMm';
   };
+  readonly twist?: typeof TWIST_KEYS;
 };
 
 /** The further fields of the solids with an axis: a plane parallel to their base and a plane through a point on the axis. */
@@ -1348,6 +1513,7 @@ export const scaledConnectorDefaults: Readonly<Record<ScaledConnectorKey, number
   cylinderRoundDiameter: DEFAULT_ROUND_CONNECTOR.diameterFactor,
   cylinderRoundDepth: DEFAULT_ROUND_CONNECTOR.depthFactor,
   cylinderRoundSpacingPercent: DEFAULT_ROUND_CONNECTOR.spacingPercent,
+  cylinderTwistSizeMm: TWIST_PLACEHOLDER_SIZE_MM,
   ballDovetailSize: DEFAULT_DOVETAIL.sizeFactor,
   ballDovetailLengthPercent: DEFAULT_DOVETAIL.lengthPercent,
   ballRoundDiameter: DEFAULT_ROUND_CONNECTOR.diameterFactor,
@@ -1370,6 +1536,13 @@ function scaledError(key: ScaledConnectorKey, text: string, unit: number): strin
 
 /** The fields of a plane through a cone's apex, kept apart from those of a plane through a point on its axis. */
 export const coneApexKeys = { inclination: 'coneApexInclinationDeg', direction: 'coneApexDirectionDeg' } as const;
+
+/** A cylinder's twist connector fields, in the panel's order; no other solid offers one yet. */
+export const TWIST_KEYS = [
+  'cylinderTwistSizeMm',
+  'cylinderTwistClearanceMm',
+  'cylinderTwistAxialMm',
+] as const satisfies readonly ParameterKey[];
 
 /** The fields of the plane section and its connector, for the shapes that offer one. */
 export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys | PlanarSectionKeys>>> = {
@@ -1405,6 +1578,7 @@ export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys | Plana
     },
     separated: 'cylinderPartsSeparated',
     connector: 'cylinderConnector',
+    twist: TWIST_KEYS,
     dovetail: {
       size: 'cylinderDovetailSize',
       length: 'cylinderDovetailLengthPercent',
@@ -1451,7 +1625,7 @@ export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys | Plana
 };
 
 /** Every connector field of the section. */
-const connectorTextKeys = ({ dovetail, round }: SectionKeys): ParameterKey[] => [
+const connectorTextKeys = ({ dovetail, round, twist }: SectionKeys): ParameterKey[] => [
   ...Object.values(dovetail),
   round.spacing,
   round.diameter,
@@ -1459,6 +1633,7 @@ const connectorTextKeys = ({ dovetail, round }: SectionKeys): ParameterKey[] => 
   round.plugClearance,
   round.dowelLowerClearance,
   round.dowelUpperClearance,
+  ...(twist ?? []),
 ];
 
 /**
@@ -1472,6 +1647,8 @@ export function activeConnectorKeys(keys: SectionKeys, connector: ConnectorType 
       return [];
     case 'dovetail':
       return Object.values(keys.dovetail);
+    case 'twist':
+      return [...(keys.twist ?? [])];
     case 'plug':
     case 'dowel':
       return [
@@ -1527,7 +1704,9 @@ function resolveSection(
   if (keys === undefined || type === undefined) return { values: {}, errors: {}, section: 'none' };
   const connectorType = activeConnector(kind, choices);
   const count = choices[keys.round.count];
-  const fields = activeConnectorKeys(keys, connectorType, count) as IndependentKey[];
+  // A twist connector where it does not work reads no fields of its own, whose hidden drafts then block nothing.
+  const inert = connectorType === 'twist' && !twistFits(kind, type, shape);
+  const fields = (inert ? [] : activeConnectorKeys(keys, connectorType, count)) as IndependentKey[];
   // A plane parallel to the bases has a position along the height, a vertical one a distance from the axis, an oblique
   // one a point on the axis and two angles, a plane through an apex those angles alone.
   const planar = 'position' in keys ? (keys as PlanarSectionKeys) : undefined;
@@ -1571,24 +1750,32 @@ function resolveSection(
     depthFactor: read(round.depth),
     ...(count === 2 ? { spacingPercent: read(round.spacing) } : {}),
   };
-  const connector =
-    connectorType === 'dovetail'
+  const connector = inert
+    ? undefined
+    : connectorType === 'twist'
       ? {
           type: connectorType,
-          sizeFactor: read(dovetail.size),
-          lengthPercent: read(dovetail.length),
-          clearanceMm: read(dovetail.clearance),
+          sizeMm: read('cylinderTwistSizeMm'),
+          holeClearanceMm: read('cylinderTwistClearanceMm'),
+          axialClearanceMm: read('cylinderTwistAxialMm'),
         }
-      : connectorType === 'plug'
-        ? { type: connectorType, ...shared, holeClearanceMm: read(round.plugClearance) }
-        : connectorType === 'dowel'
-          ? {
-              type: connectorType,
-              ...shared,
-              lowerClearanceMm: read(round.dowelLowerClearance),
-              upperClearanceMm: read(round.dowelUpperClearance),
-            }
-          : undefined;
+      : connectorType === 'dovetail'
+        ? {
+            type: connectorType,
+            sizeFactor: read(dovetail.size),
+            lengthPercent: read(dovetail.length),
+            clearanceMm: read(dovetail.clearance),
+          }
+        : connectorType === 'plug'
+          ? { type: connectorType, ...shared, holeClearanceMm: read(round.plugClearance) }
+          : connectorType === 'dowel'
+            ? {
+                type: connectorType,
+                ...shared,
+                lowerClearanceMm: read(round.dowelLowerClearance),
+                upperClearanceMm: read(round.dowelUpperClearance),
+              }
+            : undefined;
   const joining = connector === undefined ? {} : { connector };
   const sectionOf = (): Section => {
     switch (type) {
@@ -1834,6 +2021,7 @@ export const shapeParameterKeys: Readonly<
       'cylinderPlugClearanceMm',
       'cylinderDowelLowerClearanceMm',
       'cylinderDowelUpperClearanceMm',
+      ...TWIST_KEYS,
     ],
     choices: ['cylinderSection', 'cylinderPartsSeparated', 'cylinderConnector', 'cylinderRoundCount', 'cylinderRoundProfile'],
   },
@@ -1903,14 +2091,17 @@ export function commitConnectorEdit(kind: ShapeKind, state: ParameterState, requ
   const keys = sectionKeys[kind];
   const status = request?.connectorStatus;
   const type = activeConnector(kind, state.choices);
-  if (keys === undefined || (type !== 'plug' && type !== 'dowel') || status?.unavailable !== undefined) return state;
+  const fitted = type === 'plug' || type === 'dowel' || type === 'twist';
+  if (keys === undefined || !fitted || status?.unavailable !== undefined) return state;
   const current = state.connectorEdits?.[kind];
   // While the plane or another value is not valid there is no context yet: an empty one matches none later.
   if (status === undefined)
     return current === undefined ? { ...state, connectorEdits: { ...state.connectorEdits, [kind]: '' } } : state;
   if (current === status.context) return state;
   const texts = { ...state.texts };
-  for (const key of [keys.round.diameter, keys.round.depth, keys.round.spacing]) {
+  const generated: readonly ParameterKey[] =
+    type === 'twist' ? ['cylinderTwistSizeMm'] : [keys.round.diameter, keys.round.depth, keys.round.spacing];
+  for (const key of generated) {
     const value = request?.values[key];
     if (value !== undefined) texts[key] = formatSteppedDecimal(value);
   }
@@ -1991,7 +2182,8 @@ export function canResetShapeParameters(kind: ShapeKind, state: ParameterState):
   const reset = resetShapeParameters(kind, state);
   const inactive = new Set<string>([...inactiveTiltKeys(kind, state), ...inactiveSectionKeys(kind, state.choices)]);
   const connector = activeConnector(kind, state.choices);
-  const editedConnector = (connector === 'plug' || connector === 'dowel') && state.connectorEdits?.[kind] !== undefined;
+  const fitted = connector === 'plug' || connector === 'dowel' || connector === 'twist';
+  const editedConnector = fitted && state.connectorEdits?.[kind] !== undefined;
   return (
     editedConnector ||
     shapeParameterKeys[kind].texts.some((key) => !inactive.has(key) && reset.texts[key] !== state.texts[key]) ||

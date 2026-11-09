@@ -16,7 +16,10 @@ import {
 } from './connectorScale.ts';
 import { scaledConnectorDefaults } from './parameters.ts';
 
-const scaledKeys = Object.keys(scaledConnectorDefaults) as (keyof typeof scaledConnectorDefaults)[];
+// A twist connector's size is stored in millimetres: its field is shown like the others, but scales with nothing.
+const scaledKeys = (Object.keys(scaledConnectorDefaults) as (keyof typeof scaledConnectorDefaults)[]).filter(
+  (key) => key !== 'cylinderTwistSizeMm',
+);
 
 const scaleOf = (printSizeMm: number, cylinderHeightRatio = 2, cylinderOffsetRatio = 0) => {
   const scale = cylinderConnectorScale({ printSizeMm, cylinderHeightRatio, cylinderOffsetRatio });

@@ -37,6 +37,8 @@ export interface PreviewObject {
    * apart. The mesh keeps the exported positions.
    */
   readonly displayOffset?: Vec3;
+  /** A turn about a line, also of the node only, applied before `displayOffset`; the mesh keeps the exported positions. */
+  readonly displayTurn?: { readonly angleDeg: number; readonly axis: Vec3; readonly pivot: Vec3 };
 }
 
 export const GLB_MEDIA_TYPE = 'model/gltf-binary';
@@ -145,12 +147,45 @@ export async function createPreviewGlb(objects: readonly PreviewObject[]): Promi
       );
     }
     const node = document.createNode(object.name).setMesh(mesh);
-    if (object.displayOffset !== undefined) node.setTranslation([...toGltfPosition(object.displayOffset)]);
+    const offset = toGltfPosition(object.displayOffset ?? [0, 0, 0]);
+    if (object.displayTurn === undefined) {
+      if (object.displayOffset !== undefined) node.setTranslation([...offset]);
+    } else {
+      const { rotation, translation } = turnAboutLine(object.displayTurn);
+      node.setRotation(rotation);
+      node.setTranslation([translation[0] + offset[0], translation[1] + offset[1], translation[2] + offset[2]]);
+    }
     scene.addChild(node);
   }
 
   // glTF-Transform allocates a regular ArrayBuffer; its typings predate the ArrayBuffer type parameter.
   return (await new WebIO().writeBinary(document)) as Uint8Array<ArrayBuffer>;
+}
+
+/**
+ * The node's rotation and translation for a turn about a line in Z-up millimetres. The conversion to glTF is a proper rotation,
+ * so it keeps the angle's sign about the converted axis. A node maps p ↦ R·p + t, and p ↦ R·(p − c) + c needs t = c − R·c, with
+ * R·c = c·cosθ + (a × c)·sinθ + a·(a·c)(1 − cosθ).
+ */
+function turnAboutLine({ angleDeg, axis, pivot }: NonNullable<PreviewObject['displayTurn']>) {
+  const half = (angleDeg * Math.PI) / 360;
+  const unit = toGltfDirection(axis);
+  const rotation: [number, number, number, number] = [
+    unit[0] * Math.sin(half),
+    unit[1] * Math.sin(half),
+    unit[2] * Math.sin(half),
+    Math.cos(half),
+  ];
+  const centre = toGltfPosition(pivot);
+  const [cos, sin] = [Math.cos(2 * half), Math.sin(2 * half)];
+  const across = cross(unit, centre);
+  const along = dot(unit, centre) * (1 - cos);
+  const translation = [0, 1, 2].map(
+    (index) =>
+      (centre[index] as number) -
+      ((centre[index] as number) * cos + (across[index] as number) * sin + (unit[index] as number) * along),
+  ) as unknown as Vec3;
+  return { rotation, translation };
 }
 
 type ShadedTriangles = { positions: Float32Array<ArrayBuffer>; normals: Float32Array<ArrayBuffer> };

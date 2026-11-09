@@ -4,6 +4,7 @@ import {
   ROUND_CONNECTOR_PROPORTIONS,
   ROUND_CONNECTOR_STEPS_MM,
   type TrapezoidKind,
+  TWIST_STEPS_MM,
   trapezoidKind,
 } from '@diploma-3d/engine';
 import {
@@ -28,6 +29,8 @@ import {
   SECTION_POSITION_LIMITS,
   type SectionType,
   type ShapeKind,
+  TWIST_AXIAL_CLEARANCE_LIMITS,
+  TWIST_CLEARANCE_LIMITS,
 } from '@diploma-3d/schema';
 import { formatDecimal, type StepRange } from './decimal.ts';
 import {
@@ -54,6 +57,8 @@ import {
   type SectionRanges,
   sectionKeys,
   type ToggleKey,
+  TWIST_UNSUPPORTED_MESSAGE,
+  twistAvailable,
 } from './model/parameters.ts';
 import {
   DIRECTION_LIMITS,
@@ -111,7 +116,12 @@ export type ChoiceField = {
   readonly type: 'choice';
   readonly key: ChoiceKey;
   readonly label: string;
-  readonly options: readonly { readonly value: ParameterChoices[ChoiceKey]; readonly label: string }[];
+  readonly options: readonly {
+    readonly value: ParameterChoices[ChoiceKey];
+    readonly label: string;
+    /** Listed, but not to be chosen now; a note among the fields says why. */
+    readonly disabled?: boolean;
+  }[];
 };
 
 /** A switch, such as whether the preview moves the parts of a section apart. */
@@ -172,7 +182,7 @@ export type ActionField = {
   readonly action: PanelAction;
 };
 
-export type PanelAction = 'download-pins' | 'choose-no-connector';
+export type PanelAction = 'download-pins' | 'download-trial' | 'choose-no-connector';
 
 export type ParameterField = NumericField | ChoiceField | ToggleField | NoteField | ActionField | TiltGroup | TrapezoidGroup;
 
@@ -670,6 +680,7 @@ const connectorNames: Readonly<Record<ConnectorChoice, string>> = {
   dovetail: 'Ластівчин хвіст',
   plug: 'Виступ і отвір',
   dowel: 'Знімні штифти',
+  twist: 'Поворотне з’єднання',
 };
 
 const CONNECTOR_PROFILE_NAMES: Readonly<Record<ConnectorProfile, string>> = {
@@ -724,6 +735,25 @@ const dowelHelp: Help = {
     'збільшення діаметра отвору на 0,2 мм дає отвір діаметром 5,2 мм.\n\n' +
     BOUNDS_HELP,
 };
+
+const twistHelp: Help = {
+  label: 'Як працює кріплення?',
+  text:
+    'Вставте частини, поверніть до упору. Для розбирання поверніть назад і роз’єднайте. З’єднання не має окремого фіксатора від ' +
+    'зворотного повороту.\n\n' +
+    'Якщо дивитися зверху, верхню частину вставляють повернутою на 45° за годинниковою стрілкою від зібраного положення, а потім ' +
+    'повертають проти годинникової стрілки до упору. Одне вушко ширше за два інші, тому частини сходяться лише в одному положенні. ' +
+    'Виступи гнізда під вушками не дають роз’єднати частини прямо.\n\n' +
+    'Нижня частина друкується на основі, кріпленням угору; низ вушок — короткі пласкі нависання. Верхня друкується перерізом на ' +
+    'столі: виступи гнізда — перші шари, а склепіння скошене під 45°.\n\n' +
+    'Розміри шийки, головки й вушок — пробні, а не перевірена міцність. Спершу надрукуйте пробне з’єднання: воно має те саме ' +
+    'кріплення в малих тримачах, і масштабувати його не можна.\n\n' +
+    BOUNDS_HELP,
+};
+
+const TWIST_SCALE_NOTE =
+  'Показано фактичний розмір. Спочатку його визначає місце в обох частинах; заданий вручну зберігається, поки вміщується. ' +
+  'Розмір і зазори задано в міліметрах і не змінюються разом із моделлю.';
 
 const VERTICAL_PRINT_NOTE =
   'Вісь кріплення горизонтальна, а частини у файлі стоять вертикально, тому виступи й отвори можуть потребувати ' +
@@ -879,17 +909,23 @@ function connectorSection(
   if (keys === undefined || scale === undefined || activeSection(kind, choices) === undefined) return [];
   const chosen = choices[keys.connector];
   const values = context.values ?? {};
+  const offersTwist = twistAvailable(kind, choices, values);
   const selector: ChoiceField = {
     type: 'choice',
     key: keys.connector,
     label: 'Тип кріплення',
-    options: (['none', 'dovetail', 'plug', 'dowel'] as const).map((value) => ({ value, label: connectorNames[value] })),
+    options: (['none', 'dovetail', 'plug', 'dowel', 'twist'] as const).map((value) => ({
+      value,
+      label: connectorNames[value],
+      ...(value === 'twist' && !offersTwist ? { disabled: true } : {}),
+    })),
   };
   const { dovetail, round } = keys;
   const cut = activeSection(kind, choices) as SectionType;
   // Only a parallel cut has a lower and an upper part wherever it runs; the others number theirs.
   const numbered = cut !== 'parallel-to-bases' && cut !== 'horizontal';
   const units = connectorUnits(scale, chosen === 'dowel' ? 'dowel' : 'plug', cut);
+  const fittedToSection = chosen === 'plug' || chosen === 'dowel' || chosen === 'twist';
   /** The feasible range that the request computed; the calibration window, or nothing, until it can. */
   const rangeOf = (key: ParameterKey, increment: number, fallback?: StepRange): StepRange | undefined => {
     const interval = context.sectionRanges?.[key];
@@ -903,7 +939,7 @@ function connectorSection(
     suffix: '',
     unit: units[key],
     range: rangeOf(key, increment),
-    ...(chosen === 'plug' || chosen === 'dowel' ? { editsRoundConnector: true } : {}),
+    ...(fittedToSection ? { editsRoundConnector: true } : {}),
   });
   const clearanceField = (key: ParameterKey, label: string, window: StepRange): NumericField => ({
     type: 'number',
@@ -911,7 +947,7 @@ function connectorSection(
     label,
     suffix: '',
     range: rangeOf(key, window.increment, window),
-    ...(chosen === 'plug' || chosen === 'dowel' ? { editsRoundConnector: true } : {}),
+    ...(fittedToSection ? { editsRoundConnector: true } : {}),
   });
   const shown = (key: ScaledConnectorKey) => {
     const value = values[key];
@@ -980,8 +1016,43 @@ function connectorSection(
           lengthField,
           ...lengthNote,
         ];
+  const twistKeys = keys.twist;
   const fields: Record<ConnectorChoice, ParameterField[]> = {
     none: [],
+    twist:
+      twistKeys === undefined || unavailable !== undefined
+        ? [
+            { ...note('connector-unavailable', unavailable ?? TWIST_UNSUPPORTED_MESSAGE), tone: 'alert' },
+            {
+              type: 'action',
+              key: `${kind}-choose-no-connector`,
+              label: 'Обрати «Без кріплення»',
+              action: 'choose-no-connector',
+            },
+          ]
+        : [
+            note('twist-scale', TWIST_SCALE_NOTE),
+            ...corrections,
+            millimetreField(twistKeys[0], 'Розмір кріплення, мм', TWIST_STEPS_MM.size),
+            note('twist-size', 'Розмір — діаметр кола навколо всієї головки разом із вушками, а не діаметр шийки.'),
+            clearanceField(twistKeys[1], 'Збільшення гнізда Δ, мм', {
+              ...TWIST_CLEARANCE_LIMITS,
+              increment: TWIST_STEPS_MM.clearance,
+            }),
+            note(
+              'twist-clearance',
+              'Значення 0,5 мм дає зазор 0,25 мм з кожного боку. Бічний зазор дає змогу вставити й повернути головку.',
+            ),
+            clearanceField(twistKeys[2], 'Осьовий зазор, мм', {
+              ...TWIST_AXIAL_CLEARANCE_LIMITS,
+              increment: TWIST_STEPS_MM.clearance,
+            }),
+            note(
+              'twist-axial',
+              'Проміжок окремо над головкою й під нею. Більше значення зменшує ризик заїдання по висоті, але дає більший люфт уздовж осі.',
+            ),
+            { type: 'action', key: `${kind}-download-trial`, label: 'Завантажити пробне з’єднання', action: 'download-trial' },
+          ],
     dovetail: [
       scaleNote,
       millimetreField(dovetail.size, 'Висота виступу, мм'),
@@ -1021,35 +1092,49 @@ function connectorSection(
     ],
   };
   const helps: Record<SectionType, Record<Exclude<ConnectorChoice, 'none'>, Help>> = {
-    'parallel-to-bases': { dovetail: dovetailHelp, plug: plugHelp, dowel: dowelHelp },
+    'parallel-to-bases': { dovetail: dovetailHelp, plug: plugHelp, dowel: dowelHelp, twist: twistHelp },
     vertical: {
       dovetail: verticalDovetailHelp,
       plug: numberedPlugHelp(VERTICAL_PRINT_NOTE),
       dowel: numberedDowelHelp(VERTICAL_PRINT_NOTE),
+      twist: twistHelp,
     },
     oblique: {
       dovetail: obliqueDovetailHelp,
       plug: numberedPlugHelp(OBLIQUE_PRINT_NOTE),
       dowel: numberedDowelHelp(OBLIQUE_PRINT_NOTE),
+      twist: twistHelp,
     },
     'oblique-apex': {
       dovetail: obliqueDovetailHelp,
       plug: numberedPlugHelp(OBLIQUE_PRINT_NOTE),
       dowel: numberedDowelHelp(OBLIQUE_PRINT_NOTE),
+      twist: twistHelp,
     },
     horizontal: {
       dovetail: withBallNote(dovetailHelp),
       plug: withBallNote(plugHelp),
       dowel: withBallNote(dowelHelp),
+      twist: twistHelp,
     },
   };
+  // A chosen one explains itself; otherwise the disabled option is explained here.
+  const unsupportedNote =
+    !offersTwist && chosen !== 'twist'
+      ? [
+          note(
+            'twist-unsupported',
+            'Поворотне з’єднання поки доступне лише для прямого циліндра з перерізом, паралельним основам.',
+          ),
+        ]
+      : [];
   // Only this part leaves the bed without a flat face, and it holds for this model, whatever the plane.
   const printNote =
     kind === 'ball' && (chosen === 'plug' || chosen === 'dovetail')
       ? [note('connector-print-placement', PROTRUDING_ON_BALL_NOTE)]
       : [];
   const helpOf = (type: Exclude<ConnectorChoice, 'none'>): Help => {
-    if (kind !== 'cone') return helps[cut][type];
+    if (kind !== 'cone' || type === 'twist') return helps[cut][type];
     if (cut === 'parallel-to-bases') return withConeNote(helps[cut][type]);
     if (cut === 'vertical' && type === 'dovetail') return coneVerticalDovetailHelp;
     if (type === 'dovetail') {
@@ -1060,18 +1145,18 @@ function connectorSection(
     return (type === 'plug' ? numberedPlugHelp : numberedDowelHelp)(CONE_VERTICAL_NOTE + printNote);
   };
   const withRoundNotes = (type: Exclude<ConnectorChoice, 'none'>, help: Help): Help =>
-    type === 'dovetail'
+    type === 'dovetail' || type === 'twist'
       ? help
       : {
           ...help,
           text: [help.text, ...(circular ? [] : [PROFILE_CLEARANCE_HELP]), TRIAL_VALUES_HELP].join('\n\n'),
         };
   return [
-    section(`${kind}-connector`, 'Кріплення', [selector, ...printNote, ...fields[chosen]], {
+    section(`${kind}-connector`, 'Кріплення', [selector, ...unsupportedNote, ...printNote, ...fields[chosen]], {
       help: chosen === 'none' ? undefined : withRoundNotes(chosen, helpOf(chosen)),
       status:
         chosen !== 'none' && unavailable !== undefined && chosen !== 'dovetail'
-          ? { text: 'не вміщується', highlighted: true }
+          ? { text: chosen === 'twist' && !offersTwist ? 'недоступно' : 'не вміщується', highlighted: true }
           : { text: chosen === 'none' ? 'немає' : connectorNames[chosen].toLowerCase(), highlighted: chosen !== 'none' },
     }),
   ];

@@ -23,6 +23,7 @@ import {
   shapeParameterKeys,
   startApexSection,
   switchTiltMode,
+  TWIST_UNSUPPORTED_MESSAGE,
   validateAngle,
   validateApex,
   validateApexInclination,
@@ -246,6 +247,9 @@ describe('resolveModelRequest', () => {
       cylinderPlugClearanceMm: '0,5',
       cylinderDowelLowerClearanceMm: '0,4',
       cylinderDowelUpperClearanceMm: '0,5',
+      cylinderTwistSizeMm: '18',
+      cylinderTwistClearanceMm: '0,5',
+      cylinderTwistAxialMm: '0,2',
     });
     expect(initialParameterChoices()).toEqual({
       prismBaseType: 'regular',
@@ -1443,6 +1447,7 @@ describe('a dovetail joining the cylinder’s parts', () => {
           { value: 'dovetail', label: 'Ластівчин хвіст' },
           { value: 'plug', label: 'Виступ і отвір' },
           { value: 'dowel', label: 'Знімні штифти' },
+          { value: 'twist', label: 'Поворотне з’єднання' },
         ],
       },
     ]);
@@ -1888,7 +1893,13 @@ describe('a vertical section of the cylinder', () => {
     );
     expect(group(sectioned, 'Кріплення').fields[0]).toMatchObject({
       key: 'cylinderConnector',
-      options: [{ value: 'none' }, { value: 'dovetail' }, { value: 'plug' }, { value: 'dowel' }],
+      options: [
+        { value: 'none' },
+        { value: 'dovetail' },
+        { value: 'plug' },
+        { value: 'dowel' },
+        { value: 'twist', disabled: true },
+      ],
     });
   });
 
@@ -3276,5 +3287,141 @@ describe('a new round connector, and one edited by hand', () => {
       expect(validateDiametralClearance('1')).toEqual({ value: 1 });
       expect(validateDiametralClearance('1,05')).toEqual({ error: 'Допустимі значення — від 0 мм до 1 мм.' });
     }
+  });
+});
+
+describe('a twist connector between a cylinder’s parts', () => {
+  const choices = (overrides: Partial<ParameterChoices> = {}): ParameterChoices => ({
+    ...initialParameterChoices(),
+    cylinderSection: 'parallel-to-bases',
+    cylinderConnector: 'twist',
+    ...overrides,
+  });
+  // r = 30 mm and H = 100 mm.
+  const tall = { printSizeMm: '100', cylinderHeightRatio: '3,3333333333' };
+  const initial = (overrides: Partial<ParameterTexts> = {}) => ({ ...initialParameterTexts(), ...tall, ...overrides });
+  const resolved = (overrides: Partial<ParameterTexts> = {}, chosen: Partial<ParameterChoices> = {}) =>
+    resolveModelRequest('cylinder', initial(overrides), choices(chosen), { connectorEdits: {} });
+  const state = (overrides: Partial<ParameterTexts> = {}): ParameterState => ({
+    texts: initial(overrides),
+    choices: choices(),
+    connectorEdits: {},
+  });
+  const requestOf = ({ texts: stored, choices: chosen, connectorEdits }: ParameterState) =>
+    resolveModelRequest('cylinder', stored, chosen, { connectorEdits });
+  const edit = (before: ParameterState, key: keyof ParameterTexts, text: string): ParameterState => {
+    const committed = commitConnectorEdit('cylinder', before, requestOf(before));
+    return { ...committed, texts: { ...committed.texts, [key]: text } };
+  };
+  const groupOf = (chosen: ParameterChoices, request: ReturnType<typeof resolved>) => {
+    const panel = shapePanel('cylinder', chosen, {
+      values: request.values,
+      sectionRanges: request.sectionRanges,
+      connectorStatus: request.connectorStatus,
+    });
+    return panel.type === 'parameters' ? panel.sections.find(({ title }) => title === 'Кріплення') : undefined;
+  };
+
+  it('starts from what the section offers, with the provisional clearances', () => {
+    const request = resolved();
+    expect(request.errors).toEqual({});
+    expect(request.spec?.section?.connector).toEqual({ type: 'twist', sizeMm: 16, holeClearanceMm: 0.5, axialClearanceMm: 0.2 });
+    expect(request.values.cylinderTwistSizeMm).toBe(16);
+    expect(request.connectorStatus?.corrections).toEqual([]);
+  });
+
+  it('shows only its three controls, with their steps and help, and the trial download', () => {
+    const request = resolved();
+    const fields = groupOf(choices(), request)?.fields ?? [];
+    const keys = fields.map(({ key }) => key);
+    expect(keys).not.toContain('cylinderRoundProfile');
+    expect(keys).not.toContain('cylinderRoundCount');
+    const numbers = fields.flatMap((field) => (field.type === 'number' ? [field] : []));
+    expect(numbers.map(({ key, label, range }) => [key, label, range?.increment])).toEqual([
+      ['cylinderTwistSizeMm', 'Розмір кріплення, мм', 0.1],
+      ['cylinderTwistClearanceMm', 'Збільшення гнізда Δ, мм', 0.05],
+      ['cylinderTwistAxialMm', 'Осьовий зазор, мм', 0.05],
+    ]);
+    const texts = fields.flatMap((field) => (field.type === 'note' ? [field.text] : []));
+    expect(texts).toContain('Розмір — діаметр кола навколо всієї головки разом із вушками, а не діаметр шийки.');
+    expect(texts.some((text) => text.startsWith('Значення 0,5 мм дає зазор 0,25 мм з кожного боку.'))).toBe(true);
+    expect(keys).toContain('cylinder-download-trial');
+    expect(groupOf(choices(), request)?.help?.text).toMatch(
+      /^Вставте частини, поверніть до упору\. Для розбирання поверніть назад і роз’єднайте\. З’єднання не має окремого фіксатора від зворотного повороту\./,
+    );
+    // The size's slider spans what fits, from the printable minimum.
+    expect(request.sectionRanges?.cylinderTwistSizeMm?.min).toBeCloseTo(16, 1);
+  });
+
+  it('keeps clearances in millimetres when the model’s size changes', () => {
+    const edited = edit(edit(state(), 'cylinderTwistClearanceMm', '0,35'), 'cylinderTwistSizeMm', '20');
+    const larger = requestOf({ ...edited, texts: { ...edited.texts, printSizeMm: '150' } });
+    expect(larger.spec?.section?.connector).toEqual({ type: 'twist', sizeMm: 20, holeClearanceMm: 0.35, axialClearanceMm: 0.2 });
+  });
+
+  it('keeps valid manual settings, and reports a typed value out of range at its field', () => {
+    expect(requestOf(edit(state(), 'cylinderTwistSizeMm', '23,7')).spec?.section?.connector).toMatchObject({ sizeMm: 23.7 });
+    expect(requestOf(edit(state(), 'cylinderTwistSizeMm', '58')).errors.cylinderTwistSizeMm).toMatch(/Стінка навколо гнізда/);
+    expect(requestOf(edit(state(), 'cylinderTwistSizeMm', '12')).errors.cylinderTwistSizeMm).toMatch(/Збільште розмір/);
+    expect(requestOf(edit(state(), 'cylinderTwistClearanceMm', '1,1')).errors.cylinderTwistClearanceMm).toMatch(
+      /від 0,1 мм до 1 мм/,
+    );
+    expect(requestOf(edit(state(), 'cylinderTwistAxialMm', '0,6')).errors.cylinderTwistAxialMm).toMatch(/від 0,1 мм до 0,5 мм/);
+  });
+
+  it('adjusts an edited size the changed model no longer allows, with a note; the former model gets it back', () => {
+    const edited = edit(state(), 'cylinderTwistSizeMm', '50');
+    expect(requestOf(edited).spec?.section?.connector).toMatchObject({ sizeMm: 50 });
+    const smaller = { ...edited, texts: { ...edited.texts, printSizeMm: '80' } };
+    const after = requestOf(smaller);
+    expect(after.errors).toEqual({});
+    expect(after.values.cylinderTwistSizeMm as number).toBeLessThan(50);
+    expect(after.connectorStatus?.corrections).toEqual([
+      `Розмір кріплення зменшено до ${formatMillimetres(after.values.cylinderTwistSizeMm as number)} мм через стінку навколо гнізда.`,
+    ]);
+    expect(smaller.texts.cylinderTwistSizeMm).toBe('50');
+    expect(requestOf(smaller).values).toEqual(after.values);
+    const back = requestOf({ ...smaller, texts: { ...smaller.texts, printSizeMm: '100' } });
+    expect(back.spec?.section?.connector).toMatchObject({ sizeMm: 50 });
+  });
+
+  it('keeps the cut model, with an explanation and no download, when nothing fits', () => {
+    const request = resolved({ cylinderSectionPercent: '90', printSizeMm: '40' });
+    expect(request.errors).toEqual({});
+    expect(request.connectorStatus?.unavailable).toMatch(/^Поворотне з’єднання не вміщується: над гніздом/);
+    expect(request.spec?.section).toEqual({ type: 'parallel-to-bases', positionPercent: 90 });
+    expect(request.key).toMatch(/:connector-unavailable$/);
+    const keys = (groupOf(choices(), request)?.fields ?? []).map(({ key }) => key);
+    expect(keys).toContain('cylinder-choose-no-connector');
+    expect(keys).not.toContain('cylinder-download-trial');
+  });
+
+  it('is listed but not offered on another cut, a leaning cylinder or another solid, with the reason', () => {
+    const vertical = { ...initialParameterChoices(), cylinderSection: 'vertical' as const };
+    const request = resolveModelRequest('cylinder', initial(), vertical, { connectorEdits: {} });
+    const fields = groupOf(vertical, request)?.fields ?? [];
+    expect(fields[0]).toMatchObject({
+      options: expect.arrayContaining([{ value: 'twist', label: 'Поворотне з’єднання', disabled: true }]),
+    });
+    expect(fields.map(({ key }) => key)).toContain('cylinder-twist-unsupported');
+    const leaning = resolved({ cylinderOffsetRatio: '0,5' });
+    expect(leaning.errors).toEqual({});
+    expect(leaning.connectorStatus?.unavailable).toBe(TWIST_UNSUPPORTED_MESSAGE);
+    expect(leaning.spec?.section?.connector).toBeUndefined();
+    expect(resolved({}, { cylinderSection: 'vertical' }).key).toMatch(/:connector-unavailable$/);
+    const cone = { ...initialParameterChoices(), coneSection: 'parallel-to-bases' as const };
+    const panel = shapePanel('cone', cone, { values: resolveModelRequest('cone', initialParameterTexts(), cone).values });
+    const coneFields = panel.type === 'parameters' ? panel.sections.find(({ title }) => title === 'Кріплення')?.fields : [];
+    expect(coneFields?.[0]).toMatchObject({
+      options: expect.arrayContaining([expect.objectContaining({ value: 'twist', disabled: true })]),
+    });
+  });
+
+  it('a reset returns it to following the section', () => {
+    const edited = edit(state(), 'cylinderTwistSizeMm', '20');
+    expect(canResetShapeParameters('cylinder', edited)).toBe(true);
+    const reset = resetShapeParameters('cylinder', edited);
+    expect(reset.connectorEdits?.cylinder).toBeUndefined();
+    expect(reset.choices.cylinderConnector).toBe('none');
   });
 });

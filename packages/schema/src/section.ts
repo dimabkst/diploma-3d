@@ -128,11 +128,42 @@ export type PlugConnector = z.infer<typeof plugConnectorSchema>;
 export type DowelConnector = z.infer<typeof dowelConnectorSchema>;
 export type RoundConnector = PlugConnector | DowelConnector;
 
-export const connectorSchema = z.discriminatedUnion('type', [dovetailConnectorSchema, plugConnectorSchema, dowelConnectorSchema]);
+// The twist connector's clearance windows for print trials, in millimetres: policies, not material limits. Its Δ follows the
+// holes' convention up to 1 mm; it starts at 0,1 mm, as rigid surfaces that turn against each other need some play.
+export const TWIST_CLEARANCE_LIMITS = { min: 0.1, max: 1 } as const;
+export const TWIST_AXIAL_CLEARANCE_LIMITS = { min: 0.1, max: 0.5 } as const;
+
+// Provisional starting points for print trials, not a validated printer or material preset.
+export const DEFAULT_TWIST = { holeClearanceMm: 0.5, axialClearanceMm: 0.2 } as const;
+
+/**
+ * A rigid twist connector between the parts of a right cylinder cut parallel to its bases: a short neck on the lower part with a
+ * low head of three radial lugs, one wider, in a shallow blind recess of the upper part with entries, retaining ledges and a
+ * closing stop. Inserted turned by −45° and turned to the stop; nothing locks it against turning back. Its dimensions are the
+ * printed millimetres, not proportional to the model; the solid, the cut and the construction bound the size.
+ */
+export const twistConnectorSchema = z.strictObject({
+  type: z.literal('twist'),
+  /** The diameter of the circle around the whole head, lugs included. */
+  sizeMm: z.number().positive(),
+  /** Δ: every sliding side surface of the recess lies Δ/2 outside the head's, as for holes. */
+  holeClearanceMm: z.number().min(TWIST_CLEARANCE_LIMITS.min).max(TWIST_CLEARANCE_LIMITS.max),
+  /** The gap at each opposed axial pair of faces, above and below the head; not their sum. */
+  axialClearanceMm: z.number().min(TWIST_AXIAL_CLEARANCE_LIMITS.min).max(TWIST_AXIAL_CLEARANCE_LIMITS.max),
+});
+
+export type TwistConnector = z.infer<typeof twistConnectorSchema>;
+
+export const connectorSchema = z.discriminatedUnion('type', [
+  dovetailConnectorSchema,
+  plugConnectorSchema,
+  dowelConnectorSchema,
+  twistConnectorSchema,
+]);
 
 export type Connector = z.infer<typeof connectorSchema>;
 
-export const CONNECTOR_TYPES = ['dovetail', 'plug', 'dowel'] as const;
+export const CONNECTOR_TYPES = ['dovetail', 'plug', 'dowel', 'twist'] as const;
 
 export type ConnectorType = (typeof CONNECTOR_TYPES)[number];
 
