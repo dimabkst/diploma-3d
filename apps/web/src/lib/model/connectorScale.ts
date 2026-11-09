@@ -33,13 +33,16 @@ export type ConnectorScale = {
   readonly horizontalSpanMm?: number | undefined;
 };
 
-/** The fields whose stored value is a multiplier or a percentage, shown in millimetres. */
+/** The fields shown in millimetres as they are generated, whose stored value may be a multiplier or a percentage. */
 export type ScaledConnectorKey =
   | 'cylinderDovetailSize'
   | 'cylinderDovetailLengthPercent'
   | 'cylinderRoundDiameter'
   | 'cylinderRoundDepth'
   | 'cylinderRoundSpacingPercent'
+  | 'cylinderBayonetDiameterMm'
+  | 'cylinderBayonetProjectionMm'
+  | 'cylinderBayonetDetentMm'
   | 'coneDovetailSize'
   | 'coneDovetailLengthPercent'
   | 'coneRoundDiameter'
@@ -94,6 +97,10 @@ export function connectorUnits(
     cylinderRoundDiameter: diameter,
     cylinderRoundDepth: depth,
     cylinderRoundSpacingPercent: spacing,
+    // Stored in millimetres already; they share the fields that show what is generated rather than what is stored.
+    cylinderBayonetDiameterMm: 1,
+    cylinderBayonetProjectionMm: 1,
+    cylinderBayonetDetentMm: 1,
     coneDovetailSize: size,
     coneDovetailLengthPercent: length,
     coneRoundDiameter: diameter,

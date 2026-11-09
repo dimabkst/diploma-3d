@@ -7,6 +7,7 @@ import {
   activeConnector,
   activeSection,
   alignedTrapezoidShift,
+  BAYONET_UNSUPPORTED_MESSAGE,
   type ConnectorEdits,
   canResetShapeParameters,
   canSwitchTiltMode,
@@ -246,6 +247,11 @@ describe('resolveModelRequest', () => {
       cylinderPlugClearanceMm: '0,5',
       cylinderDowelLowerClearanceMm: '0,4',
       cylinderDowelUpperClearanceMm: '0,5',
+      cylinderBayonetDiameterMm: '15',
+      cylinderBayonetProjectionMm: '15',
+      cylinderBayonetClearanceMm: '0,5',
+      cylinderBayonetAxialMm: '0,2',
+      cylinderBayonetDetentMm: '0,15',
     });
     expect(initialParameterChoices()).toEqual({
       prismBaseType: 'regular',
@@ -1443,6 +1449,7 @@ describe('a dovetail joining the cylinder’s parts', () => {
           { value: 'dovetail', label: 'Ластівчин хвіст' },
           { value: 'plug', label: 'Виступ і отвір' },
           { value: 'dowel', label: 'Знімні штифти' },
+          { value: 'bayonet', label: 'Байонет (пробний)' },
         ],
       },
     ]);
@@ -1888,7 +1895,13 @@ describe('a vertical section of the cylinder', () => {
     );
     expect(group(sectioned, 'Кріплення').fields[0]).toMatchObject({
       key: 'cylinderConnector',
-      options: [{ value: 'none' }, { value: 'dovetail' }, { value: 'plug' }, { value: 'dowel' }],
+      options: [
+        { value: 'none' },
+        { value: 'dovetail' },
+        { value: 'plug' },
+        { value: 'dowel' },
+        { value: 'bayonet', disabled: true },
+      ],
     });
   });
 
@@ -3276,5 +3289,186 @@ describe('a new round connector, and one edited by hand', () => {
       expect(validateDiametralClearance('1')).toEqual({ value: 1 });
       expect(validateDiametralClearance('1,05')).toEqual({ error: 'Допустимі значення — від 0 мм до 1 мм.' });
     }
+  });
+});
+
+describe('a bayonet between a cylinder’s parts', () => {
+  const choices = (overrides: Partial<ParameterChoices> = {}): ParameterChoices => ({
+    ...initialParameterChoices(),
+    cylinderSection: 'parallel-to-bases',
+    cylinderConnector: 'bayonet',
+    ...overrides,
+  });
+  // r = 30 mm and H = 100 mm.
+  const tall = { printSizeMm: '100', cylinderHeightRatio: '3,3333333333' };
+  const initial = (overrides: Partial<ParameterTexts> = {}) => ({ ...initialParameterTexts(), ...tall, ...overrides });
+  const resolved = (
+    overrides: Partial<ParameterTexts> = {},
+    edits: ConnectorEdits = {},
+    chosen: Partial<ParameterChoices> = {},
+  ) => resolveModelRequest('cylinder', initial(overrides), choices(chosen), { connectorEdits: edits });
+  const state = (overrides: Partial<ParameterTexts> = {}): ParameterState => ({
+    texts: initial(overrides),
+    choices: choices(),
+    connectorEdits: {},
+  });
+  const requestOf = ({ texts: stored, choices: chosen, connectorEdits }: ParameterState) =>
+    resolveModelRequest('cylinder', stored, chosen, { connectorEdits });
+  const edit = (before: ParameterState, key: keyof ParameterTexts, text: string): ParameterState => {
+    const committed = commitConnectorEdit('cylinder', before, requestOf(before));
+    return { ...committed, texts: { ...committed.texts, [key]: text } };
+  };
+  const panelOf = (chosen: ParameterChoices, request: ReturnType<typeof resolved>) =>
+    shapePanel('cylinder', chosen, {
+      values: request.values,
+      sectionRanges: request.sectionRanges,
+      connectorStatus: request.connectorStatus,
+    });
+  const groupOf = (chosen: ParameterChoices, request: ReturnType<typeof resolved>) => {
+    const panel = panelOf(chosen, request);
+    return panel.type === 'parameters' ? panel.sections.find(({ title }) => title === 'Кріплення') : undefined;
+  };
+
+  it('starts from what the section offers, with the provisional clearances', () => {
+    const request = resolved();
+    expect(request.errors).toEqual({});
+    expect(request.spec?.section?.connector).toEqual({
+      type: 'bayonet',
+      stemDiameterMm: request.values.cylinderBayonetDiameterMm,
+      projectionMm: request.values.cylinderBayonetProjectionMm,
+      holeClearanceMm: 0.5,
+      axialClearanceMm: 0.2,
+      detentInterferenceMm: 0.15,
+    });
+    expect(request.connectorStatus?.corrections).toEqual([]);
+    expect(request.values.cylinderBayonetDiameterMm as number).toBeGreaterThan(12);
+  });
+
+  it('shows only its own controls, without the ordinary profile and count', () => {
+    const request = resolved();
+    const fields = groupOf(choices(), request)?.fields ?? [];
+    const keys = fields.map(({ key }) => key);
+    expect(keys).not.toContain('cylinderRoundProfile');
+    expect(keys).not.toContain('cylinderRoundCount');
+    for (const key of [
+      'cylinderBayonetDiameterMm',
+      'cylinderBayonetProjectionMm',
+      'cylinderBayonetClearanceMm',
+      'cylinderBayonetAxialMm',
+      'cylinderBayonetDetentMm',
+    ]) {
+      expect(keys).toContain(key);
+    }
+    expect(keys).toContain('cylinder-download-trial');
+    const increments = Object.fromEntries(
+      fields.flatMap((field) => (field.type === 'number' ? [[field.key, field.range?.increment]] : [])),
+    );
+    expect(increments).toEqual({
+      cylinderBayonetDiameterMm: 0.1,
+      cylinderBayonetProjectionMm: 0.25,
+      cylinderBayonetClearanceMm: 0.05,
+      cylinderBayonetAxialMm: 0.05,
+      cylinderBayonetDetentMm: 0.05,
+    });
+  });
+
+  it('says when zero interference disables the detent, and still builds', () => {
+    const edited = edit(state(), 'cylinderBayonetDetentMm', '0');
+    const request = requestOf(edited);
+    expect(request.errors).toEqual({});
+    expect(request.spec?.section?.connector).toMatchObject({ detentInterferenceMm: 0 });
+    const fields = groupOf(edited.choices, request)?.fields ?? [];
+    const note = fields.find(({ key }) => key === 'cylinder-bayonet-detent');
+    expect(note).toMatchObject({ tone: 'status' });
+    expect((note as { text: string }).text).toMatch(/фіксатор зворотного повороту вимкнено/);
+  });
+
+  it('keeps valid manual settings, and reports a typed value out of range at its field', () => {
+    const edited = edit(state(), 'cylinderBayonetDiameterMm', '18,3');
+    expect(requestOf(edited).spec?.section?.connector).toMatchObject({ stemDiameterMm: 18.3 });
+    expect(requestOf(edit(state(), 'cylinderBayonetDiameterMm', '58')).errors.cylinderBayonetDiameterMm).toMatch(
+      /Стінка навколо гнізда/,
+    );
+    expect(requestOf(edit(state(), 'cylinderBayonetClearanceMm', '0,1')).errors.cylinderBayonetClearanceMm).toMatch(
+      /від 0,2 мм до 1 мм/,
+    );
+    expect(requestOf(edit(state(), 'cylinderBayonetAxialMm', '0,6')).errors.cylinderBayonetAxialMm).toMatch(
+      /від 0,1 мм до 0,5 мм/,
+    );
+    expect(requestOf(edit(state(), 'cylinderBayonetDetentMm', '0,35')).errors.cylinderBayonetDetentMm).toMatch(
+      /від 0 мм до 0,3 мм/,
+    );
+  });
+
+  it('adjusts edited values the changed model no longer allows, with a note; the former model gets them back', () => {
+    const edited = edit(edit(state(), 'cylinderBayonetDiameterMm', '20'), 'cylinderBayonetProjectionMm', '30');
+    const before = requestOf(edited);
+    expect(before.spec?.section?.connector).toMatchObject({ stemDiameterMm: 20, projectionMm: 30 });
+    const lowered = { ...edited, texts: { ...edited.texts, cylinderSectionPercent: '70' } };
+    const after = requestOf(lowered);
+    expect(after.errors).toEqual({});
+    expect(after.values.cylinderBayonetProjectionMm as number).toBeLessThan(30);
+    expect(after.connectorStatus?.corrections[0]).toMatch(
+      /^(Діаметр|Висоту) стрижня зменшено до .* через товщину верхньої частини\.$/,
+    );
+    // Stored values stay: nothing shrinks step by step, and the texts have not moved.
+    expect(lowered.texts.cylinderBayonetProjectionMm).toBe('30');
+    const again = requestOf({ ...lowered, texts: { ...lowered.texts, cylinderSectionPercent: '50' } });
+    expect(again.spec?.section?.connector).toMatchObject({ stemDiameterMm: 20, projectionMm: 30 });
+    // Evaluating it again changes nothing.
+    expect(requestOf(lowered).values).toEqual(after.values);
+  });
+
+  it('keeps the cut model, with an explanation and no download, when no usable mechanism fits', () => {
+    const request = resolved({ cylinderSectionPercent: '90' });
+    expect(request.errors).toEqual({});
+    expect(request.connectorStatus?.unavailable).toMatch(/^Байонет не вміщується: над гніздом/);
+    expect(request.spec?.section).toEqual({ type: 'parallel-to-bases', positionPercent: 90 });
+    expect(request.key).toMatch(/:connector-unavailable$/);
+    const fields = groupOf(choices(), request)?.fields ?? [];
+    expect(fields.map(({ key }) => key)).toContain('cylinder-choose-no-connector');
+    expect(fields.some(({ key }) => key === 'cylinder-download-trial')).toBe(false);
+  });
+
+  it('is listed but not offered on another cut or a leaning cylinder, with the reason beside it', () => {
+    const vertical = { ...initialParameterChoices(), cylinderSection: 'vertical' as const };
+    const request = resolveModelRequest('cylinder', initial(), vertical, { connectorEdits: {} });
+    const fields = groupOf(vertical, request)?.fields ?? [];
+    expect(fields[0]).toMatchObject({
+      options: expect.arrayContaining([{ value: 'bayonet', label: 'Байонет (пробний)', disabled: true }]),
+    });
+    expect(fields.map(({ key }) => key)).toContain('cylinder-bayonet-unsupported');
+    expect(groupOf(choices(), resolved())?.fields[0]).not.toMatchObject({
+      options: expect.arrayContaining([expect.objectContaining({ value: 'bayonet', disabled: true })]),
+    });
+    const leaning = resolved({ cylinderOffsetRatio: '0,5' }, {}, { cylinderConnector: 'bayonet' });
+    expect(leaning.errors).toEqual({});
+    expect(leaning.connectorStatus?.unavailable).toBe(BAYONET_UNSUPPORTED_MESSAGE);
+    expect(leaning.spec?.section?.connector).toBeUndefined();
+  });
+
+  it('a bayonet chosen before the cut changed stays explained, with nothing to download', () => {
+    const request = resolved({}, {}, { cylinderSection: 'vertical' });
+    expect(request.connectorStatus?.unavailable).toBe(BAYONET_UNSUPPORTED_MESSAGE);
+    expect(request.key).toMatch(/:connector-unavailable$/);
+    expect(request.spec?.section?.connector).toBeUndefined();
+  });
+
+  it('other solids list it as unavailable', () => {
+    const chosen = { ...initialParameterChoices(), coneSection: 'parallel-to-bases' as const };
+    const request = resolveModelRequest('cone', initialParameterTexts(), chosen);
+    const panel = shapePanel('cone', chosen, { values: request.values });
+    const fields = panel.type === 'parameters' ? panel.sections.find(({ title }) => title === 'Кріплення')?.fields : [];
+    expect(fields?.[0]).toMatchObject({
+      options: expect.arrayContaining([expect.objectContaining({ value: 'bayonet', disabled: true })]),
+    });
+  });
+
+  it('a reset returns it to following the section', () => {
+    const edited = edit(state(), 'cylinderBayonetDiameterMm', '18');
+    expect(canResetShapeParameters('cylinder', edited)).toBe(true);
+    const reset = resetShapeParameters('cylinder', edited);
+    expect(reset.connectorEdits?.cylinder).toBeUndefined();
+    expect(reset.choices.cylinderConnector).toBe('none');
   });
 });

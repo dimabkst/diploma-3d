@@ -128,11 +128,48 @@ export type PlugConnector = z.infer<typeof plugConnectorSchema>;
 export type DowelConnector = z.infer<typeof dowelConnectorSchema>;
 export type RoundConnector = PlugConnector | DowelConnector;
 
-export const connectorSchema = z.discriminatedUnion('type', [dovetailConnectorSchema, plugConnectorSchema, dowelConnectorSchema]);
+// The prototype bayonet's adjustment windows for print trials, in millimetres: a policy, not material limits, which the
+// actual geometry may narrow. The clearance Δ is diametral like a hole's, 0,10–0,50 mm per side.
+export const BAYONET_LIMITS = {
+  holeClearanceMm: { min: 0.2, max: 1 },
+  axialClearanceMm: { min: 0.1, max: 0.5 },
+  detentInterferenceMm: { min: 0, max: 0.3 },
+} as const;
+
+// Provisional starting points for print trials with PLA, a 0,4 mm nozzle and 0,2 mm layers, not a validated preset.
+export const DEFAULT_BAYONET = { holeClearanceMm: 0.5, axialClearanceMm: 0.2, detentInterferenceMm: 0.15 } as const;
+
+/**
+ * An experimental bayonet of a right cylinder cut parallel to its bases: a stem on the lower part with two different radial
+ * lugs, a blind socket with entry slots and tracks in the upper part, and a printed detent. Dimensions are the printed
+ * millimetres: unlike plugs and dowels, the mechanism is not proportional to the model. A stem and height of no fixed limits;
+ * the solid, the cut and the mechanism bound them, and the engine checks them before building.
+ */
+export const bayonetConnectorSchema = z.strictObject({
+  type: z.literal('bayonet'),
+  stemDiameterMm: z.number().positive(),
+  /** How far the stem stands above the cut plane. */
+  projectionMm: z.number().positive(),
+  /** Δ: every sliding side surface of the socket lies Δ/2 outside the male's. */
+  holeClearanceMm: z.number().min(BAYONET_LIMITS.holeClearanceMm.min).max(BAYONET_LIMITS.holeClearanceMm.max),
+  /** The gap of each opposed axial face pair, on either side of a lug; not their sum. */
+  axialClearanceMm: z.number().min(BAYONET_LIMITS.axialClearanceMm.min).max(BAYONET_LIMITS.axialClearanceMm.max),
+  /** How far the detent's tongue must deflect to pass its cam; zero leaves no cam, and no resistance to turning back. */
+  detentInterferenceMm: z.number().min(BAYONET_LIMITS.detentInterferenceMm.min).max(BAYONET_LIMITS.detentInterferenceMm.max),
+});
+
+export type BayonetConnector = z.infer<typeof bayonetConnectorSchema>;
+
+export const connectorSchema = z.discriminatedUnion('type', [
+  dovetailConnectorSchema,
+  plugConnectorSchema,
+  dowelConnectorSchema,
+  bayonetConnectorSchema,
+]);
 
 export type Connector = z.infer<typeof connectorSchema>;
 
-export const CONNECTOR_TYPES = ['dovetail', 'plug', 'dowel'] as const;
+export const CONNECTOR_TYPES = ['dovetail', 'plug', 'dowel', 'bayonet'] as const;
 
 export type ConnectorType = (typeof CONNECTOR_TYPES)[number];
 

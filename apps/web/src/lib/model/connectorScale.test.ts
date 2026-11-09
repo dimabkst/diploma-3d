@@ -16,7 +16,10 @@ import {
 } from './connectorScale.ts';
 import { scaledConnectorDefaults } from './parameters.ts';
 
-const scaledKeys = Object.keys(scaledConnectorDefaults) as (keyof typeof scaledConnectorDefaults)[];
+// A bayonet's dimensions are stored in millimetres: its fields share the ones shown in millimetres but scale with nothing.
+const scaledKeys = (Object.keys(scaledConnectorDefaults) as (keyof typeof scaledConnectorDefaults)[]).filter(
+  (key) => !key.startsWith('cylinderBayonet'),
+);
 
 const scaleOf = (printSizeMm: number, cylinderHeightRatio = 2, cylinderOffsetRatio = 0) => {
   const scale = cylinderConnectorScale({ printSizeMm, cylinderHeightRatio, cylinderOffsetRatio });

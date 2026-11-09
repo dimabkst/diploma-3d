@@ -1,18 +1,24 @@
 import {
   apexChordCrossesBase,
+  type BayonetIssue,
+  type BayonetOutcome,
   ballOffsetLimitPercent,
   ballRadiusMm,
+  bayonetFeasibility,
+  bayonetSupported,
   CONSTRAINT_ROUNDOFF_MM,
   type ConnectorFeasibility,
   coneApexAngleBounds,
   coneApexChord,
   cutOfSection,
   type DovetailIssue,
+  defaultBayonet,
   defaultRoundConnector,
   dovetailFeasibility,
   hasFeasibleValues,
   type Interval,
   isApexChordUsable,
+  normalizeBayonet,
   normalizeRoundConnector,
   obliquePlaneContainsAxis,
   obliqueSplitReach,
@@ -34,11 +40,14 @@ import {
   apexRatioSchema,
   BASE_ANGLE_LIMITS,
   BASE_SHIFT_LIMITS,
+  BAYONET_LIMITS,
+  type BayonetConnector,
   baseAngleSchema,
   baseShiftSchema,
   type ConeShape,
   type ConnectorProfile,
   type ConnectorType,
+  DEFAULT_BAYONET,
   DEFAULT_CONNECTOR_PROFILE,
   DEFAULT_DOVETAIL,
   DEFAULT_DOWEL_CLEARANCES_MM,
@@ -170,6 +179,11 @@ export type ParameterKey =
   | 'cylinderPlugClearanceMm'
   | 'cylinderDowelLowerClearanceMm'
   | 'cylinderDowelUpperClearanceMm'
+  | 'cylinderBayonetDiameterMm'
+  | 'cylinderBayonetProjectionMm'
+  | 'cylinderBayonetClearanceMm'
+  | 'cylinderBayonetAxialMm'
+  | 'cylinderBayonetDetentMm'
   | 'coneHeightRatio'
   | 'coneOffsetRatio'
   | 'coneInclinationDeg'
@@ -306,6 +320,9 @@ export type ModelRequest = {
   readonly connectorStatus?: ConnectorStatus | undefined;
 } & ({ readonly spec: ModelSpec; readonly key: string } | { readonly spec: undefined; readonly key: undefined });
 
+/** A bayonet's stored stem and height before anything fits them to a section: only a request without edits reads these. */
+const BAYONET_PLACEHOLDER_MM = { diameter: 15, projection: 15 } as const;
+
 /** The texts every field starts with, and returns to on reset: the single source of the defaults in the interface. */
 export const initialParameterTexts = (): ParameterTexts => ({
   printSizeMm: formatDecimal(DEFAULT_LONGEST_DIMENSION_MM),
@@ -360,6 +377,11 @@ export const initialParameterTexts = (): ParameterTexts => ({
   cylinderPlugClearanceMm: formatDecimal(DEFAULT_PLUG_CLEARANCE_MM),
   cylinderDowelLowerClearanceMm: formatDecimal(DEFAULT_DOWEL_CLEARANCES_MM.lower),
   cylinderDowelUpperClearanceMm: formatDecimal(DEFAULT_DOWEL_CLEARANCES_MM.upper),
+  cylinderBayonetDiameterMm: formatDecimal(BAYONET_PLACEHOLDER_MM.diameter),
+  cylinderBayonetProjectionMm: formatDecimal(BAYONET_PLACEHOLDER_MM.projection),
+  cylinderBayonetClearanceMm: formatDecimal(DEFAULT_BAYONET.holeClearanceMm),
+  cylinderBayonetAxialMm: formatDecimal(DEFAULT_BAYONET.axialClearanceMm),
+  cylinderBayonetDetentMm: formatDecimal(DEFAULT_BAYONET.detentInterferenceMm),
   coneSectionPercent: formatDecimal(DEFAULT_SECTION_POSITION_PERCENT),
   coneSectionOffsetPercent: formatDecimal(DEFAULT_SECTION_OFFSET_PERCENT),
   coneObliquePositionPercent: formatDecimal(DEFAULT_OBLIQUE_SECTION.positionPercent),
@@ -578,6 +600,21 @@ const validators: Readonly<Record<IndependentKey, (text: string, exact?: number)
   cylinderPlugClearanceMm: validateDiametralClearance,
   cylinderDowelLowerClearanceMm: validateDiametralClearance,
   cylinderDowelUpperClearanceMm: validateDiametralClearance,
+  cylinderBayonetDiameterMm: validateConnectorDimension,
+  cylinderBayonetProjectionMm: validateConnectorDimension,
+  cylinderBayonetClearanceMm: (text, exact) =>
+    validateNumber(text, inclusiveRange(BAYONET_LIMITS.holeClearanceMm), BAYONET_LIMITS.holeClearanceMm, '0,5', ' мм', exact),
+  cylinderBayonetAxialMm: (text, exact) =>
+    validateNumber(text, inclusiveRange(BAYONET_LIMITS.axialClearanceMm), BAYONET_LIMITS.axialClearanceMm, '0,2', ' мм', exact),
+  cylinderBayonetDetentMm: (text, exact) =>
+    validateNumber(
+      text,
+      inclusiveRange(BAYONET_LIMITS.detentInterferenceMm),
+      BAYONET_LIMITS.detentInterferenceMm,
+      '0,15',
+      ' мм',
+      exact,
+    ),
   coneSectionPercent: validateSectionPosition,
   coneSectionOffsetPercent: validateSectionOffset,
   coneObliquePositionPercent: validateSectionPosition,
@@ -763,7 +800,9 @@ export function resolveModelRequest(
     }
   }
   const sectionRanges = checked?.ranges;
-  const connectorStatus = checked?.resolved?.status;
+  const connectorStatus = bayonetElsewhere(kind, choices, resolved.shape)
+    ? { context: '', corrections: [], unavailable: BAYONET_UNSUPPORTED_MESSAGE }
+    : checked?.resolved?.status;
   Object.assign(values, checked?.resolved?.values);
   if (Object.keys(errors).length > 0) {
     return { values, errors, sectionRanges, connectorStatus, spec: undefined, key: undefined };
@@ -779,12 +818,39 @@ export function resolveModelRequest(
   return { values, errors, sectionRanges, connectorStatus, spec, key };
 }
 
+/** Why this prototype offers no bayonet here, for the option and for one chosen before the solid or cut changed. */
+export const BAYONET_UNSUPPORTED_MESSAGE =
+  'Байонет (пробний) доступний лише для прямого циліндра з перерізом, паралельним основам. Завантаження вимкнено: змініть ' +
+  'тіло чи переріз або оберіть «Без кріплення».';
+
+/** Whether the solid and cut are the one case this prototype works for; the solid's own values are checked once they are valid. */
+function bayonetFits(kind: ShapeKind, type: SectionType | undefined, shape: ShapeInput | undefined): boolean {
+  if (kind !== 'cylinder' || type !== 'parallel-to-bases') return false;
+  return shape?.kind !== 'cylinder' || bayonetSupported(shape as SectionedShape, 0);
+}
+
+/** Whether a bayonet can be offered now. */
+export const bayonetAvailable = (kind: ShapeKind, choices: ParameterChoices, values: ParameterValues): boolean =>
+  bayonetFits(
+    kind,
+    activeSection(kind, choices),
+    values.cylinderOffsetRatio === undefined || kind !== 'cylinder'
+      ? undefined
+      : { kind: 'cylinder', heightRatio: values.cylinderHeightRatio ?? 1, offsetRatio: values.cylinderOffsetRatio },
+  );
+
+/** A bayonet chosen where it no longer works: the model then is the plain cut, not offered for download. */
+const bayonetElsewhere = (kind: ShapeKind, choices: ParameterChoices, shape: ShapeInput | undefined): boolean =>
+  activeConnector(kind, choices) === 'bayonet' && !bayonetFits(kind, activeSection(kind, choices), shape);
+
 // Feasibility depends only on the solid, the size, the cut and the connector; the panel and the request read it for every
 // edit of any field, so recent results are kept.
 const FEASIBILITY_CACHE_SIZE = 32;
 const feasibilityCache = new Map<
   string,
-  ConnectorFeasibility<string, DovetailIssue> | ConnectorFeasibility<string, RoundConnectorIssue>
+  | ConnectorFeasibility<string, DovetailIssue>
+  | ConnectorFeasibility<string, RoundConnectorIssue>
+  | ConnectorFeasibility<string, BayonetIssue>
 >();
 
 function cachedFeasibility(shape: SectionedShape, longestDimensionMm: number, section: Section) {
@@ -798,7 +864,9 @@ function cachedFeasibility(shape: SectionedShape, longestDimensionMm: number, se
   const result =
     connector.type === 'dovetail'
       ? dovetailFeasibility(shape, scale, cut, connector)
-      : roundConnectorFeasibility(shape, scale, cut, connector);
+      : connector.type === 'bayonet'
+        ? bayonetFeasibility(shape, scale, cut, connector)
+        : roundConnectorFeasibility(shape, scale, cut, connector);
   if (feasibilityCache.size >= FEASIBILITY_CACHE_SIZE) feasibilityCache.delete(feasibilityCache.keys().next().value as string);
   feasibilityCache.set(key, result);
   return result;
@@ -908,6 +976,7 @@ function resolveRound(
 ): RoundResolution | undefined {
   const { connector } = section;
   if (edits === undefined || connector === undefined || connector.type === 'dovetail') return undefined;
+  if (connector.type === 'bayonet') return resolveBayonet(shape, longestDimensionMm, section, connector, edits);
   const { type, count, profile } = connector;
   const context = JSON.stringify([shape, longestDimensionMm, cutOfSection(section), type, profile, count]);
   const edited = edits[shape.kind];
@@ -931,6 +1000,89 @@ function resolveRound(
       [round.diameter]: actual.diameterFactor,
       [round.depth]: actual.depthFactor,
       ...(actual.spacingPercent === undefined ? {} : { [round.spacing]: actual.spacingPercent }),
+    },
+    section: { ...section, connector: actual },
+  };
+}
+
+const bayonetOutcomeCache = new Map<string, BayonetOutcome>();
+
+/** What a bayonet's correction blames, from what failed at the stored dimensions. */
+function bayonetCorrectionReason(issues: readonly BayonetIssue[]): string {
+  const codes = issues.map(({ code }) => code);
+  if (codes.includes('socket-roof-thin')) return 'через товщину верхньої частини';
+  if (codes.includes('socket-wall-thin') || codes.includes('socket-rib-thin')) return 'через стінки навколо гнізда';
+  if (codes.includes('projection-too-low') || codes.includes('ledge-thin')) return 'щоб умістити механізм';
+  return 'щоб механізм лишався придатним';
+}
+
+/** One sentence per dimension that differs from the stored one. */
+function bayonetCorrections(stated: BayonetConnector, actual: BayonetConnector, issues: readonly BayonetIssue[]): string[] {
+  const reason = bayonetCorrectionReason(issues);
+  const sentence = (subject: string, from: number, to: number) =>
+    from === to ? [] : [`${subject} ${to < from ? 'зменшено' : 'збільшено'} до ${formatMillimetres(to)} мм ${reason}.`];
+  return [
+    ...sentence('Діаметр стрижня', stated.stemDiameterMm, actual.stemDiameterMm),
+    ...sentence('Висоту стрижня', stated.projectionMm, actual.projectionMm),
+    ...sentence('Натяг фіксатора', stated.detentInterferenceMm, actual.detentInterferenceMm),
+  ];
+}
+
+/** Why no usable bayonet fits, from what falls short at the smallest printable one, and the ways on. */
+function bayonetUnavailableMessage(issues: readonly BayonetIssue[]): string {
+  const issue = issues[0];
+  const shortfall =
+    issue === undefined ? '' : `${millimetres(issue.valueMm)}, потрібно щонайменше ${millimetres(issue.minimumMm)}`;
+  const what: Partial<Record<BayonetIssue['code'], string>> = {
+    'socket-roof-thin': `над гніздом верхньої частини лишається ${shortfall}`,
+    'socket-wall-thin': `стінка навколо гнізда — ${shortfall}`,
+    'socket-rib-thin': `між каналами гнізда лишається ${shortfall}`,
+    'base-thin': `під стрижнем лишається ${shortfall}`,
+    'lug-too-narrow': 'вушка стрижня вийшли б надто вузькими',
+    'tongue-too-short': 'пружний язичок не вміщується в стрижень',
+  };
+  const reason = issue === undefined ? undefined : what[issue.code];
+  return (
+    `Байонет не вміщується${reason === undefined ? '' : `: ${reason}`}. Змініть переріз або розмір моделі, зменште зазори чи оберіть ` +
+    '«Без кріплення». Доти завантаження вимкнено.'
+  );
+}
+
+/** As for plugs and dowels: new from the section, as it is in the context of its last edit, and otherwise corrected if it must be. */
+function resolveBayonet(
+  shape: SectionedShape,
+  longestDimensionMm: number,
+  section: Section,
+  connector: BayonetConnector,
+  edits: ConnectorEdits,
+): RoundResolution {
+  const cut = cutOfSection(section);
+  const context = JSON.stringify([shape, longestDimensionMm, cut, 'bayonet']);
+  const edited = edits[shape.kind];
+  if (edited === context) return { status: { context, corrections: [] }, values: {}, section };
+  const key = JSON.stringify([edited === undefined, shape, longestDimensionMm, cut, connector]);
+  const scale = { longestDimensionMm };
+  const outcome =
+    bayonetOutcomeCache.get(key) ?? (edited === undefined ? defaultBayonet : normalizeBayonet)(shape, scale, cut, connector);
+  if (bayonetOutcomeCache.size >= FEASIBILITY_CACHE_SIZE) {
+    bayonetOutcomeCache.delete(bayonetOutcomeCache.keys().next().value as string);
+  }
+  bayonetOutcomeCache.set(key, outcome);
+  if (outcome.status === 'unavailable') {
+    const { connector: _none, ...plain } = section;
+    return {
+      status: { context, corrections: [], unavailable: bayonetUnavailableMessage(outcome.issues) },
+      values: {},
+      section: plain as Section,
+    };
+  }
+  const actual = outcome.connector;
+  return {
+    status: { context, corrections: outcome.adjusted ? bayonetCorrections(connector, actual, outcome.issues) : [] },
+    values: {
+      cylinderBayonetDiameterMm: actual.stemDiameterMm,
+      cylinderBayonetProjectionMm: actual.projectionMm,
+      cylinderBayonetDetentMm: actual.detentInterferenceMm,
     },
     section: { ...section, connector: actual },
   };
@@ -1097,34 +1249,43 @@ function connectorChecks(
   const { dovetail, round } = keys;
   const wording: CutWording = shape.kind === 'cone' && section.type === 'parallel-to-bases' ? 'cone' : section.type;
   const fields: [ParameterKey, string][] =
-    connector.type === 'dovetail'
+    connector.type === 'bayonet'
       ? [
-          [dovetail.size, 'height'],
-          [dovetail.length, 'length'],
-          [dovetail.clearance, 'clearance'],
+          ['cylinderBayonetDiameterMm', 'diameter'],
+          ['cylinderBayonetProjectionMm', 'projection'],
+          ['cylinderBayonetClearanceMm', 'holeClearance'],
+          ['cylinderBayonetAxialMm', 'axialClearance'],
+          ['cylinderBayonetDetentMm', 'interference'],
         ]
-      : [
-          [round.diameter, 'diameter'],
-          [round.depth, 'insertion'],
-          ...(connector.count === 2 ? ([[round.spacing, 'spacing']] as [ParameterKey, string][]) : []),
-          ...((connector.type === 'plug'
-            ? [[round.plugClearance, 'upperClearance']]
-            : [
-                [round.dowelLowerClearance, 'lowerClearance'],
-                [round.dowelUpperClearance, 'upperClearance'],
-              ]) as [ParameterKey, string][]),
-        ];
-  const explain = (issue: DovetailIssue | RoundConnectorIssue) =>
+      : connector.type === 'dovetail'
+        ? [
+            [dovetail.size, 'height'],
+            [dovetail.length, 'length'],
+            [dovetail.clearance, 'clearance'],
+          ]
+        : [
+            [round.diameter, 'diameter'],
+            [round.depth, 'insertion'],
+            ...(connector.count === 2 ? ([[round.spacing, 'spacing']] as [ParameterKey, string][]) : []),
+            ...((connector.type === 'plug'
+              ? [[round.plugClearance, 'upperClearance']]
+              : [
+                  [round.dowelLowerClearance, 'lowerClearance'],
+                  [round.dowelUpperClearance, 'upperClearance'],
+                ]) as [ParameterKey, string][]),
+          ];
+  type AnyIssue = DovetailIssue | RoundConnectorIssue | BayonetIssue;
+  const explain = (issue: AnyIssue) =>
     connector.type === 'dovetail'
       ? dovetailIssueMessage(issue as DovetailIssue, wording)
-      : roundConnectorIssueMessage(issue as RoundConnectorIssue, connector.type, connector.count, wording, connector.profile);
-  const parameters = feasibility.parameters as Readonly<
-    Record<string, ParameterFeasibility<DovetailIssue | RoundConnectorIssue>>
-  >;
+      : connector.type === 'bayonet'
+        ? bayonetIssueMessage(issue as BayonetIssue)
+        : roundConnectorIssueMessage(issue as RoundConnectorIssue, connector.type, connector.count, wording, connector.profile);
+  const parameters = feasibility.parameters as Readonly<Record<string, ParameterFeasibility<AnyIssue>>>;
   const errors: ParameterErrors = {};
   const ranges: SectionRanges = {};
   for (const [key, parameter] of fields) {
-    const { bounds, issues } = parameters[parameter] as ParameterFeasibility<DovetailIssue | RoundConnectorIssue>;
+    const { bounds, issues } = parameters[parameter] as ParameterFeasibility<AnyIssue>;
     // The engine solves for the insertion e into one part; the field shows a dowel's whole length 2e.
     const shown = key === round.depth && connector.type === 'dowel' ? 2 : 1;
     ranges[key] = hasFeasibleValues(bounds) ? { min: bounds.min * shown, max: bounds.max * shown } : null;
@@ -1247,6 +1408,39 @@ export function roundConnectorIssueMessage(
   }
 }
 
+/** What falls short in a bayonet, by how much, and what to change; in Ukrainian for the interface. */
+export function bayonetIssueMessage(issue: BayonetIssue): string {
+  const shortfall = `${millimetres(issue.valueMm)}, потрібно щонайменше ${millimetres(issue.minimumMm)}`;
+  switch (issue.code) {
+    case 'lug-too-narrow':
+      return `Вужче вушко має ширину ${shortfall}. Збільште діаметр стрижня.`;
+    case 'lug-keying-lost':
+      return `Ширше вушко перекриває вужчий вхід лише на ${shortfall}. Збільште діаметр стрижня.`;
+    case 'lug-bearing-short':
+      return `Вушко заходить за виступ гнізда на ${shortfall}. Зменште збільшення гнізда або збільште діаметр стрижня.`;
+    case 'ledge-gap-short':
+      return `Між вушком і його входом лишається ${shortfall}. Зменште збільшення гнізда.`;
+    case 'stem-core-thin':
+      return `Суцільне ядро стрижня всередині язичка — ${shortfall}. Збільште діаметр стрижня.`;
+    case 'tongue-too-short':
+      return `Для пружного язичка лишається ${shortfall} довжини. Збільште діаметр стрижня.`;
+    case 'detent-travel-short':
+      return `Язичок може прогнутися на ${millimetres(issue.valueMm)}, а натяг — ${millimetres(issue.minimumMm)}. Зменште натяг фіксатора.`;
+    case 'projection-too-low':
+      return `Стрижень заввишки ${shortfall}: інакше не вміщуються язичок і вушка. Збільште висоту стрижня.`;
+    case 'ledge-thin':
+      return `Виступ під вушком у гнізді — ${shortfall}. Збільште висоту стрижня.`;
+    case 'socket-rib-thin':
+      return `Між каналами гнізда лишається ${shortfall}. Змініть діаметр стрижня або зменште збільшення гнізда.`;
+    case 'socket-wall-thin':
+      return `Стінка навколо гнізда — ${shortfall}. Зменште діаметр стрижня.`;
+    case 'socket-roof-thin':
+      return `Над склепінням гнізда лишається ${shortfall}. Зменште висоту чи діаметр стрижня або опустіть переріз.`;
+    case 'base-thin':
+      return `Під стрижнем лишається ${shortfall} нижньої частини. Підніміть переріз або збільште найбільший габарит.`;
+  }
+}
+
 /** A measured value, rounded down to hundredths so that it never reads as more than there is. */
 const millimetres = (value: number) => `${formatDecimal(Math.max(0, Math.floor(value * 100) / 100))} мм`;
 
@@ -1316,6 +1510,7 @@ type SectionKeys = {
     readonly dowelLowerClearance: 'cylinderDowelLowerClearanceMm' | 'coneDowelLowerClearanceMm' | 'ballDowelLowerClearanceMm';
     readonly dowelUpperClearance: 'cylinderDowelUpperClearanceMm' | 'coneDowelUpperClearanceMm' | 'ballDowelUpperClearanceMm';
   };
+  readonly bayonet?: typeof BAYONET_KEYS;
 };
 
 /** The further fields of the solids with an axis: a plane parallel to their base and a plane through a point on the axis. */
@@ -1348,6 +1543,9 @@ export const scaledConnectorDefaults: Readonly<Record<ScaledConnectorKey, number
   cylinderRoundDiameter: DEFAULT_ROUND_CONNECTOR.diameterFactor,
   cylinderRoundDepth: DEFAULT_ROUND_CONNECTOR.depthFactor,
   cylinderRoundSpacingPercent: DEFAULT_ROUND_CONNECTOR.spacingPercent,
+  cylinderBayonetDiameterMm: BAYONET_PLACEHOLDER_MM.diameter,
+  cylinderBayonetProjectionMm: BAYONET_PLACEHOLDER_MM.projection,
+  cylinderBayonetDetentMm: DEFAULT_BAYONET.detentInterferenceMm,
   ballDovetailSize: DEFAULT_DOVETAIL.sizeFactor,
   ballDovetailLengthPercent: DEFAULT_DOVETAIL.lengthPercent,
   ballRoundDiameter: DEFAULT_ROUND_CONNECTOR.diameterFactor,
@@ -1370,6 +1568,15 @@ function scaledError(key: ScaledConnectorKey, text: string, unit: number): strin
 
 /** The fields of a plane through a cone's apex, kept apart from those of a plane through a point on its axis. */
 export const coneApexKeys = { inclination: 'coneApexInclinationDeg', direction: 'coneApexDirectionDeg' } as const;
+
+/** A cylinder's bayonet fields, in the panel's order; this prototype offers none on another solid. */
+export const BAYONET_KEYS = [
+  'cylinderBayonetDiameterMm',
+  'cylinderBayonetProjectionMm',
+  'cylinderBayonetClearanceMm',
+  'cylinderBayonetAxialMm',
+  'cylinderBayonetDetentMm',
+] as const satisfies readonly ParameterKey[];
 
 /** The fields of the plane section and its connector, for the shapes that offer one. */
 export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys | PlanarSectionKeys>>> = {
@@ -1405,6 +1612,7 @@ export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys | Plana
     },
     separated: 'cylinderPartsSeparated',
     connector: 'cylinderConnector',
+    bayonet: BAYONET_KEYS,
     dovetail: {
       size: 'cylinderDovetailSize',
       length: 'cylinderDovetailLengthPercent',
@@ -1451,7 +1659,7 @@ export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys | Plana
 };
 
 /** Every connector field of the section. */
-const connectorTextKeys = ({ dovetail, round }: SectionKeys): ParameterKey[] => [
+const connectorTextKeys = ({ dovetail, round, bayonet }: SectionKeys): ParameterKey[] => [
   ...Object.values(dovetail),
   round.spacing,
   round.diameter,
@@ -1459,6 +1667,7 @@ const connectorTextKeys = ({ dovetail, round }: SectionKeys): ParameterKey[] => 
   round.plugClearance,
   round.dowelLowerClearance,
   round.dowelUpperClearance,
+  ...(bayonet ?? []),
 ];
 
 /**
@@ -1472,6 +1681,8 @@ export function activeConnectorKeys(keys: SectionKeys, connector: ConnectorType 
       return [];
     case 'dovetail':
       return Object.values(keys.dovetail);
+    case 'bayonet':
+      return [...(keys.bayonet ?? [])];
     case 'plug':
     case 'dowel':
       return [
@@ -1527,7 +1738,9 @@ function resolveSection(
   if (keys === undefined || type === undefined) return { values: {}, errors: {}, section: 'none' };
   const connectorType = activeConnector(kind, choices);
   const count = choices[keys.round.count];
-  const fields = activeConnectorKeys(keys, connectorType, count) as IndependentKey[];
+  // A bayonet where it does not work reads no fields of its own, whose hidden drafts then block nothing.
+  const inert = connectorType === 'bayonet' && !bayonetFits(kind, type, shape);
+  const fields = (inert ? [] : activeConnectorKeys(keys, connectorType, count)) as IndependentKey[];
   // A plane parallel to the bases has a position along the height, a vertical one a distance from the axis, an oblique
   // one a point on the axis and two angles, a plane through an apex those angles alone.
   const planar = 'position' in keys ? (keys as PlanarSectionKeys) : undefined;
@@ -1571,24 +1784,34 @@ function resolveSection(
     depthFactor: read(round.depth),
     ...(count === 2 ? { spacingPercent: read(round.spacing) } : {}),
   };
-  const connector =
-    connectorType === 'dovetail'
+  const connector = inert
+    ? undefined
+    : connectorType === 'bayonet'
       ? {
           type: connectorType,
-          sizeFactor: read(dovetail.size),
-          lengthPercent: read(dovetail.length),
-          clearanceMm: read(dovetail.clearance),
+          stemDiameterMm: read('cylinderBayonetDiameterMm'),
+          projectionMm: read('cylinderBayonetProjectionMm'),
+          holeClearanceMm: read('cylinderBayonetClearanceMm'),
+          axialClearanceMm: read('cylinderBayonetAxialMm'),
+          detentInterferenceMm: read('cylinderBayonetDetentMm'),
         }
-      : connectorType === 'plug'
-        ? { type: connectorType, ...shared, holeClearanceMm: read(round.plugClearance) }
-        : connectorType === 'dowel'
-          ? {
-              type: connectorType,
-              ...shared,
-              lowerClearanceMm: read(round.dowelLowerClearance),
-              upperClearanceMm: read(round.dowelUpperClearance),
-            }
-          : undefined;
+      : connectorType === 'dovetail'
+        ? {
+            type: connectorType,
+            sizeFactor: read(dovetail.size),
+            lengthPercent: read(dovetail.length),
+            clearanceMm: read(dovetail.clearance),
+          }
+        : connectorType === 'plug'
+          ? { type: connectorType, ...shared, holeClearanceMm: read(round.plugClearance) }
+          : connectorType === 'dowel'
+            ? {
+                type: connectorType,
+                ...shared,
+                lowerClearanceMm: read(round.dowelLowerClearance),
+                upperClearanceMm: read(round.dowelUpperClearance),
+              }
+            : undefined;
   const joining = connector === undefined ? {} : { connector };
   const sectionOf = (): Section => {
     switch (type) {
@@ -1834,6 +2057,7 @@ export const shapeParameterKeys: Readonly<
       'cylinderPlugClearanceMm',
       'cylinderDowelLowerClearanceMm',
       'cylinderDowelUpperClearanceMm',
+      ...BAYONET_KEYS,
     ],
     choices: ['cylinderSection', 'cylinderPartsSeparated', 'cylinderConnector', 'cylinderRoundCount', 'cylinderRoundProfile'],
   },
@@ -1903,14 +2127,19 @@ export function commitConnectorEdit(kind: ShapeKind, state: ParameterState, requ
   const keys = sectionKeys[kind];
   const status = request?.connectorStatus;
   const type = activeConnector(kind, state.choices);
-  if (keys === undefined || (type !== 'plug' && type !== 'dowel') || status?.unavailable !== undefined) return state;
+  const fitted = type === 'plug' || type === 'dowel' || type === 'bayonet';
+  if (keys === undefined || !fitted || status?.unavailable !== undefined) return state;
   const current = state.connectorEdits?.[kind];
   // While the plane or another value is not valid there is no context yet: an empty one matches none later.
   if (status === undefined)
     return current === undefined ? { ...state, connectorEdits: { ...state.connectorEdits, [kind]: '' } } : state;
   if (current === status.context) return state;
   const texts = { ...state.texts };
-  for (const key of [keys.round.diameter, keys.round.depth, keys.round.spacing]) {
+  const generated: readonly ParameterKey[] =
+    type === 'bayonet'
+      ? ['cylinderBayonetDiameterMm', 'cylinderBayonetProjectionMm', 'cylinderBayonetDetentMm']
+      : [keys.round.diameter, keys.round.depth, keys.round.spacing];
+  for (const key of generated) {
     const value = request?.values[key];
     if (value !== undefined) texts[key] = formatSteppedDecimal(value);
   }
@@ -1991,7 +2220,8 @@ export function canResetShapeParameters(kind: ShapeKind, state: ParameterState):
   const reset = resetShapeParameters(kind, state);
   const inactive = new Set<string>([...inactiveTiltKeys(kind, state), ...inactiveSectionKeys(kind, state.choices)]);
   const connector = activeConnector(kind, state.choices);
-  const editedConnector = (connector === 'plug' || connector === 'dowel') && state.connectorEdits?.[kind] !== undefined;
+  const fitted = connector === 'plug' || connector === 'dowel' || connector === 'bayonet';
+  const editedConnector = fitted && state.connectorEdits?.[kind] !== undefined;
   return (
     editedConnector ||
     shapeParameterKeys[kind].texts.some((key) => !inactive.has(key) && reset.texts[key] !== state.texts[key]) ||

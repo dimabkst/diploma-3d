@@ -42,6 +42,7 @@ let {
   onreset,
   ontiltmode,
   pinsReady,
+  trialReady,
   onaction,
   onroundedit,
 }: {
@@ -57,6 +58,8 @@ let {
   ontiltmode: (solid: TiltSolid, mode: TiltMode) => void;
   /** Whether the current model's dowels can be downloaded now. */
   pinsReady: boolean;
+  /** Whether the current model's trial holders can be downloaded now. */
+  trialReady: boolean;
   onaction: (action: PanelAction) => void;
   /** Called before a round connector's field changes by hand, while its other values are still as shown. */
   onroundedit: () => void;
@@ -214,7 +217,7 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
               <div class="group-actions">
                 <Button
                   variant="secondary"
-                  disabled={field.action === 'download-pins' && !pinsReady}
+                  disabled={(field.action === 'download-pins' && !pinsReady) || (field.action === 'download-trial' && !trialReady)}
                   onclick={() => onaction(field.action)}
                 >
                   {field.label}

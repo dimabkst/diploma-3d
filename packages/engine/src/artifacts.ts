@@ -1,4 +1,12 @@
 import type { ModelSpecInput } from '@diploma-3d/schema';
+import {
+  BAYONET_TRAVEL_DEG,
+  BAYONET_TRIAL_FRAME,
+  type BayonetLayout,
+  type BayonetPlan,
+  buildBayonetTrial,
+  verifyBayonet,
+} from './connectors/bayonet.ts';
 import { obliqueAxes } from './connectors/frame.ts';
 import type { RoundConnectorPlan } from './connectors/round.ts';
 import { createPreviewGlb, type PreviewObject } from './export/glb.ts';
@@ -6,8 +14,17 @@ import { arrangeInRow, restOnFlatFace, rotateHalfTurn, rotateOntoZ } from './exp
 import type { ThreeMfObject } from './export/three-mf.ts';
 import { createThreeMf } from './export/three-mf.ts';
 import type { GeometryKernel } from './kernel.ts';
-import { type Vec3, vertexAt, vertexCount } from './mesh.ts';
+import {
+  assertValidSolidMesh,
+  collapseRoundingSlivers,
+  meshFromManifold,
+  triangleCount,
+  type Vec3,
+  vertexAt,
+  vertexCount,
+} from './mesh.ts';
 import { type GeneratedModel, generateModel, type Solid } from './model.ts';
+import { withScope } from './scope.ts';
 import { roundDimensionsMm } from './shapes/round.ts';
 
 export interface ModelArtifacts {
@@ -25,6 +42,11 @@ export interface ModelArtifacts {
    * that a replacement has the exact size of the assembly's own; nothing fits them to the model's longest dimension.
    */
   readonly pinsFile?: PrintFile;
+  /**
+   * With a bayonet only: two small holders around the same male and socket, for trying the fit before printing the model. Built
+   * by the same builders from the same dimensions, in millimetres; nothing fits them to the model's longest dimension.
+   */
+  readonly trialFile?: PrintFile;
 }
 
 export interface PrintFile {
@@ -55,13 +77,16 @@ export async function buildModelArtifacts(kernel: GeometryKernel, spec: ModelSpe
   const model = generateModel(kernel, spec);
   const oriented = printOrientation(model);
   // An uncut solid stays where it was built; the parts of a section lie in a row.
-  const objects = model.solids.length === 1 ? oriented : arrangeInRow(oriented);
+  const objects = model.solids.length === 1 ? oriented : withoutRoundingSlivers(model, arrangeInRow(oriented));
   const printFile = { fileName: `${model.name}.3mf`, bytes: createThreeMf(objects, { title: model.name }) };
   const previewGlb = await createPreviewGlb(previewObjects(model, 0));
   if (model.section === undefined) return { model, previewGlb, printFile };
   const separatedPreviewGlb = await createPreviewGlb(previewObjects(model, previewSeparation(model)));
   const pins = oriented.filter((object) => object.part === 'dowel');
   const connector = model.section.connector;
+  if (connector?.type === 'bayonet') {
+    return { model, previewGlb, separatedPreviewGlb, printFile, trialFile: bayonetTrialFile(kernel, connector) };
+  }
   if (pins.length === 0 || connector === undefined || connector.type === 'dovetail') {
     return { model, previewGlb, separatedPreviewGlb, printFile };
   }
@@ -70,6 +95,18 @@ export async function buildModelArtifacts(kernel: GeometryKernel, spec: ModelSpe
   return { model, previewGlb, separatedPreviewGlb, printFile, pinsFile };
 }
 
+/**
+ * A bayonet's small features, moved far along the plate in a large model's row, may round to slivers in float32 that they did not
+ * have where they were built.
+ */
+const withoutRoundingSlivers = ({ section }: GeneratedModel, objects: readonly ThreeMfObject[]): readonly ThreeMfObject[] =>
+  section?.connector?.type === 'bayonet'
+    ? objects.map((object) => ({
+        ...object,
+        mesh: collapseRoundingSlivers({ mesh: object.mesh, newFaces: new Uint8Array(triangleCount(object.mesh)) }).mesh,
+      }))
+    : objects;
+
 /** Millimetres for a file name: thousandths at most, with a point, and no trailing zeros. */
 const fileMillimetres = (value: number): string => String(Number(value.toFixed(3)));
 
@@ -77,6 +114,40 @@ const fileMillimetres = (value: number): string => String(Number(value.toFixed(3
 export function pinsFileName({ profile, sites, insertion }: RoundConnectorPlan): string {
   const sizes = sites.map(({ pinDiameter }) => `d${fileMillimetres(pinDiameter)}`).join('-');
   return `dowels-${profile}-${sizes}-L${fileMillimetres(2 * insertion)}mm`;
+}
+
+/** What a trial must identify: the stem, its height and the three adjustments, e.g. "bayonet-trial-d12-H12.25-c0.5-a0.2-i0.15mm". */
+export function bayonetTrialFileName({
+  diameter,
+  projection,
+  holeClearance,
+  axialClearance,
+  interference,
+}: BayonetLayout): string {
+  const part = (value: number) => fileMillimetres(value);
+  return `bayonet-trial-d${part(diameter)}-H${part(projection)}-c${part(holeClearance)}-a${part(axialClearance)}-i${part(interference)}mm`;
+}
+
+/**
+ * The trial holders in their print orientation, as the model's parts: the male upwards, the socket's mouth on the bed. They pass
+ * the same checks of the fit as the model's parts, around their own surroundings.
+ */
+function bayonetTrialFile(kernel: GeometryKernel, { layout }: BayonetPlan): PrintFile {
+  const objects = withScope((track) => {
+    const { male, female, whole } = buildBayonetTrial(kernel, track, layout);
+    verifyBayonet(kernel, track, whole, { lower: male, upper: female }, { frame: BAYONET_TRIAL_FRAME, layout });
+    return [
+      { name: 'bayonet-trial-male', mesh: meshFromManifold(male) },
+      { name: 'bayonet-trial-female', mesh: meshFromManifold(female) },
+    ];
+  });
+  const arranged = arrangeInRow(objects).map(({ name, mesh }) => ({
+    name,
+    mesh: collapseRoundingSlivers({ mesh, newFaces: new Uint8Array(triangleCount(mesh)) }).mesh,
+  }));
+  for (const { mesh } of arranged) assertValidSolidMesh(mesh);
+  const name = bayonetTrialFileName(layout);
+  return { fileName: `${name}.3mf`, bytes: createThreeMf(arranged, { title: name }) };
 }
 
 /** The part on the positive side of a section's plane: the one with the holes or the groove. */
@@ -118,6 +189,12 @@ export function previewSeparation({ solids, section, size }: GeneratedModel): nu
 function previewObjects({ solids, section }: GeneratedModel, gap: number): PreviewObject[] {
   if (section === undefined || gap === 0) return [...solids];
   const { connector, plane, type } = section;
+  if (connector?.type === 'bayonet') {
+    // Locked lugs cannot be pulled straight through their ledges: the upper part is shown at its insertion angle.
+    const displayOffset = scaled(plane.normal, gap);
+    const displayTurn = { angleDeg: -BAYONET_TRAVEL_DEG, axis: connector.frame.n, pivot: connector.frame.origin };
+    return solids.map((solid) => (onPositiveSide(solid) ? { ...solid, displayOffset, displayTurn } : solid));
+  }
   const sliding = connector?.type === 'dovetail' ? connector : undefined;
   const tongueMoves = sliding !== undefined && type !== 'parallel-to-bases' && type !== 'horizontal';
   const direction = sliding === undefined ? plane.normal : tongueMoves ? scaled(sliding.frame.u, -1) : sliding.frame.u;
@@ -176,6 +253,8 @@ function printOrientation({ solids, section, spec }: GeneratedModel): readonly (
   const { u, n } = connector.frame;
   return solids.map((solid) => {
     if (solid.part === 'dowel') return { ...solid, mesh: rotateOntoZ(solid.mesh, n) };
-    return solid.part === 'upper' && spec.shape.kind !== 'cone' ? { ...solid, mesh: rotateHalfTurn(solid.mesh, u) } : solid;
+    // A bayonet's socket is designed for its mouth on the bed: its roof slopes for that, and its ledges rise from there.
+    const turnsOver = solid.part === 'upper' && spec.shape.kind !== 'cone' && connector.type !== 'bayonet';
+    return turnsOver ? { ...solid, mesh: rotateHalfTurn(solid.mesh, u) } : solid;
   });
 }

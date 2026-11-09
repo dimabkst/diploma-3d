@@ -8,6 +8,7 @@ import {
   type ShapeKind,
 } from '@diploma-3d/schema';
 import type { Manifold } from 'manifold-3d';
+import { type BayonetPlan, buildBayonet, planBayonet, verifyBayonet } from './connectors/bayonet.ts';
 import { buildDovetail, type DovetailPlan, planDovetail, verifyDovetail } from './connectors/dovetail.ts';
 import {
   ballOffsetLimitPercent,
@@ -78,7 +79,7 @@ export interface Solid {
 
 export type SectionPart = 'lower' | 'upper' | 'part-1' | 'part-2' | 'dowel';
 
-export type ConnectorPlan = DovetailPlan | RoundConnectorPlan;
+export type ConnectorPlan = DovetailPlan | RoundConnectorPlan | BayonetPlan;
 
 export interface ModelSection {
   readonly type: SectionType;
@@ -165,6 +166,10 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
     if (connector?.type === 'dovetail') {
       const joined = buildDovetail(kernel, track, parts, connector);
       verifyDovetail(kernel, track, { whole: solid, upper: parts.upper }, joined, connector, longest);
+      parts = { lower: checked(joined.lower), upper: checked(joined.upper) };
+    } else if (connector?.type === 'bayonet') {
+      const joined = buildBayonet(kernel, track, parts, connector);
+      verifyBayonet(kernel, track, solid, joined, connector);
       parts = { lower: checked(joined.lower), upper: checked(joined.upper) };
     } else if (connector !== undefined) {
       const joined = buildRoundConnectors(kernel, track, parts, connector);
@@ -295,7 +300,9 @@ function planConnector({ shape, scale, section }: ModelSpec): ConnectorPlan | un
   const plan =
     connector.type === 'dovetail'
       ? planDovetail(shape, scale, cut, connector)
-      : planRoundConnectors(shape, scale, cut, connector);
+      : connector.type === 'bayonet'
+        ? planBayonet(shape, scale, cut, connector)
+        : planRoundConnectors(shape, scale, cut, connector);
   if (plan.issues.length > 0) throw new ConnectorUnsuitableError(plan.issues);
   return plan;
 }
