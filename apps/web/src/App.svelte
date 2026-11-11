@@ -225,7 +225,10 @@ $effect(() => {
   void attempt;
   const kind = selectedKind;
   const key = requestKey;
-  const spec = untrack(() => request?.spec);
+  // One snapshot: the files record the settings of the very request whose specification they were generated from.
+  const snapshot = untrack(() => request);
+  const spec = snapshot?.spec;
+  const settingsInput = snapshot?.settingsInput ?? {};
   // Every change invalidates the current model at once, so outdated geometry can never be downloaded; results of
   // superseded requests are discarded when they arrive.
   const requestId = ++latestRequest;
@@ -243,7 +246,7 @@ $effect(() => {
   model = { status: 'generating', stale };
   const timer = setTimeout(
     () => {
-      buildModel(spec).then(
+      buildModel(spec, settingsInput).then(
         (artifacts) => {
           if (requestId === latestRequest) model = { status: 'ready', key, artifacts };
         },

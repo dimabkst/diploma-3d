@@ -145,6 +145,7 @@ export {
   twistFeasibility,
   twistLayout,
   twistSupported,
+  twistTrialDimensions,
   verifyTwist,
 } from './connectors/twist.ts';
 export {
@@ -166,7 +167,22 @@ export {
 } from './errors.ts';
 export { createPreviewGlb, GLB_MEDIA_TYPE, type PreviewObject, toGltfPosition } from './export/glb.ts';
 export { arrangeInRow, PRINT_LAYOUT_GAP_MM, restOnFlatFace, rotateHalfTurn, rotateOntoZ } from './export/layout.ts';
-export { createThreeMf, THREE_MF_MEDIA_TYPE, type ThreeMfObject, type ThreeMfOptions } from './export/three-mf.ts';
+export {
+  type ExportKind,
+  MODEL_SETTINGS_PATH,
+  MODEL_SETTINGS_SCHEMA_VERSION,
+  type ModelSettingsDocument,
+  type ModelSettingsInput,
+  modelSettingsDocument,
+  serializeModelSettings,
+} from './export/model-settings.ts';
+export {
+  createThreeMf,
+  SETTINGS_PART,
+  THREE_MF_MEDIA_TYPE,
+  type ThreeMfObject,
+  type ThreeMfOptions,
+} from './export/three-mf.ts';
 export { type GeometryKernel, type KernelOptions, loadGeometryKernel } from './kernel.ts';
 export {
   type Bounds,

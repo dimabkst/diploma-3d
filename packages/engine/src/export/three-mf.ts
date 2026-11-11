@@ -10,7 +10,19 @@ export interface ThreeMfObject {
 
 export interface ThreeMfOptions {
   readonly title?: string;
+  /**
+   * The application's settings as serialized JSON, stored as an optional custom part at `MODEL_SETTINGS_PATH` and kept by
+   * consumers through a must-preserve relationship; the model part does not repeat them.
+   */
+  readonly settingsJson?: string;
 }
+
+/** The settings part's path in the package, with its content type and the relationship that keeps it. */
+export const SETTINGS_PART = {
+  path: '3D/Other/model-settings.json',
+  contentType: 'application/json',
+  relationship: 'http://schemas.openxmlformats.org/package/2006/relationships/mustpreserve',
+} as const;
 
 export const THREE_MF_MEDIA_TYPE = 'model/3mf';
 export const THREE_MF_MODEL_PATH = '3D/3dmodel.model';
@@ -21,20 +33,23 @@ const MODEL_RELATIONSHIP_TYPE = 'http://schemas.microsoft.com/3dmanufacturing/20
 // fflate encodes the DOS timestamp from local-time getters, so a local-time date yields identical bytes in every time zone.
 const ARCHIVE_TIMESTAMP = new Date(2026, 0, 1);
 
-const CONTENT_TYPES_XML = `<?xml version="1.0" encoding="UTF-8"?>
+const contentTypesXml = (withSettings: boolean) => `<?xml version="1.0" encoding="UTF-8"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>
-</Types>
+${withSettings ? `  <Default Extension="json" ContentType="${SETTINGS_PART.contentType}"/>\n` : ''}</Types>
 `;
 
-const RELATIONSHIPS_XML = `<?xml version="1.0" encoding="UTF-8"?>
+const relationshipsXml = (withSettings: boolean) => `<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rel0" Target="/${THREE_MF_MODEL_PATH}" Type="${MODEL_RELATIONSHIP_TYPE}"/>
-</Relationships>
+${withSettings ? `  <Relationship Id="rel1" Target="/${SETTINGS_PART.path}" Type="${SETTINGS_PART.relationship}"/>\n` : ''}</Relationships>
 `;
 
-/** Packs closed meshes as separate geometry-only objects, each with its own build item; no slicer settings are written. */
+/**
+ * Packs closed meshes as separate geometry-only objects, each with its own build item; no slicer settings are written, and
+ * the application's own settings only as the optional part described by `ThreeMfOptions.settingsJson`.
+ */
 export function createThreeMf(objects: readonly ThreeMfObject[], options: ThreeMfOptions = {}): Uint8Array<ArrayBuffer> {
   if (objects.length === 0) {
     throw new GeometryError('A 3MF package needs at least one object.');
@@ -43,12 +58,14 @@ export function createThreeMf(objects: readonly ThreeMfObject[], options: ThreeM
     assertValidSolidMesh(object.mesh);
   }
 
+  const withSettings = options.settingsJson !== undefined;
   // fflate allocates a regular ArrayBuffer; its typings predate the ArrayBuffer type parameter.
   return zipSync(
     {
-      '[Content_Types].xml': strToU8(CONTENT_TYPES_XML),
-      '_rels/.rels': strToU8(RELATIONSHIPS_XML),
+      '[Content_Types].xml': strToU8(contentTypesXml(withSettings)),
+      '_rels/.rels': strToU8(relationshipsXml(withSettings)),
       [THREE_MF_MODEL_PATH]: strToU8(modelXml(objects, options)),
+      ...(options.settingsJson === undefined ? {} : { [SETTINGS_PART.path]: strToU8(options.settingsJson) }),
     },
     { level: 6, mtime: ARCHIVE_TIMESTAMP },
   ) as Uint8Array<ArrayBuffer>;

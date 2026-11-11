@@ -14,6 +14,7 @@ import {
   hasFeasibleValues,
   type Interval,
   isApexChordUsable,
+  type ModelSettingsInput,
   normalizeRoundConnector,
   normalizeTwist,
   obliquePlaneContainsAxis,
@@ -322,7 +323,18 @@ export type ModelRequest = {
   readonly sectionRanges?: SectionRanges | undefined;
   /** Present for a round connector on a usable cut, when the request knows the edits. */
   readonly connectorStatus?: ConnectorStatus | undefined;
-} & ({ readonly spec: ModelSpec; readonly key: string } | { readonly spec: undefined; readonly key: undefined });
+} & (
+  | {
+      readonly spec: ModelSpec;
+      readonly key: string;
+      /**
+       * What the 3MF records besides the specification, from this same request: how the inclination was entered. It changes
+       * no geometry, so that it is not part of the key.
+       */
+      readonly settingsInput: ModelSettingsInput;
+    }
+  | { readonly spec: undefined; readonly key: undefined; readonly settingsInput?: undefined }
+);
 
 /** A twist connector's stored size before anything fits it to a section: only a request without edits reads it. */
 const TWIST_PLACEHOLDER_SIZE_MM = 18;
@@ -810,7 +822,8 @@ export function resolveModelRequest(
   });
   // The plain cut shown for an unavailable connector is not the plain cut chosen without one: only the latter is for download.
   const key = `${JSON.stringify(spec)}${connectorStatus?.unavailable === undefined ? '' : ':connector-unavailable'}`;
-  return { values, errors, sectionRanges, connectorStatus, spec, key };
+  const settingsInput: ModelSettingsInput = inclinationInputOf(kind, values, options.tiltModes);
+  return { values, errors, sectionRanges, connectorStatus, spec, key, settingsInput };
 }
 
 /** Why the twist connector is not offered here, for a choice made before the solid or the cut changed. */
@@ -837,6 +850,22 @@ export const twistAvailable = (kind: ShapeKind, choices: ParameterChoices, value
 /** A twist connector chosen where it does not work: the model is then the plain cut, not offered for download. */
 const twistElsewhere = (kind: ShapeKind, choices: ParameterChoices, shape: ShapeInput | undefined): boolean =>
   activeConnector(kind, choices) === 'twist' && !twistFits(kind, activeSection(kind, choices), shape);
+
+/** How a displaced figure's inclination was entered, with the angles themselves when they were. */
+function inclinationInputOf(
+  kind: ShapeKind,
+  values: ParameterValues,
+  tiltModes: TiltModes = initialTiltModes(),
+): Pick<ModelSettingsInput, 'inclinationInput'> {
+  if (!isTiltSolid(kind)) return {};
+  if (tiltModes[kind] === 'offset') return { inclinationInput: { enteredAs: 'offsets' } };
+  const { inclination, direction } = tiltKeys[kind];
+  const [inclinationDeg, directionDeg] = [values[inclination], direction === undefined ? undefined : values[direction]];
+  if (inclinationDeg === undefined) return {};
+  return {
+    inclinationInput: { enteredAs: 'angles', inclinationDeg, ...(directionDeg === undefined ? {} : { directionDeg }) },
+  };
+}
 
 // Feasibility depends only on the solid, the size, the cut and the connector; the panel and the request read it for every
 // edit of any field, so recent results are kept.

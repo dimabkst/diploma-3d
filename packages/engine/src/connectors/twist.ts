@@ -723,6 +723,13 @@ export function verifyTwist(
 /** The trial holders: the base under the male, and the wall around the recess and over its roof. */
 const TRIAL = { base: 3, wall: 3, roof: 1.6 } as const;
 
+/** The trial holders' own size, in millimetres: their outer radius, the base under the male and the female's height. */
+export const twistTrialDimensions = (layout: TwistLayout) => ({
+  outerRadius: layout.mouthRadius + TRIAL.wall,
+  maleBaseHeight: TRIAL.base,
+  femaleHeight: layout.recessDepth + TRIAL.roof,
+});
+
 export interface TwistTrialHolders {
   readonly male: Manifold;
   readonly female: Manifold;
@@ -736,11 +743,10 @@ export interface TwistTrialHolders {
  * require and a little more to grip, and a plain round outside.
  */
 export function buildTwistTrial(kernel: GeometryKernel, track: Track, layout: TwistLayout): TwistTrialHolders {
-  const outer = layout.mouthRadius + TRIAL.wall;
+  const { outerRadius: outer, maleBaseHeight, femaleHeight: height } = twistTrialDimensions(layout);
   const segments = circularSegments(outer);
   const circle = Array.from({ length: segments }, (_, index) => polar(outer, (2 * Math.PI * index) / segments));
-  const height = layout.recessDepth + TRIAL.roof;
-  const base = prism(kernel, track, circle, -TRIAL.base, 0);
+  const base = prism(kernel, track, circle, -maleBaseHeight, 0);
   const body = prism(kernel, track, circle, 0, height);
   const male = cleaned(track, track(base.add(buildTwistMale(kernel, track, layout))), CLEANUP_MM);
   const female = cleaned(track, track(body.subtract(buildTwistCavity(kernel, track, layout))), CLEANUP_MM);

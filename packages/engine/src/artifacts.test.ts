@@ -1,5 +1,6 @@
 import { defaultModelSpecs, type ModelSpecInput } from '@diploma-3d/schema';
 import { type Accessor, WebIO } from '@gltf-transform/core';
+import { unzipSync } from 'fflate';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
   buildModelArtifacts,
@@ -10,8 +11,9 @@ import {
 import { InvalidModelSpecError } from './errors.ts';
 import { toGltfPosition } from './export/glb.ts';
 import { arrangeInRow } from './export/layout.ts';
+import { MODEL_SETTINGS_PATH } from './export/model-settings.ts';
 import { readThreeMf } from './export/three-mf.test-helper.ts';
-import { createThreeMf } from './export/three-mf.ts';
+import { createThreeMf, THREE_MF_MODEL_PATH } from './export/three-mf.ts';
 import { type GeometryKernel, loadGeometryKernel } from './kernel.ts';
 import {
   cross,
@@ -830,8 +832,13 @@ describe('for a cylinder cut parallel to its bases', () => {
         expect(positions?.getElement(index, [])[1]).toBeCloseTo(r / 4000, METRE_DIGITS);
       }
     }
-    // The print file does not depend on either preview: it holds the parts laid out for printing.
-    expect(printFile.bytes).toEqual(createThreeMf(arrangeInRow(model.solids), { title: model.name }));
+    // The print file does not depend on either preview: it holds the parts laid out for printing, and besides them only the
+    // model's settings.
+    const [actual, bare] = [printFile.bytes, createThreeMf(arrangeInRow(model.solids), { title: model.name })].map((bytes) =>
+      unzipSync(bytes),
+    ) as [Record<string, Uint8Array>, Record<string, Uint8Array>];
+    expect(actual[THREE_MF_MODEL_PATH]).toEqual(bare[THREE_MF_MODEL_PATH]);
+    expect(Object.keys(actual).sort()).toEqual([...Object.keys(bare), MODEL_SETTINGS_PATH].sort());
   });
 
   it('keeps a single object and no separated preview without a section', async () => {

@@ -92,3 +92,9 @@ export function readThreeMf(bytes: Uint8Array): ParsedThreeMf {
     },
   };
 }
+
+/** The text of one part of the package by its path, as a reader would find a custom part; undefined if there is none. */
+export function readThreeMfPart(bytes: Uint8Array, path: string): string | undefined {
+  const part = unzipSync(bytes)[path];
+  return part === undefined ? undefined : strFromU8(part);
+}

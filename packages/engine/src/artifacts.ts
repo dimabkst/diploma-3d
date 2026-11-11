@@ -11,6 +11,12 @@ import {
 } from './connectors/twist.ts';
 import { createPreviewGlb, type PreviewObject } from './export/glb.ts';
 import { arrangeInRow, restOnFlatFace, rotateHalfTurn, rotateOntoZ } from './export/layout.ts';
+import {
+  type ExportKind,
+  type ModelSettingsInput,
+  modelSettingsDocument,
+  serializeModelSettings,
+} from './export/model-settings.ts';
 import type { ThreeMfObject } from './export/three-mf.ts';
 import { createThreeMf } from './export/three-mf.ts';
 import type { GeometryKernel } from './kernel.ts';
@@ -73,25 +79,33 @@ export const CONNECTOR_PREVIEW_GAP_RELATIVE = 0.5;
  * section are separate objects of the print file, laid out side by side; the preview's separation moves only display
  * nodes, so it changes neither the meshes nor the print file.
  */
-export async function buildModelArtifacts(kernel: GeometryKernel, spec: ModelSpecInput): Promise<ModelArtifacts> {
+export async function buildModelArtifacts(
+  kernel: GeometryKernel,
+  spec: ModelSpecInput,
+  input: ModelSettingsInput = {},
+): Promise<ModelArtifacts> {
   const model = generateModel(kernel, spec);
+  // Every file records the settings of this very model, from the specification and plans it was generated from.
+  const threeMf = (objects: readonly ThreeMfObject[], title: string, kind: ExportKind) =>
+    createThreeMf(objects, { title, settingsJson: serializeModelSettings(modelSettingsDocument(model, kind, input)) });
   const oriented = printOrientation(model);
   // An uncut solid stays where it was built; the parts of a section lie in a row.
   const objects = model.solids.length === 1 ? oriented : withoutRoundingSlivers(model, arrangeInRow(oriented));
-  const printFile = { fileName: `${model.name}.3mf`, bytes: createThreeMf(objects, { title: model.name }) };
+  const printFile = { fileName: `${model.name}.3mf`, bytes: threeMf(objects, model.name, 'model') };
   const previewGlb = await createPreviewGlb(previewObjects(model, 0));
   if (model.section === undefined) return { model, previewGlb, printFile };
   const separatedPreviewGlb = await createPreviewGlb(previewObjects(model, previewSeparation(model)));
   const pins = oriented.filter((object) => object.part === 'dowel');
   const connector = model.section.connector;
   if (connector?.type === 'twist') {
-    return { model, previewGlb, separatedPreviewGlb, printFile, trialFile: twistTrialFile(kernel, connector) };
+    const trialFile = twistTrialFile(kernel, connector, (holders, title) => threeMf(holders, title, 'connector-trial'));
+    return { model, previewGlb, separatedPreviewGlb, printFile, trialFile };
   }
   if (pins.length === 0 || connector === undefined || connector.type === 'dovetail') {
     return { model, previewGlb, separatedPreviewGlb, printFile };
   }
   const pinsName = pinsFileName(connector);
-  const pinsFile = { fileName: `${pinsName}.3mf`, bytes: createThreeMf(arrangeInRow(pins), { title: pinsName }) };
+  const pinsFile = { fileName: `${pinsName}.3mf`, bytes: threeMf(arrangeInRow(pins), pinsName, 'pins') };
   return { model, previewGlb, separatedPreviewGlb, printFile, pinsFile };
 }
 
@@ -116,7 +130,11 @@ export function twistTrialFileName({ size, holeClearance, axialClearance }: Twis
  * The trial holders in the model's print orientation, the male upwards and the recess's mouth on the bed. They pass the same 3D
  * checks as the model's parts, within their own surroundings.
  */
-function twistTrialFile(kernel: GeometryKernel, { layout }: TwistPlan): PrintFile {
+function twistTrialFile(
+  kernel: GeometryKernel,
+  { layout }: TwistPlan,
+  pack: (objects: readonly ThreeMfObject[], title: string) => Uint8Array<ArrayBuffer>,
+): PrintFile {
   const objects = withScope((track) => {
     const { male, female, whole } = buildTwistTrial(kernel, track, layout);
     verifyTwist(kernel, track, whole, { lower: male, upper: female }, { frame: TWIST_TRIAL_FRAME, layout });
@@ -128,7 +146,7 @@ function twistTrialFile(kernel: GeometryKernel, { layout }: TwistPlan): PrintFil
   const arranged = arrangeInRow(objects).map(collapsed);
   for (const { mesh } of arranged) assertValidSolidMesh(mesh);
   const name = twistTrialFileName(layout);
-  return { fileName: `${name}.3mf`, bytes: createThreeMf(arranged, { title: name }) };
+  return { fileName: `${name}.3mf`, bytes: pack(arranged, name) };
 }
 
 /** Millimetres for a file name: thousandths at most, with a point, and no trailing zeros. */
