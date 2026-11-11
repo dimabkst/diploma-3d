@@ -14,6 +14,7 @@ import {
   type ConnectorProfile,
   DIAMETRAL_CLEARANCE_LIMITS,
   DOVETAIL_CLEARANCE_LIMITS,
+  type DovetailEntrance,
   defaultModelSpecs,
   MAX_LONGEST_DIMENSION_MM,
   MIN_LONGEST_DIMENSION_MM,
@@ -759,38 +760,59 @@ const VERTICAL_PRINT_NOTE =
   'Вісь кріплення горизонтальна, а частини у файлі стоять вертикально, тому виступи й отвори можуть потребувати ' +
   'підтримок або іншої орієнтації в слайсері.';
 
-const verticalDovetailHelp: Help = {
-  label: 'Як працює кріплення?',
-  text:
+/** How a dovetail along a vertical or inclined slide is assembled, for each entrance; neither entrance makes it a latch. */
+const VERTICAL_DOVETAIL_MOTION: Readonly<Record<DovetailEntrance, string>> = {
+  standard:
     'Паз відкритий угорі та закінчується упором унизу. Щоб скласти модель, опустіть половинку з виступом уздовж паза ' +
     'до упора. Для розбирання утримуйте половинку з пазом і підніміть половинку з виступом. У такому положенні її вага ' +
-    'притискає виступ до нижнього упора.\n\n' +
+    'притискає виступ до нижнього упора.',
+  opposite:
+    'Паз відкритий унизу та закінчується упором угорі. Щоб скласти модель, підніміть половинку з виступом уздовж паза ' +
+    'знизу до упора. Для розбирання утримуйте половинку з пазом і опустіть половинку з виступом. У такому положенні її ' +
+    'вага тягне виступ із паза, тож модель треба тримати або покласти.',
+};
+
+const verticalDovetailHelp = (entrance: DovetailEntrance): Help => ({
+  label: 'Як працює кріплення?',
+  text:
+    `${VERTICAL_DOVETAIL_MOTION[entrance]}\n\n` +
     'Виступ — на частині 1, паз — у частині 2. Похилі боки під кутом 45° утримують половинки від роз’єднання ' +
     'перпендикулярно до перерізу, але це не замок: половинки роз’єднаються, якщо утримувати іншу або перевернути модель.\n\n' +
     'Висота визначає, наскільки виступ виходить за переріз. Довжина вимірюється вертикально, вздовж паза. Зазор — ' +
     'заданий у моделі проміжок між відповідними поверхнями виступу й паза.\n\n' +
     BOUNDS_HELP,
-};
+});
 
 const OBLIQUE_PRINT_NOTE =
   'Вісь кріплення перпендикулярна до нахиленої площини, а кожна частина у файлі стоїть на своїй плоскій грані, тому ' +
   'виступи й отвори можуть потребувати підтримок або іншої орієнтації в слайсері.';
 
-const obliqueDovetailHelp: Help = {
-  label: 'Як працює кріплення?',
-  text:
+const OBLIQUE_DOVETAIL_MOTION: Readonly<Record<DovetailEntrance, string>> = {
+  standard:
     'Виступ — на частині 1, паз — у частині 2. Паз відкритий угорі схилу площини й закінчується упором унизу. Щоб скласти ' +
     'модель, насуньте частину 1 уздовж площини вниз по схилу до упора. Для розбирання утримуйте частину 2 й посуньте ' +
     'частину 1 вгору по схилу.\n\n' +
     'Рух іде вздовж нахиленої площини, а не обов’язково вертикально. Коли модель стоїть прямо, вага частини 1 має складову ' +
-    'вниз по схилу, але це не замок і не гарантія посадки без тертя. Похилі боки під кутом 45° утримують половинки від ' +
+    'вниз по схилу, але це не замок і не гарантія посадки без тертя.',
+  opposite:
+    'Виступ — на частині 1, паз — у частині 2. Паз відкритий унизу схилу площини й закінчується упором угорі. Щоб скласти ' +
+    'модель, насуньте частину 1 уздовж площини вгору по схилу до упора. Для розбирання утримуйте частину 2 й посуньте ' +
+    'частину 1 вниз по схилу.\n\n' +
+    'Рух іде вздовж нахиленої площини, а не обов’язково вертикально. Коли модель стоїть прямо, вага частини 1 тягне її вниз ' +
+    'по схилу, до входу, тож модель треба тримати або покласти; це не замок.',
+};
+
+const obliqueDovetailHelp = (entrance: DovetailEntrance): Help => ({
+  label: 'Як працює кріплення?',
+  text:
+    `${OBLIQUE_DOVETAIL_MOTION[entrance]} Похилі боки під кутом 45° утримують половинки від ` +
     'роз’єднання перпендикулярно до перерізу.\n\n' +
     'Висота визначає, наскільки виступ виходить за переріз. Довжина вимірюється вздовж паза. Зазор — заданий у моделі ' +
     'проміжок між відповідними поверхнями виступу й паза.\n\n' +
     OBLIQUE_PRINT_NOTE +
     '\n\n' +
     BOUNDS_HELP,
-};
+});
 
 const numberedPlugHelp = (printNote: string): Help => ({
   label: 'Як працює кріплення?',
@@ -829,18 +851,27 @@ const withConeNote = (help: Help): Help => ({ ...help, text: `${help.text}\n\n${
 
 const ENTRY_NOTCH_NOTE = 'У звуженій верхній частині може бути помітна виїмка для входу в паз.';
 
-const coneVerticalDovetailHelp: Help = {
-  label: 'Як працює кріплення?',
-  text:
+const CONE_VERTICAL_DOVETAIL_MOTION: Readonly<Record<DovetailEntrance, string>> = {
+  standard:
     'Щоб скласти модель, опустіть частину з виступом уздовж паза до упора. Для розбирання утримуйте частину з пазом і ' +
     'підніміть частину з виступом. Паз відкритий угорі, упор — унизу; рух вертикальний, також у похилого конуса.\n\n' +
-    `${ENTRY_NOTCH_NOTE}\n\n` +
+    ENTRY_NOTCH_NOTE,
+  opposite:
+    'Щоб скласти модель, підніміть частину з виступом уздовж паза знизу до упора. Для розбирання утримуйте частину з пазом і ' +
+    'опустіть частину з виступом. Паз відкритий унизу, біля основи, упор — угорі; рух вертикальний, також у похилого конуса. ' +
+    'Вага частини з виступом тягне її з паза, тож модель треба тримати або покласти.',
+};
+
+const coneVerticalDovetailHelp = (entrance: DovetailEntrance): Help => ({
+  label: 'Як працює кріплення?',
+  text:
+    `${CONE_VERTICAL_DOVETAIL_MOTION[entrance]}\n\n` +
     'Виступ — на частині 1, паз — у частині 2. Похилі боки під кутом 45° утримують половинки від роз’єднання ' +
     'перпендикулярно до перерізу, але це не замок: половинки роз’єднаються, якщо утримувати іншу або перевернути модель.\n\n' +
     'Висота визначає, наскільки виступ виходить за переріз. Довжина вимірюється вертикально, вздовж паза. Зазор — ' +
     'заданий у моделі проміжок між відповідними поверхнями виступу й паза.\n\n' +
     BOUNDS_HELP,
-};
+});
 
 const CONE_VERTICAL_NOTE =
   'Конус звужується догори, а порожнина перетинає різні висоти й іде до вигнутої поверхні, тому повзунки враховують ' +
@@ -1017,6 +1048,18 @@ function connectorSection(
           ...lengthNote,
         ];
   const twistKeys = keys.twist;
+  const entrance = choices[keys.dovetailEntrance];
+  // On a horizontal cut the slide has no upper and lower end; the two sides are named by the cut's own frame.
+  const horizontalCut = cut === 'parallel-to-bases' || cut === 'horizontal';
+  const entranceField: ChoiceField = {
+    type: 'choice',
+    key: keys.dovetailEntrance,
+    label: 'Вхід у паз',
+    options: [
+      { value: 'standard', label: horizontalCut ? 'З одного боку' : 'Зверху' },
+      { value: 'opposite', label: horizontalCut ? 'З протилежного боку' : 'Знизу' },
+    ],
+  };
   const fields: Record<ConnectorChoice, ParameterField[]> = {
     none: [],
     twist:
@@ -1054,6 +1097,7 @@ function connectorSection(
             { type: 'action', key: `${kind}-download-trial`, label: 'Завантажити пробне з’єднання', action: 'download-trial' },
           ],
     dovetail: [
+      entranceField,
       scaleNote,
       millimetreField(dovetail.size, 'Висота виступу, мм'),
       note(
@@ -1094,19 +1138,19 @@ function connectorSection(
   const helps: Record<SectionType, Record<Exclude<ConnectorChoice, 'none'>, Help>> = {
     'parallel-to-bases': { dovetail: dovetailHelp, plug: plugHelp, dowel: dowelHelp, twist: twistHelp },
     vertical: {
-      dovetail: verticalDovetailHelp,
+      dovetail: verticalDovetailHelp(entrance),
       plug: numberedPlugHelp(VERTICAL_PRINT_NOTE),
       dowel: numberedDowelHelp(VERTICAL_PRINT_NOTE),
       twist: twistHelp,
     },
     oblique: {
-      dovetail: obliqueDovetailHelp,
+      dovetail: obliqueDovetailHelp(entrance),
       plug: numberedPlugHelp(OBLIQUE_PRINT_NOTE),
       dowel: numberedDowelHelp(OBLIQUE_PRINT_NOTE),
       twist: twistHelp,
     },
     'oblique-apex': {
-      dovetail: obliqueDovetailHelp,
+      dovetail: obliqueDovetailHelp(entrance),
       plug: numberedPlugHelp(OBLIQUE_PRINT_NOTE),
       dowel: numberedDowelHelp(OBLIQUE_PRINT_NOTE),
       twist: twistHelp,
@@ -1136,10 +1180,11 @@ function connectorSection(
   const helpOf = (type: Exclude<ConnectorChoice, 'none'>): Help => {
     if (kind !== 'cone' || type === 'twist') return helps[cut][type];
     if (cut === 'parallel-to-bases') return withConeNote(helps[cut][type]);
-    if (cut === 'vertical' && type === 'dovetail') return coneVerticalDovetailHelp;
+    if (cut === 'vertical' && type === 'dovetail') return coneVerticalDovetailHelp(entrance);
     if (type === 'dovetail') {
+      // Only an entrance at the top opens through the narrowing part of the cone, near its apex.
       const { label, text } = helps[cut][type];
-      return { label, text: `${ENTRY_NOTCH_NOTE}\n\n${text}` };
+      return entrance === 'standard' ? { label, text: `${ENTRY_NOTCH_NOTE}\n\n${text}` } : { label, text };
     }
     const printNote = cut === 'vertical' ? VERTICAL_PRINT_NOTE : OBLIQUE_PRINT_NOTE;
     return (type === 'plug' ? numberedPlugHelp : numberedDowelHelp)(CONE_VERTICAL_NOTE + printNote);

@@ -1,8 +1,8 @@
-import { DOVETAIL_CLEARANCE_LIMITS, type DovetailConnector, type PhysicalScale } from '@diploma-3d/schema';
+import { DOVETAIL_CLEARANCE_LIMITS, type DovetailConnector, type DovetailEntrance, type PhysicalScale } from '@diploma-3d/schema';
 import type { Vec2 as KernelVec2, Vec3 as KernelVec3, Manifold, Mat4 } from 'manifold-3d';
 import { ConnectorVerificationError, GeometryError } from '../errors.ts';
 import type { GeometryKernel } from '../kernel.ts';
-import type { Vec3 } from '../mesh.ts';
+import { cross, dot, type Vec3 } from '../mesh.ts';
 import type { Track } from '../scope.ts';
 import type { Vec2 } from '../shapes/polygon.ts';
 import { type ConnectorFeasibility, connectorFeasibility } from './bounds.ts';
@@ -65,9 +65,11 @@ export const DOVETAIL_LEAD_IN_RELATIVE = 0.25;
 export const DOVETAIL_EXIT_MARGIN_MM = 1;
 
 /**
- * The section's frame for the dovetail; u is the sliding direction. The groove opens towards −u and is closed by the
- * stop at +u, so a vertical or oblique cut's dovetail has u pointing downhill: open at the top, the stop below the
- * seated tongue.
+ * The section's frame for the dovetail; u is the sliding direction. The groove opens towards −u and is closed by the stop at
+ * +u: with d = −u pointing from the seated tongue towards the entrance in the part with the groove, the tongue's part
+ * withdraws relative to it along +d and is inserted along −d; holding the tongue still, the part with the groove moves the
+ * other way. The standard entrance of a vertical or oblique cut is at its upper end, so u points downhill; the opposite one
+ * turns u, and v = u × n with it, over. The plane, its normal n and the parts' roles stay as they are.
  */
 export type DovetailFrame = SectionFrame;
 
@@ -88,6 +90,8 @@ export interface DovetailIssue {
 
 export interface DovetailPlan {
   readonly type: 'dovetail';
+  /** Which end the groove opens at, as chosen; `frame` turns it into directions. */
+  readonly entrance: DovetailEntrance;
   readonly frame: DovetailFrame;
   /** h, b and B of the tongue, in millimetres. */
   readonly height: number;
@@ -179,6 +183,8 @@ export interface DovetailDimensions {
   readonly length: number;
   /** c, between each pair of mating surfaces. */
   readonly clearance: number;
+  /** Which end of the slide axis the groove opens at; `standard` unless given. */
+  readonly entrance?: DovetailEntrance;
 }
 
 /**
@@ -202,7 +208,8 @@ function grooveExtent({ height, clearance }: DovetailDimensions) {
  * - The tongue is at least 1,2 mm high and 2,4 mm wide at its neck.
  * - The undercut B/2 − (b/2 + c·√2) = h − c·√2 keeps at least 0,4 mm on each side once the clearance is taken up.
  * - After its lead-in chamfer the tongue keeps a straight working length L − 0,25·h of at least 1,2 mm.
- * - The walls around the groove keep 1,2 mm, see `parallelWalls`, `verticalWalls`, `obliqueWalls` and `coneWalls`.
+ * - The walls around the groove keep 1,2 mm, see `parallelWalls`, `verticalWalls`, `obliqueWalls` and `coneWalls`; they are
+ *   measured for the chosen entrance, with the stop at the other end, where the material may differ.
  *
  * Each value is concave in h, L and c, which the bounds rely on.
  */
@@ -220,25 +227,30 @@ export function dovetailChecks(section: SolidSection, dimensions: DovetailDimens
   ];
 }
 
+/**
+ * The walls of the groove for its entrance. A cylinder's parallel and vertical cuts and a ball's horizontal one are symmetric
+ * under the half turn that swaps the two ends of the slide axis, about the cut's normal through the section's centroid, so that
+ * their walls are the same for either entrance; the others are measured on the faces, towards the actual stop.
+ */
 function wallsOf(
   section: SolidSection,
   dimensions: DovetailDimensions,
   groove: ReturnType<typeof grooveExtent>,
 ): DovetailIssue[] {
+  const towardsStop = stopAlongSection(section, dimensions.entrance);
   switch (section.type) {
     case 'parallel-to-bases':
       return parallelWalls(section, dimensions, groove);
     case 'vertical':
       return verticalWalls(section, dimensions, groove);
     case 'oblique':
-      return obliqueWalls(section, dimensions, groove);
+      return obliqueWalls(section, dimensions, groove, towardsStop);
     case 'ball-horizontal':
-      return ballWalls(section, dimensions, groove);
+      return ballWalls(section, dimensions, groove, towardsStop);
     case 'cone-parallel':
-      return coneWalls(section, dimensions, groove, 1);
     case 'cone-vertical':
     case 'cone-oblique':
-      return coneWalls(section, dimensions, groove, -1);
+      return coneWalls(section, dimensions, groove, towardsStop);
   }
 }
 
@@ -307,27 +319,29 @@ function verticalWalls(
 
 /**
  * The engaged groove is a convex prism along u, so its corners at both ends bound its walls, across its full width at the
- * cut and at its top; an oblique section need not be symmetric about its centroid, so the uphill end counts as well.
- * Beyond that end the channel runs to its entrance, where its walls taper off as at any entrance. Faces ahead of the
- * closed end, which the stop rests on, are told apart from the others. Behind the tongue's root overlap, part A keeps
- * 1,2 mm at both ends, the faces being those of its own side.
+ * cut and at its top; an oblique section need not be symmetric about its centroid, so the seated tongue's end towards the
+ * entrance counts as well. Beyond that end the channel runs to its entrance, where its walls taper off as at any entrance.
+ * Faces ahead of the closed end, which the stop rests on, are told apart from the others. Behind the tongue's root overlap,
+ * part A keeps 1,2 mm at both ends, the faces being those of its own side. `towardsStop` is the sign of the stop along the
+ * section's u, which points uphill.
  */
 function obliqueWalls(
   section: ObliqueCylinderSection,
   { height, length, clearance }: DovetailDimensions,
   groove: ReturnType<typeof grooveExtent>,
+  towardsStop: 1 | -1,
 ): DovetailIssue[] {
   const { wall } = DOVETAIL_MINIMUMS_MM;
-  const closedEnd = -(length / 2 + clearance);
-  const uphillEnd = length / 2;
+  const closedEnd = towardsStop * (length / 2 + clearance);
+  const openEnd = -towardsStop * (length / 2);
   const corners = (along: number) => [...neckCorners(along, groove), ...topCorners(along, groove)];
   const faces = facesOfPart(section, 'positive');
-  const ahead = faces.filter((face) => face.alongU < 0);
-  const beside = faces.filter((face) => face.alongU >= 0);
+  const ahead = faces.filter((face) => towardsStop * face.alongU > 0);
+  const beside = faces.filter((face) => towardsStop * face.alongU <= 0);
   return [
     {
       code: 'groove-wall-thin',
-      valueMm: Math.min(wallOf(corners(uphillEnd), faces), wallOf(corners(closedEnd), beside)),
+      valueMm: Math.min(wallOf(corners(openEnd), faces), wallOf(corners(closedEnd), beside)),
       minimumMm: wall,
     },
     { code: 'stop-thin', valueMm: wallOf(corners(closedEnd), ahead), minimumMm: wall },
@@ -391,10 +405,11 @@ function ballWalls(
   section: BallHorizontalSection,
   { height, length, clearance }: DovetailDimensions,
   groove: ReturnType<typeof grooveExtent>,
+  towardsStop: 1 | -1,
 ): DovetailIssue[] {
   const { wall } = DOVETAIL_MINIMUMS_MM;
-  const closedEnd = length / 2 + clearance;
-  const openEnd = -length / 2;
+  const closedEnd = towardsStop * (length / 2 + clearance);
+  const openEnd = -towardsStop * (length / 2);
   const wallOfCorners = (points: readonly FramePosition[]) =>
     Math.min(...points.map(([along, across, normal]) => ballPointWall(section, along, across, normal)));
   const root = dovetailProfileOfHeight(height).rootWidth / 2 - DOVETAIL_ROOT_OVERLAP_MM;
@@ -449,14 +464,37 @@ export function dovetailDimensions(
     height: dovetailProfileMm(connector.sizeFactor, longestDimensionMm).height,
     length: (connector.lengthPercent / 100) * 2 * halfSpanMm,
     clearance: connector.clearanceMm,
+    entrance: connector.entrance ?? 'standard',
   };
 }
 
-/** The frame the dovetail is built in: the u of a vertical or oblique cut turned downhill, see `DovetailFrame`. */
-function dovetailFrame({ type, frame }: SolidSection): DovetailFrame {
-  if (type === 'parallel-to-bases' || type === 'cone-parallel' || type === 'ball-horizontal') return frame;
-  const [u, v]: Vec3[] = [scaleVec(frame.u, -1), scaleVec(frame.v, -1)];
-  return { ...frame, u: u as Vec3, v: v as Vec3 };
+/** Whether the cut is horizontal, so that its slide axis has no upper and lower end; its two sides are then named by u. */
+export const isHorizontalCut = ({ type }: SolidSection): boolean =>
+  type === 'parallel-to-bases' || type === 'cone-parallel' || type === 'ball-horizontal';
+
+const VERTICAL: Vec3 = [0, 0, 1];
+
+/**
+ * The direction from the seated tongue towards the entrance, d, in the model's own coordinates, whatever the camera, the
+ * preview or the print orientation: on a cut that is not horizontal, the end of the section's stable slide axis u that rises
+ * along the model's vertical for the standard entrance, and the other one for the opposite entrance; on a horizontal cut, −u
+ * for the standard entrance and +u for the opposite one.
+ */
+export function dovetailEntranceDirection(section: SolidSection, entrance: DovetailEntrance = 'standard'): Vec3 {
+  const { u } = section.frame;
+  const standard = isHorizontalCut(section) || dot(u, VERTICAL) < 0 ? scaleVec(u, -1) : u;
+  return entrance === 'opposite' ? scaleVec(standard, -1) : standard;
+}
+
+/** The sign of the stop along the section's u: the end opposite the entrance. */
+const stopAlongSection = (section: SolidSection, entrance: DovetailEntrance = 'standard'): 1 | -1 =>
+  dot(dovetailEntranceDirection(section, entrance), section.frame.u) > 0 ? -1 : 1;
+
+/** The frame the dovetail is built in, with u = −d towards the stop, see `DovetailFrame`. */
+function dovetailFrame(section: SolidSection, entrance: DovetailEntrance = 'standard'): DovetailFrame {
+  const { frame } = section;
+  const u = scaleVec(dovetailEntranceDirection(section, entrance), -1);
+  return { ...frame, u, v: cross(u, frame.n) };
 }
 
 /**
@@ -479,6 +517,10 @@ function dovetailFrame({ type, frame }: SolidSection): DovetailFrame {
  *
  * An oblique cut does the same along the plane: part A comes off uphill and is seated downhill, the entrance uphill and
  * the stop downhill, whatever the plane's direction. See `dovetailChecks` for the constraints.
+ *
+ * All of this describes the standard entrance. The opposite one reverses the slide axis alone: the groove then opens at the
+ * other end, towards the base of a cone cut through its apex, say; its stop, its tongue's lead-in, the exit distance and the
+ * walls follow, while the plane, n and the parts' roles stay. Each plan is built from the uncut parts.
  */
 export function planDovetail(
   shape: SectionedShape,
@@ -493,7 +535,8 @@ export function planDovetail(
   const tongueProfile = tongueProfileOf(height, rootWidth, DOVETAIL_ROOT_OVERLAP_MM);
   return {
     type: 'dovetail',
-    frame: dovetailFrame(section),
+    entrance: dimensions.entrance ?? 'standard',
+    frame: dovetailFrame(section, dimensions.entrance),
     height,
     rootWidth,
     headWidth,
@@ -510,8 +553,8 @@ export function planDovetail(
 }
 
 /**
- * How far the part with the groove reaches from the section's centre towards the entrance, where the tongue slides: half
- * the span in a symmetric section of a cylinder; otherwise the part's actual extent within the groove's depth.
+ * How far the part with the groove reaches from the section's centre towards the chosen entrance, where the tongue slides:
+ * half the span in a symmetric section of a cylinder; otherwise the part's actual extent within the groove's depth.
  */
 function grooveReach(section: SolidSection, dimensions: DovetailDimensions): number {
   if (section.type === 'ball-horizontal') {
@@ -520,7 +563,9 @@ function grooveReach(section: SolidSection, dimensions: DovetailDimensions): num
     const nearest = low > 0 ? low : Math.min(high, 0);
     return Math.sqrt(section.radius ** 2 - Math.min(section.radius, Math.abs(nearest)) ** 2);
   }
-  return isFaceted(section) ? section.entranceReachWithin(grooveExtent(dimensions).top) : section.span / 2;
+  if (!isFaceted(section)) return section.span / 2;
+  const towardsEntrance = stopAlongSection(section, dimensions.entrance) === 1 ? -1 : 1;
+  return section.entranceReachWithin(grooveExtent(dimensions).top, towardsEntrance);
 }
 
 /** The dovetail's dimensions in millimetres, each solved for with the others fixed. */

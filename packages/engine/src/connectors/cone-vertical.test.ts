@@ -494,7 +494,7 @@ describe.each(DOVETAILS)('a dovetail %s', (_, shape, offsetPercent) => {
       const below = plan.length / 2 + plan.clearance + 0.3;
       expect(hasMaterialAt(track, partB, add(inTongue, UP, -below))).toBe(true);
       // Above the seated tongue the corridor stays open wherever part 2 still reaches.
-      const reach = section.entranceReachWithin(plan.height + plan.clearance);
+      const reach = section.entranceReachWithin(plan.height + plan.clearance, 1);
       for (const share of [0.1, 0.4, 0.7]) {
         const along = plan.length / 2 + share * (reach - plan.length / 2);
         expect(hasMaterialAt(track, partB, add(inTongue, UP, along))).toBe(false);

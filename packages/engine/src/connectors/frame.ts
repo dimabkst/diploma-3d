@@ -101,10 +101,10 @@ export interface FacetedSection extends CutGeometry {
   /** How far each part reaches from the plane along the normal. */
   readonly reach: { readonly negative: number; readonly positive: number };
   /**
-   * How far from the centroid the part on the positive side reaches towards a dovetail's entrance, within this distance
-   * above the plane: where a tongue that slides off has left that part.
+   * How far from the centroid the part on the positive side reaches along +u or −u, towards a dovetail's entrance, within
+   * this distance above the plane: where a tongue that slides off has left that part.
    */
-  readonly entranceReachWithin: (thickness: number) => number;
+  readonly entranceReachWithin: (thickness: number, towardsEntrance: 1 | -1) => number;
 }
 
 /**
@@ -489,14 +489,13 @@ function conePolyhedron({ radius, height, offset: d }: { radius: number; height:
 /**
  * Reads a plane's section off the polyhedron: the convex polygon where the plane crosses its edges, clipped by a base
  * wherever it reaches one; no ellipse or circle is assumed. Only faces with a corner strictly on a part's side bound that
- * part. `towardsEntrance` is +1 or −1 along u.
+ * part.
  */
 function facetedSection(
   { vertices, edges, faces, sides }: Polyhedron,
   axes: { readonly n: Vec3; readonly u: Vec3; readonly v: Vec3 },
   offset: number,
   radius: number,
-  towardsEntrance: 1 | -1,
 ): FacetedSection {
   const { n, u, v } = axes;
   const contour = planeContour(vertices, edges, axes, offset);
@@ -522,7 +521,7 @@ function facetedSection(
       boundsPositive: corners.some((corner) => (across[corner] as number) > CONTOUR_MERGE_MM),
     })),
     reach: { negative: -Math.min(...across), positive: Math.max(...across) },
-    entranceReachWithin: (thickness) => {
+    entranceReachWithin: (thickness, towardsEntrance) => {
       // The layer's farthest point lies on one of its two planes or at a corner of the solid between them.
       const inLayer = vertices.filter((_, index) => (across[index] as number) >= 0 && (across[index] as number) <= thickness);
       const candidates = [...contour, ...planeContour(vertices, edges, axes, offset + thickness), ...inLayer];
@@ -538,7 +537,7 @@ export function obliqueCylinderSection(shape: CylinderShape, scale: PhysicalScal
   const t = cut.positionPercent / 100;
   const axisPoint: Vec3 = [t * dimensions.offset, 0, t * dimensions.height];
   return {
-    ...facetedSection(cylinderPolyhedron(dimensions), axes, dot(axes.n, axisPoint), dimensions.radius, 1),
+    ...facetedSection(cylinderPolyhedron(dimensions), axes, dot(axes.n, axisPoint), dimensions.radius),
     type: 'oblique',
     axisPoint,
     containsAxis: obliquePlaneContainsAxis(shape, cut.inclinationDeg, cut.directionDeg),
@@ -547,7 +546,7 @@ export function obliqueCylinderSection(shape: CylinderShape, scale: PhysicalScal
 
 /**
  * A cone's cut at z = t·H, with the frame of a cylinder's parallel cut: u is perpendicular to the lean, +Y for every cone,
- * and the groove's entrance lies at −u. The section is the base polygon scaled by 1 − t about the apex, centred on
+ * and a dovetail's standard entrance lies at −u. The section is the base polygon scaled by 1 − t about the apex, centred on
  * C0 + t·(A − C0), which the tests compare with its contour; the walls come from the faces alone.
  */
 export function coneSection(shape: ConeShape, scale: PhysicalScale, positionPercent: number): ConeParallelSection {
@@ -557,7 +556,7 @@ export function coneSection(shape: ConeShape, scale: PhysicalScale, positionPerc
   const v = cross(u, n);
   const offset = (positionPercent / 100) * dimensions.height;
   return {
-    ...facetedSection(conePolyhedron(dimensions), { n, u, v }, offset, dimensions.radius, -1),
+    ...facetedSection(conePolyhedron(dimensions), { n, u, v }, offset, dimensions.radius),
     type: 'cone-parallel',
   };
 }
@@ -569,7 +568,7 @@ export function coneVerticalSection(shape: ConeShape, scale: PhysicalScale, offs
   const n = verticalNormal(dimensions.offset);
   const offset = sectionOffsetMm(offsetPercent, dimensions.radius);
   return {
-    ...facetedSection(conePolyhedron(dimensions), { n, u, v: cross(u, n) }, offset, dimensions.radius, 1),
+    ...facetedSection(conePolyhedron(dimensions), { n, u, v: cross(u, n) }, offset, dimensions.radius),
     type: 'cone-vertical',
     offset,
   };
@@ -582,7 +581,7 @@ export function coneObliqueSection(shape: ConeShape, scale: PhysicalScale, cut: 
   const t = 'positionPercent' in cut ? cut.positionPercent / 100 : 1;
   const anchor: Vec3 = [t * dimensions.offset, 0, t * dimensions.height];
   return {
-    ...facetedSection(conePolyhedron(dimensions), axes, dot(axes.n, anchor), dimensions.radius, 1),
+    ...facetedSection(conePolyhedron(dimensions), axes, dot(axes.n, anchor), dimensions.radius),
     type: 'cone-oblique',
     anchor,
     throughApex: !('positionPercent' in cut),

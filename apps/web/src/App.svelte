@@ -117,6 +117,7 @@ const connectorContext = $derived(
         activeConnector(selectedKind, parameterChoices) ?? 'none',
         parameterChoices[sectionKeys[selectedKind]?.round.count ?? 'cylinderRoundCount'],
         parameterChoices[sectionKeys[selectedKind]?.round.profile ?? 'cylinderRoundProfile'],
+        parameterChoices[sectionKeys[selectedKind]?.dovetailEntrance ?? 'cylinderDovetailEntrance'],
       ].join(':'),
 );
 $effect.pre(() => {

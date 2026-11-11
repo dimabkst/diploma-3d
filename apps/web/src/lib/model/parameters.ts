@@ -60,6 +60,7 @@ import {
   DEFAULT_TWIST,
   DIAMETRAL_CLEARANCE_LIMITS,
   DOVETAIL_CLEARANCE_LIMITS,
+  type DovetailEntrance,
   defaultModelSpecs,
   dovetailConnectorSchema,
   isWithinMinimumInclination,
@@ -233,6 +234,8 @@ export type ParameterChoices = {
   pyramidBaseSides: PyramidBaseSides;
   cylinderSection: SectionChoice;
   cylinderConnector: ConnectorChoice;
+  /** Where the dovetail's groove opens, in the model's own orientation; shared by the solid's cuts, like its other settings. */
+  cylinderDovetailEntrance: DovetailEntrance;
   /** One round connector at the centre, or a keyed pair; shared by plugs and dowels, as their cross-section is. */
   cylinderRoundCount: 1 | 2;
   cylinderRoundProfile: ConnectorProfile;
@@ -240,6 +243,7 @@ export type ParameterChoices = {
   cylinderPartsSeparated: boolean;
   coneSection: SectionChoice;
   coneConnector: ConnectorChoice;
+  coneDovetailEntrance: DovetailEntrance;
   coneRoundCount: 1 | 2;
   coneRoundProfile: ConnectorProfile;
   conePartsSeparated: boolean;
@@ -248,6 +252,7 @@ export type ParameterChoices = {
   coneApexStarted: boolean;
   ballSection: SectionChoice;
   ballConnector: ConnectorChoice;
+  ballDovetailEntrance: DovetailEntrance;
   ballRoundCount: 1 | 2;
   ballRoundProfile: ConnectorProfile;
   ballPartsSeparated: boolean;
@@ -415,11 +420,13 @@ export const initialParameterChoices = (): ParameterChoices => ({
   // The section is optional; once it is chosen, the parts start apart so that the cut faces show.
   cylinderSection: 'none',
   cylinderConnector: 'none',
+  cylinderDovetailEntrance: 'standard',
   cylinderRoundCount: DEFAULT_ROUND_CONNECTOR.count,
   cylinderRoundProfile: DEFAULT_CONNECTOR_PROFILE,
   cylinderPartsSeparated: true,
   coneSection: 'none',
   coneConnector: 'none',
+  coneDovetailEntrance: 'standard',
   coneRoundCount: DEFAULT_ROUND_CONNECTOR.count,
   coneRoundProfile: DEFAULT_CONNECTOR_PROFILE,
   conePartsSeparated: true,
@@ -427,6 +434,7 @@ export const initialParameterChoices = (): ParameterChoices => ({
   coneApexStarted: false,
   ballSection: 'none',
   ballConnector: 'none',
+  ballDovetailEntrance: 'standard',
   ballRoundCount: DEFAULT_ROUND_CONNECTOR.count,
   ballRoundProfile: DEFAULT_CONNECTOR_PROFILE,
   ballPartsSeparated: true,
@@ -1464,6 +1472,7 @@ type SectionKeys = {
   readonly offset: 'cylinderSectionOffsetPercent' | 'coneSectionOffsetPercent' | 'ballSectionOffsetPercent';
   readonly separated: ToggleKey;
   readonly connector: 'cylinderConnector' | 'coneConnector' | 'ballConnector';
+  readonly dovetailEntrance: 'cylinderDovetailEntrance' | 'coneDovetailEntrance' | 'ballDovetailEntrance';
   readonly dovetail: {
     readonly size: 'cylinderDovetailSize' | 'coneDovetailSize' | 'ballDovetailSize';
     readonly length: 'cylinderDovetailLengthPercent' | 'coneDovetailLengthPercent' | 'ballDovetailLengthPercent';
@@ -1551,6 +1560,7 @@ export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys | Plana
     offset: 'ballSectionOffsetPercent',
     separated: 'ballPartsSeparated',
     connector: 'ballConnector',
+    dovetailEntrance: 'ballDovetailEntrance',
     dovetail: {
       size: 'ballDovetailSize',
       length: 'ballDovetailLengthPercent',
@@ -1578,6 +1588,7 @@ export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys | Plana
     },
     separated: 'cylinderPartsSeparated',
     connector: 'cylinderConnector',
+    dovetailEntrance: 'cylinderDovetailEntrance',
     twist: TWIST_KEYS,
     dovetail: {
       size: 'cylinderDovetailSize',
@@ -1606,6 +1617,7 @@ export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys | Plana
     },
     separated: 'conePartsSeparated',
     connector: 'coneConnector',
+    dovetailEntrance: 'coneDovetailEntrance',
     dovetail: {
       size: 'coneDovetailSize',
       length: 'coneDovetailLengthPercent',
@@ -1765,6 +1777,7 @@ function resolveSection(
             sizeFactor: read(dovetail.size),
             lengthPercent: read(dovetail.length),
             clearanceMm: read(dovetail.clearance),
+            entrance: choices[keys.dovetailEntrance],
           }
         : connectorType === 'plug'
           ? { type: connectorType, ...shared, holeClearanceMm: read(round.plugClearance) }
@@ -2023,7 +2036,14 @@ export const shapeParameterKeys: Readonly<
       'cylinderDowelUpperClearanceMm',
       ...TWIST_KEYS,
     ],
-    choices: ['cylinderSection', 'cylinderPartsSeparated', 'cylinderConnector', 'cylinderRoundCount', 'cylinderRoundProfile'],
+    choices: [
+      'cylinderSection',
+      'cylinderPartsSeparated',
+      'cylinderConnector',
+      'cylinderDovetailEntrance',
+      'cylinderRoundCount',
+      'cylinderRoundProfile',
+    ],
   },
   cone: {
     texts: [
@@ -2053,6 +2073,7 @@ export const shapeParameterKeys: Readonly<
       'coneApexStarted',
       'conePartsSeparated',
       'coneConnector',
+      'coneDovetailEntrance',
       'coneRoundCount',
       'coneRoundProfile',
     ],
@@ -2070,7 +2091,7 @@ export const shapeParameterKeys: Readonly<
       'ballDowelLowerClearanceMm',
       'ballDowelUpperClearanceMm',
     ],
-    choices: ['ballSection', 'ballPartsSeparated', 'ballConnector', 'ballRoundCount', 'ballRoundProfile'],
+    choices: ['ballSection', 'ballPartsSeparated', 'ballConnector', 'ballDovetailEntrance', 'ballRoundCount', 'ballRoundProfile'],
   },
 };
 
@@ -2155,6 +2176,7 @@ function inactiveSectionKeys(kind: ShapeKind, choices: ParameterChoices): (keyof
     (key) => !activeFields.has(key),
   );
   if (connector !== 'plug' && connector !== 'dowel') connectorFields.push(keys.round.count, keys.round.profile);
+  if (connector !== 'dovetail') connectorFields.push(keys.dovetailEntrance);
   const section = activeSection(kind, choices);
   const planar = 'position' in keys ? (keys as PlanarSectionKeys) : undefined;
   const obliqueFields = planar === undefined ? [] : Object.values(planar.oblique);

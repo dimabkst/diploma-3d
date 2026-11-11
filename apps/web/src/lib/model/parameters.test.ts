@@ -259,17 +259,20 @@ describe('resolveModelRequest', () => {
       cylinderSection: 'none',
       cylinderPartsSeparated: true,
       cylinderConnector: 'none',
+      cylinderDovetailEntrance: 'standard',
       cylinderRoundCount: 1,
       cylinderRoundProfile: 'flatted-circle',
       coneSection: 'none',
       conePartsSeparated: true,
       coneConnector: 'none',
+      coneDovetailEntrance: 'standard',
       coneRoundCount: 1,
       coneRoundProfile: 'flatted-circle',
       coneObliqueThrough: 'axis',
       coneApexStarted: false,
       ballSection: 'none',
       ballConnector: 'none',
+      ballDovetailEntrance: 'standard',
       ballRoundCount: 1,
       ballRoundProfile: 'flatted-circle',
       ballPartsSeparated: true,
@@ -1455,13 +1458,14 @@ describe('a dovetail joining the cylinder’s parts', () => {
     expect(request({}).spec?.section).toEqual({
       type: 'parallel-to-bases',
       positionPercent: 50,
-      connector: { type: 'dovetail', sizeFactor: 1, lengthPercent: 50, clearanceMm: 0.2 },
+      connector: { type: 'dovetail', sizeFactor: 1, lengthPercent: 50, clearanceMm: 0.2, entrance: 'standard' },
     });
     // At M = 80 mm and r = 40 mm, h = 2 mm and L = 40 mm: h from the 1,2 mm minimum to where the groove's closed end
     // keeps 1,2 mm of wall; L from the straight 1,2 mm after the 0,5 mm lead-in to the same wall.
     const settings = groupsOf(joined).find((group) => group.title === 'Кріплення');
     expect(settings?.fields.map((field) => [field.type, field.key])).toEqual([
       ['choice', 'cylinderConnector'],
+      ['choice', 'cylinderDovetailEntrance'],
       ['note', 'cylinder-connector-scale'],
       ['number', 'cylinderDovetailSize'],
       ['note', 'cylinder-dovetail-widths'],
@@ -1497,6 +1501,7 @@ describe('a dovetail joining the cylinder’s parts', () => {
       sizeFactor: 1.1,
       lengthPercent: 50,
       clearanceMm: 0.23,
+      entrance: 'standard',
     });
     // Beyond the former limits of 3 mm and 48 mm: 5 mm high and 70 mm long.
     expect(request({ cylinderDovetailSize: '2,5', cylinderDovetailLengthPercent: '87,5' }).spec?.section?.connector).toEqual({
@@ -1504,6 +1509,7 @@ describe('a dovetail joining the cylinder’s parts', () => {
       sizeFactor: 2.5,
       lengthPercent: 87.5,
       clearanceMm: 0.2,
+      entrance: 'standard',
     });
     // Values outside the feasible ranges are explained in the millimetres that the fields show, with those ranges.
     for (const [key, text, message] of [
@@ -3423,5 +3429,95 @@ describe('a twist connector between a cylinder’s parts', () => {
     const reset = resetShapeParameters('cylinder', edited);
     expect(reset.connectorEdits?.cylinder).toBeUndefined();
     expect(reset.choices.cylinderConnector).toBe('none');
+  });
+});
+
+describe('the dovetail’s entrance', () => {
+  const groupOf = (kind: 'cylinder' | 'cone' | 'ball', chosen: ParameterChoices, texts = initialParameterTexts()) => {
+    const request = resolveModelRequest(kind, texts, chosen, { connectorEdits: {} });
+    const panel = shapePanel(kind, chosen, { values: request.values, sectionRanges: request.sectionRanges });
+    const group = panel.type === 'parameters' ? panel.sections.find(({ title }) => title === 'Кріплення') : undefined;
+    return { request, group };
+  };
+  const labelsOf = (group: ReturnType<typeof groupOf>['group']) => {
+    const field = group?.fields.find(({ key }) => String(key).endsWith('DovetailEntrance'));
+    return field?.type === 'choice' ? [field.label, ...field.options.map(({ label }) => label)] : undefined;
+  };
+
+  it('names the ends by the model’s own vertical, or as two sides of a horizontal cut', () => {
+    const base = {
+      ...initialParameterChoices(),
+      cylinderConnector: 'dovetail',
+      coneConnector: 'dovetail',
+      ballConnector: 'dovetail',
+    } as const;
+    expect(labelsOf(groupOf('cylinder', { ...base, cylinderSection: 'vertical' }).group)).toEqual([
+      'Вхід у паз',
+      'Зверху',
+      'Знизу',
+    ]);
+    expect(labelsOf(groupOf('cylinder', { ...base, cylinderSection: 'oblique' }).group)).toEqual([
+      'Вхід у паз',
+      'Зверху',
+      'Знизу',
+    ]);
+    expect(labelsOf(groupOf('cone', { ...base, coneSection: 'oblique', coneObliqueThrough: 'apex' }).group)).toEqual([
+      'Вхід у паз',
+      'Зверху',
+      'Знизу',
+    ]);
+    expect(labelsOf(groupOf('cylinder', { ...base, cylinderSection: 'parallel-to-bases' }).group)).toEqual([
+      'Вхід у паз',
+      'З одного боку',
+      'З протилежного боку',
+    ]);
+    expect(labelsOf(groupOf('ball', { ...base, ballSection: 'horizontal' }).group)).toEqual([
+      'Вхід у паз',
+      'З одного боку',
+      'З протилежного боку',
+    ]);
+  });
+
+  it('is stored explicitly, kept when the model’s size changes, and reset with the shape', () => {
+    const chosen = {
+      ...initialParameterChoices(),
+      coneSection: 'vertical',
+      coneConnector: 'dovetail',
+      coneDovetailEntrance: 'opposite',
+    } as const;
+    expect(groupOf('cone', chosen).request.spec?.section?.connector).toMatchObject({ type: 'dovetail', entrance: 'opposite' });
+    const larger = groupOf('cone', chosen, { ...initialParameterTexts(), printSizeMm: '150' }).request;
+    expect(larger.spec?.section?.connector).toMatchObject({ entrance: 'opposite' });
+    const state: ParameterState = { texts: initialParameterTexts(), choices: chosen };
+    expect(canResetShapeParameters('cone', state)).toBe(true);
+    expect(resetShapeParameters('cone', state).choices.coneDovetailEntrance).toBe('standard');
+    // Without a dovetail the choice shapes nothing, and alone asks for no reset.
+    const unused = { ...initialParameterChoices(), coneDovetailEntrance: 'opposite' } as const;
+    expect(canResetShapeParameters('cone', { texts: initialParameterTexts(), choices: unused })).toBe(false);
+    const withoutDovetail = { ...unused, coneSection: 'vertical' } as const;
+    expect(groupOf('cone', withoutDovetail).request.spec?.section).toEqual({ type: 'vertical', offsetPercent: 0 });
+  });
+
+  it('explains the assembly for the chosen end, without the apex notch once the groove opens at the base', () => {
+    const vertical = { ...initialParameterChoices(), coneSection: 'vertical', coneConnector: 'dovetail' } as const;
+    const top = groupOf('cone', vertical).group?.help?.text;
+    const bottom = groupOf('cone', { ...vertical, coneDovetailEntrance: 'opposite' }).group?.help?.text;
+    expect(top).toMatch(/Паз відкритий угорі, упор — унизу/);
+    expect(top).toMatch(/виїмка для входу в паз/);
+    expect(bottom).toMatch(/Паз відкритий унизу, біля основи, упор — угорі/);
+    expect(bottom).not.toMatch(/виїмка для входу в паз/);
+    const apex = {
+      ...initialParameterChoices(),
+      coneSection: 'oblique',
+      coneObliqueThrough: 'apex',
+      coneConnector: 'dovetail',
+    } as const;
+    expect(groupOf('cone', { ...apex, coneDovetailEntrance: 'opposite' }).group?.help?.text).toMatch(
+      /^Виступ — на частині 1, паз — у частині 2\. Паз відкритий унизу схилу площини/,
+    );
+    const cylinder = { ...initialParameterChoices(), cylinderSection: 'vertical', cylinderConnector: 'dovetail' } as const;
+    expect(groupOf('cylinder', { ...cylinder, cylinderDovetailEntrance: 'opposite' }).group?.help?.text).toMatch(
+      /^Паз відкритий унизу та закінчується упором угорі\./,
+    );
   });
 });

@@ -622,7 +622,7 @@ describe.each(DOVETAIL_CASES)('a dovetail on %s', (_, shape, cut) => {
       // Past the closed end, downhill, part 2 is solid at the groove's mid-height.
       expect(hasMaterialAt(track, partB, add(inTongue, uphill, -(beyond + 0.3)))).toBe(true);
       // Uphill of the tongue, the channel is open all the way to where part 2 ends.
-      const reach = section.entranceReachWithin(plan.height + plan.clearance);
+      const reach = section.entranceReachWithin(plan.height + plan.clearance, 1);
       for (const share of [0.25, 0.5, 0.75, 0.95]) {
         const along = plan.length / 2 + share * (reach - plan.length / 2);
         expect(hasMaterialAt(track, partB, add(inTongue, uphill, along))).toBe(false);

@@ -44,6 +44,15 @@ export const DOVETAIL_CLEARANCE_LIMITS = { min: 0.1, max: 0.4 } as const;
 export const DEFAULT_DOVETAIL = { sizeFactor: 1, lengthPercent: 50, clearanceMm: 0.2 } as const;
 
 /**
+ * Where the groove opens on the part that carries it, in the model's own orientation. `standard`: at the upper end of a cut
+ * that is not horizontal, and at the cut frame's −u side of a horizontal one, as dovetails always opened; `opposite`: at the
+ * other end, with the stop moved to where the entrance was.
+ */
+export const DOVETAIL_ENTRANCES = ['standard', 'opposite'] as const;
+
+export type DovetailEntrance = (typeof DOVETAIL_ENTRANCES)[number];
+
+/**
  * A sliding dovetail: a tongue on the lower part and a groove in the upper part, open at one end and closed at the
  * other. The upper part slides onto the tongue parallel to the cut; once engaged, the parts cannot be pulled apart
  * normal to the cut, but nothing locks the slide back towards the entrance.
@@ -56,6 +65,8 @@ export const dovetailConnectorSchema = z.strictObject({
   lengthPercent: z.number().positive(),
   /** The gap between each pair of mating surfaces, measured normal to them; not a difference of total widths. */
   clearanceMm: z.number().min(DOVETAIL_CLEARANCE_LIMITS.min).max(DOVETAIL_CLEARANCE_LIMITS.max),
+  /** Missing in a configuration saved before there was a choice, and then `standard`, the direction it was built with. */
+  entrance: z.enum(DOVETAIL_ENTRANCES).optional(),
 });
 
 export type DovetailConnector = z.infer<typeof dovetailConnectorSchema>;
