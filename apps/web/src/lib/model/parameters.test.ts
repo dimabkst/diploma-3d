@@ -208,6 +208,8 @@ describe('resolveModelRequest', () => {
       coneOffsetRatio: '0',
       coneInclinationDeg: '90',
       coneSectionPercent: '50',
+      conePlateThicknessMm: '1,6',
+      conePlateMarginMm: '10',
       coneSectionOffsetPercent: '0',
       coneObliquePositionPercent: '50',
       coneObliqueInclinationDeg: '45',
@@ -264,6 +266,7 @@ describe('resolveModelRequest', () => {
       cylinderRoundProfile: 'flatted-circle',
       coneSection: 'none',
       conePartsSeparated: true,
+      conePlate: false,
       coneConnector: 'none',
       coneDovetailEntrance: 'standard',
       coneRoundCount: 1,
@@ -2399,7 +2402,11 @@ describe('a section of the cone parallel to its base', () => {
     expect(sectionNumberFields(cut)).toMatchObject([
       { key: 'coneSectionPercent', label: 'Від основи', suffix: '% h', range: { min: 10, max: 90, increment: 5 } },
     ]);
-    expect(cut.fields.at(-1)).toMatchObject({ type: 'toggle', key: 'conePartsSeparated' });
+    // The section plate's switch follows the separation's, off and without its own fields until chosen.
+    expect(cut.fields.slice(-2)).toMatchObject([
+      { type: 'toggle', key: 'conePartsSeparated' },
+      { type: 'toggle', key: 'conePlate', label: 'Січна пластина' },
+    ]);
   });
 
   it('explains itself as asked, with the connectors below that explanation', () => {

@@ -22,7 +22,10 @@ import {
   initialParameterTexts,
   type ParameterExact,
   type ParameterState,
+  PLATE_TWIST_NOTICE,
   partsSeparated,
+  plateChosen,
+  plateConnectorFallback,
   resetShapeParameters,
   resolveModelRequest,
   type SectionRanges,
@@ -57,6 +60,8 @@ let attempt = $state(0);
 // Raw state: the artifacts hold large typed arrays that must not be wrapped in deep reactive proxies.
 let model = $state.raw<ModelState>({ status: 'generating', stale: undefined });
 let controls = $state<ControlsPanel>();
+// Why the page replaced a connector, such as on turning a section plate on; cleared once it no longer applies.
+let plateNotice = $state<string | undefined>();
 
 const selectedKind = $derived(isAvailableShape(selectedShape) ? selectedShape : undefined);
 const selectedShapeName = $derived(shapeLabel(selectedShape));
@@ -118,6 +123,7 @@ const connectorContext = $derived(
         parameterChoices[sectionKeys[selectedKind]?.round.count ?? 'cylinderRoundCount'],
         parameterChoices[sectionKeys[selectedKind]?.round.profile ?? 'cylinderRoundProfile'],
         parameterChoices[sectionKeys[selectedKind]?.dovetailEntrance ?? 'cylinderDovetailEntrance'],
+        plateChosen(selectedKind, parameterChoices) ? 'plate' : 'no-plate',
       ].join(':'),
 );
 $effect.pre(() => {
@@ -144,6 +150,7 @@ const panel = $derived(
         connectorScale,
         sectionRanges,
         connectorStatus: request?.connectorStatus,
+        connectorNotice: plateNotice,
       }),
 );
 const invalidFields = $derived(
@@ -212,6 +219,20 @@ function runPanelAction(action: PanelAction) {
   const key = selectedKind === undefined ? undefined : sectionKeys[selectedKind]?.connector;
   if (key !== undefined) parameterChoices[key] = 'none';
 }
+
+// A section plate turned on with a connector that cannot pass through it gets none instead, and says so while that lasts.
+$effect.pre(() => {
+  if (selectedKind === undefined) return;
+  const next = plateConnectorFallback(selectedKind, parameterState);
+  if (next !== undefined) {
+    untrack(() => applyState(next));
+    plateNotice = PLATE_TWIST_NOTICE;
+    return;
+  }
+  const keys = sectionKeys[selectedKind];
+  const stillNone = keys !== undefined && parameterChoices[keys.connector] === 'none';
+  if (!plateChosen(selectedKind, parameterChoices) || !stillNone) plateNotice = undefined;
+});
 
 // The first plane through a cone's apex takes a valid angle for the cone it finds; after that nothing changes on its own.
 $effect.pre(() => {

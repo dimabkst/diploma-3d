@@ -8,18 +8,30 @@ import {
   type ShapeKind,
 } from '@diploma-3d/schema';
 import type { Manifold } from 'manifold-3d';
-import { buildDovetail, type DovetailPlan, planDovetail, verifyDovetail } from './connectors/dovetail.ts';
+import {
+  buildDovetail,
+  buildPlateDovetail,
+  type DovetailPlan,
+  interfacePlan,
+  planDovetail,
+  verifyDovetail,
+} from './connectors/dovetail.ts';
 import {
   ballOffsetLimitPercent,
   ballSection,
   CONSTRAINT_ROUNDOFF_MM,
   coneApexChord,
   coneObliqueSection,
+  conePlateSection,
+  conePlateThicknessRange,
   coneVerticalSection,
   cutOfSection,
   isApexChordUsable,
+  isPlateCut,
+  isPlateThicknessFeasible,
   obliqueCylinderSection,
   obliqueSplitReach,
+  type PlateCut,
   satisfies,
   sectionOffsetMm,
   verticalCylinderSection,
@@ -42,6 +54,7 @@ import {
   type TriangleMesh,
   type Vec3,
 } from './mesh.ts';
+import { buildSectionPlate, type SectionPlateGeometry, sectionPlateGeometry } from './plate.ts';
 import { type Track, withScope } from './scope.ts';
 import { type Plane, sectionPlane, splitByPlane } from './section.ts';
 import { buildBall } from './shapes/ball.ts';
@@ -77,7 +90,11 @@ export interface Solid {
   readonly newFaces?: Uint8Array;
 }
 
-export type SectionPart = 'lower' | 'upper' | 'part-1' | 'part-2' | 'dowel';
+/**
+ * Which part of a sectioned solid this is; `plate` is a section plate between the lower and the upper part, which belongs to
+ * neither and is shown in its own colour.
+ */
+export type SectionPart = 'lower' | 'upper' | 'part-1' | 'part-2' | 'plate' | 'dowel';
 
 export type ConnectorPlan = DovetailPlan | RoundConnectorPlan | TwistPlan;
 
@@ -87,6 +104,8 @@ export interface ModelSection {
   readonly plane: Plane;
   /** The connector joining the parts, with the frame it is built in; absent for flat cut faces. */
   readonly connector?: ConnectorPlan;
+  /** A section plate between the parts, centred on `plane`; the parts' faces lie T/2 to either side of it. */
+  readonly plate?: SectionPlateGeometry;
 }
 
 export interface GeneratedModel {
@@ -95,8 +114,8 @@ export interface GeneratedModel {
   readonly name: string;
   readonly spec: ModelSpec;
   /**
-   * The whole solid, or its parts in the order of the plane's negative and positive side, followed by any removable
-   * dowels, all in the assembled position.
+   * The whole solid, or its parts in the order of the plane's negative and positive side, followed by any section plate and
+   * any removable dowels, all in the assembled position.
    */
   readonly solids: readonly Solid[];
   /** The bounds of the assembled model: of the whole solid, also when it is sectioned. */
@@ -111,6 +130,7 @@ type BuiltMeshes =
       readonly type: SectionType;
       readonly plane: Plane;
       readonly parts: Readonly<Record<'lower' | 'upper', MarkedMesh>>;
+      readonly plate?: TriangleMesh;
       readonly dowels: readonly MarkedMesh[];
     };
 
@@ -153,17 +173,45 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
 
   assertVerticalOffset(spec);
   assertObliqueSplit(spec);
+  const plateGeometry = planPlate(spec);
   const connector = planConnector(spec);
   const built = withScope((track): BuiltMeshes => {
     const solid = checked(buildShape(kernel, track, spec.shape, spec.scale));
     if (spec.section === undefined) return { whole: meshFromManifold(solid) };
     const originalIds = originalIdsOf(solid);
     const plane = spec.section.type === 'parallel-to-bases' ? sectionPlane(spec.section, solid.boundingBox()) : cutPlaneOf(spec);
-    const split = splitByPlane(track, solid, plane);
-    let parts = { lower: split.negative, upper: split.positive };
+    let parts: { lower: Manifold; upper: Manifold };
+    let plate: Manifold | undefined;
+    if (plateGeometry === undefined) {
+      const split = splitByPlane(track, solid, plane);
+      parts = { lower: split.negative, upper: split.positive };
+    } else {
+      // The slab between the plate's faces leaves the solid; nothing else moves or changes its size.
+      const half = plateGeometry.thickness / 2;
+      const above = splitByPlane(track, solid, { normal: plane.normal, offset: plane.offset + half });
+      const below = splitByPlane(track, above.negative, { normal: plane.normal, offset: plane.offset - half });
+      parts = { lower: below.negative, upper: above.positive };
+      plate = buildSectionPlate(kernel, track, plateGeometry);
+    }
     let dowels: readonly Manifold[] = [];
     const longest = spec.scale.longestDimensionMm;
-    if (connector?.type === 'dovetail') {
+    if (connector?.type === 'dovetail' && plate !== undefined) {
+      const joined = buildPlateDovetail(kernel, track, { ...parts, plate }, connector);
+      // The plate lies outside the solid by design; only its tongues must stay inside it.
+      const whole = track(solid.add(plate));
+      (connector.interfaces ?? []).forEach((face, index) => {
+        verifyDovetail(
+          kernel,
+          track,
+          { whole, upper: parts[face.part] },
+          { lower: joined.plate, upper: joined[face.part], tongue: joined.tongues[index] as Manifold },
+          interfacePlan(connector, face),
+          longest,
+        );
+      });
+      parts = { lower: checked(joined.lower), upper: checked(joined.upper) };
+      plate = checked(joined.plate);
+    } else if (connector?.type === 'dovetail') {
       const joined = buildDovetail(kernel, track, parts, connector);
       verifyDovetail(kernel, track, { whole: solid, upper: parts.upper }, joined, connector, longest);
       parts = { lower: checked(joined.lower), upper: checked(joined.upper) };
@@ -172,11 +220,13 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
       verifyTwist(kernel, track, solid, joined, connector);
       parts = { lower: checked(joined.lower), upper: checked(joined.upper) };
     } else if (connector !== undefined) {
-      const joined = buildRoundConnectors(kernel, track, parts, connector);
+      const joined = buildRoundConnectors(kernel, track, { ...parts, plate }, connector);
       verifyRoundConnectors(kernel, track, solid, joined, connector, longest);
       parts = { lower: checked(joined.lower), upper: checked(joined.upper) };
+      if (joined.plate !== undefined) plate = checked(joined.plate);
       dowels = joined.pins.map(checked);
     }
+    if (plate !== undefined) assertConnected(plate);
     return {
       type: spec.section.type,
       plane,
@@ -184,6 +234,7 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
         lower: collapseRoundingSlivers(meshWithNewFaces(parts.lower, originalIds)),
         upper: collapseRoundingSlivers(meshWithNewFaces(parts.upper, originalIds)),
       },
+      ...(plate === undefined ? {} : { plate: meshFromManifold(plate) }),
       dowels: dowels.map((dowel) => meshWithNewFaces(dowel, originalIds)),
     };
   });
@@ -210,7 +261,9 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
     const part = partNames[built.type][index] as SectionPart;
     return { ...solidOf(partObjectName(name, part), built.parts[side].mesh), part, newFaces: built.parts[side].newFaces };
   });
-  const bounds = unionBounds(parts.map((part) => part.measurements.bounds));
+  // Flat, apart from its rounded corners, which the preview shades smoothly; never sheared, as it lies in the cut's frame.
+  const plates = built.plate === undefined ? [] : [plateSolid(`${name}-section-plate`, built.plate)];
+  const bounds = unionBounds([...parts, ...plates].map((part) => part.measurements.bounds));
   // Curved but never sheared: a dowel lies along the cut's normal however the cylinder leans.
   const dowels = built.dowels.map(({ mesh, newFaces }, index): Solid => {
     assertValidSolidMesh(mesh);
@@ -225,13 +278,50 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
   });
   return {
     kind: shape.kind,
-    name: `${name}-${sectionNames[built.type]}`,
+    name: `${name}-${sectionNames[built.type]}${plateGeometry === undefined ? '' : '-plate'}`,
     spec,
-    solids: [...parts, ...dowels],
+    solids: [...parts, ...plates, ...dowels],
     bounds,
     size: subtract(bounds.max, bounds.min),
-    section: { type: built.type, plane: built.plane, ...(connector === undefined ? {} : { connector }) },
+    section: {
+      type: built.type,
+      plane: built.plane,
+      ...(connector === undefined ? {} : { connector }),
+      ...(plateGeometry === undefined ? {} : { plate: plateGeometry }),
+    },
   };
+}
+
+function plateSolid(name: string, mesh: TriangleMesh): Solid {
+  assertValidSolidMesh(mesh);
+  return { name, mesh, measurements: measureMesh(mesh), smoothShading: true, part: 'plate' };
+}
+
+function assertConnected(solid: Manifold): void {
+  const pieces = solid.decompose();
+  const count = pieces.length;
+  for (const piece of pieces) piece.delete();
+  if (count !== 1) throw new GeometryError(`The section plate is not one solid (${count} pieces).`);
+}
+
+/**
+ * A section plate's geometry, refused before anything is built where it does not apply: only a cone's cut parallel to its
+ * base offers one so far, not with a twist connector, and its thickness must leave both parts.
+ */
+function planPlate({ shape, scale, section }: ModelSpec): SectionPlateGeometry | undefined {
+  if (section?.type !== 'parallel-to-bases' || section.plate === undefined) return undefined;
+  if (shape.kind !== 'cone') throw new InvalidModelSpecError(['section.plate: only a cone offers a section plate so far.']);
+  if (section.connector?.type === 'twist') {
+    throw new InvalidModelSpecError(['section.plate: a twist connector cannot join the parts through a section plate.']);
+  }
+  const cut = cutOfSection(section) as PlateCut;
+  if (!isPlateCut(cut) || !isPlateThicknessFeasible(shape, scale, cut)) {
+    const { max } = conePlateThicknessRange(shape, scale, section.positionPercent);
+    throw new InvalidModelSpecError([
+      `section.plate.thicknessMm: ${section.plate.thicknessMm} mm leaves a part thinner than allowed; at most ${max} mm fits here.`,
+    ]);
+  }
+  return sectionPlateGeometry(conePlateSection(shape, scale, cut));
 }
 
 /** The plane of a section read off a round solid: a cylinder's or a cone's vertical one, or a cylinder's oblique one. */

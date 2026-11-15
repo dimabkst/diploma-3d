@@ -100,8 +100,25 @@ export interface RoundConnectorPlan {
   readonly clearance: { readonly lower?: number; readonly upper: number };
   /** The least straight engagement in a receiving part after the chamfers and, for dowels, the axial play. */
   readonly straightEngagement: number;
+  /**
+   * T of a section plate between the parts, which the pins pass through: each part's face lies T/2 from the frame's plane, a
+   * plug stands T + e above the lower part and a dowel is 2e + T long. Absent without a plate.
+   */
+  readonly plateThickness?: number;
   readonly issues: readonly RoundConnectorIssue[];
 }
+
+/** How far each part's face lies from the frame's plane: half the plate's thickness, or zero without one. */
+const faceGap = ({ plateThickness }: { readonly plateThickness?: number | undefined }) => (plateThickness ?? 0) / 2;
+
+/** A dowel's whole length 2e + T, the plate's thickness included. */
+export const dowelLength = (plan: RoundConnectorPlan): number => 2 * plan.insertion + (plan.plateThickness ?? 0);
+
+/** How far an integral plug stands above the lower part's face: e + T. */
+export const plugHeight = (plan: RoundConnectorPlan): number => plan.insertion + (plan.plateThickness ?? 0);
+
+/** The diametral clearance of a section plate's through-holes: a plug's hole's, or the wider of a dowel's two holes. */
+export const plateHoleClearance = ({ clearance }: RoundConnectorPlan): number => Math.max(clearance.upper, clearance.lower ?? 0);
 
 /** d and e in millimetres for the multipliers and the assembled model's longest dimension M. */
 export function roundConnectorDimensionsMm(diameterFactor: number, depthFactor: number, longestDimensionMm: number) {
@@ -364,12 +381,14 @@ const ringWall = (
  * that fits with room to spare: a cone narrows and its curved side recedes along a hole's axis, and an oblique one moves
  * away from it.
  */
-function facetedHoleWalls(section: FacetedSection, part: Part, hole: HoleExtent, holeDepth: number) {
+function facetedHoleWalls(section: SolidSection & FacetedSection, part: Part, hole: HoleExtent, holeDepth: number) {
   const { chamfer, straight, opening } = hole;
   const towards = part === 'upper' ? 1 : -1;
   const faces = facesOfPart(section, part === 'upper' ? 'positive' : 'negative');
+  // Beside a section plate the hole starts at its part's own face, half the plate's thickness from the middle plane.
+  const start = section.type === 'cone-plate' ? section.halfThickness : 0;
   const wallAt = (depth: number, offset: number) =>
-    Math.min(...faces.map((face) => ringWall(face, hole, towards * depth, offset)));
+    Math.min(...faces.map((face) => ringWall(face, hole, towards * (start + depth), offset)));
   return { side: Math.min(wallAt(0, opening), wallAt(chamfer, straight)), bottom: wallAt(holeDepth, straight) };
 }
 
@@ -390,7 +409,8 @@ function plugBacking(
   }
   if (isFaceted(section)) {
     const faces = facesOfPart(section, 'negative');
-    return Math.min(...rings.flatMap((ring) => faces.map((face) => ringWall(face, ring, -PLUG_ROOT_OVERLAP_MM, 0))));
+    const root = -PLUG_ROOT_OVERLAP_MM - (section.type === 'cone-plate' ? section.halfThickness : 0);
+    return Math.min(...rings.flatMap((ring) => faces.map((face) => ringWall(face, ring, root, 0))));
   }
   return Math.min(
     ...rings.map((ring) => lateralWall(section, verticalReach(section, ring, 0), section.offset - PLUG_ROOT_OVERLAP_MM)),
@@ -423,6 +443,7 @@ export function planRoundConnectors(
     holeDepth: insertion + ROUND_CONNECTOR_DEPTH_ALLOWANCE_MM,
     clearance,
     straightEngagement: Math.min(...sites.map(({ chamfer }) => insertion - play - 2 * chamfer)),
+    ...(section.type === 'cone-plate' ? { plateThickness: 2 * section.halfThickness } : {}),
     issues: roundConnectorChecks(section, dimensions).filter((check) => !satisfies(check)),
   };
 }
@@ -487,10 +508,12 @@ export function roundConnectorFeasibility(
 export interface RoundConnectorParts {
   readonly lower: Manifold;
   readonly upper: Manifold;
+  /** The section plate with its through-holes, when there is one. */
+  readonly plate?: Manifold;
   /** The separate dowels in their assembled position, primary first; none for plugs. */
   readonly pins: readonly Manifold[];
-  /** Per site: the plug or dowel, and the hole cutters by part. */
-  readonly sites: readonly { readonly pin: Manifold; readonly cutters: Partial<Record<Part, Manifold>> }[];
+  /** Per site: the plug or dowel, and the hole cutters by part, the plate's included. */
+  readonly sites: readonly { readonly pin: Manifold; readonly cutters: Partial<Record<Part | 'plate', Manifold>> }[];
 }
 
 /** One ring of a pin or hole: its height along n from the cut, and how far its side surfaces lie outside the pin's. */
@@ -559,33 +582,41 @@ const siteRings = (plan: RoundConnectorPlan, site: RoundConnectorSite) => ({
 
 /**
  * The layers of a site's plug or dowel, with its straight wall `below` and `above` millimetres longer, swept along its own
- * axis: the chamfered free end or ends, and a plug's square root inside the lower part.
+ * axis: the chamfered free end or ends, and a plug's square root inside the lower part. Through a section plate it is the
+ * plate's thickness longer, as each part's face lies half of it from the frame's plane.
  */
 function pinLayers(plan: RoundConnectorPlan, { chamfer }: RoundConnectorSite, below = 0, above = 0): Layer[] {
-  const top = plan.insertion + above;
+  const gap = faceGap(plan);
+  const top = gap + plan.insertion + above;
   const upperEnd: Layer[] = [
     [top - chamfer, 0],
     [top, -chamfer],
   ];
-  if (plan.type === 'plug') return [[-PLUG_ROOT_OVERLAP_MM - below, 0], ...upperEnd];
-  const bottom = -plan.insertion - below;
+  if (plan.type === 'plug') return [[-gap - PLUG_ROOT_OVERLAP_MM - below, 0], ...upperEnd];
+  const bottom = -gap - plan.insertion - below;
   return [[bottom, -chamfer], [bottom + chamfer, 0], ...upperEnd];
 }
 
 /**
- * The layers of a blind hole opening at the cut and reaching `depth` into the part, on the side of `towards`: straight with
- * the clearance, widened at the entrance by a 45° chamfer, and continued past the cut by the cutter margin, so that no
- * membrane is left over the entrance.
+ * The layers of a blind hole opening at the part's face `start` from the frame's plane and reaching `depth` into the part, on
+ * the side of `towards`: straight with the clearance, widened at the entrance by a 45° chamfer, and continued past the face
+ * by the cutter margin, so that no membrane is left over the entrance.
  */
-function holeLayers(clearance: number, chamfer: number, depth: number, towards: 1 | -1): Layer[] {
+function holeLayers(clearance: number, chamfer: number, depth: number, towards: 1 | -1, start = 0): Layer[] {
   const straight = clearance / 2;
   const layers: Layer[] = [
-    [towards * -CUTTER_MARGIN_MM, straight + chamfer + CUTTER_MARGIN_MM],
-    [towards * chamfer, straight],
-    [towards * depth, straight],
+    [towards * (start - CUTTER_MARGIN_MM), straight + chamfer + CUTTER_MARGIN_MM],
+    [towards * (start + chamfer), straight],
+    [towards * (start + depth), straight],
   ];
   return towards > 0 ? layers : layers.reverse();
 }
+
+/** A section plate's straight through-hole, past both of its faces by the cutter margin; the pins' chamfers lead them in. */
+const plateHoleLayers = (clearance: number, gap: number): Layer[] => [
+  [-gap - CUTTER_MARGIN_MM, clearance / 2],
+  [gap + CUTTER_MARGIN_MM, clearance / 2],
+];
 
 /**
  * A site's plug or dowel swept along its own axis, from `below` to `above` millimetres away: the same profile with a longer
@@ -610,16 +641,20 @@ function pinSweep(
 export function buildRoundConnectors(
   kernel: GeometryKernel,
   track: Track,
-  parts: { readonly lower: Manifold; readonly upper: Manifold },
+  parts: { readonly lower: Manifold; readonly upper: Manifold; readonly plate?: Manifold | undefined },
   plan: RoundConnectorPlan,
 ): RoundConnectorParts {
   const { frame, holeDepth, clearance } = plan;
+  const gap = faceGap(plan);
   const sites = plan.sites.map((site) => {
     const rings = siteRings(plan, site);
     const hole = (partClearance: number, towards: 1 | -1) =>
-      loftAlongN(kernel, track, frame, rings, holeLayers(partClearance, site.chamfer, holeDepth, towards));
-    const cutters: Partial<Record<Part, Manifold>> = { upper: hole(clearance.upper, 1) };
+      loftAlongN(kernel, track, frame, rings, holeLayers(partClearance, site.chamfer, holeDepth, towards, gap));
+    const cutters: Partial<Record<Part | 'plate', Manifold>> = { upper: hole(clearance.upper, 1) };
     if (clearance.lower !== undefined) cutters.lower = hole(clearance.lower, -1);
+    if (parts.plate !== undefined) {
+      cutters.plate = loftAlongN(kernel, track, frame, rings, plateHoleLayers(plateHoleClearance(plan), gap));
+    }
     return { pin: loftAlongN(kernel, track, frame, rings, pinLayers(plan, site)), cutters };
   });
   const apply = (part: Manifold, cutters: (Manifold | undefined)[]) =>
@@ -633,7 +668,13 @@ export function buildRoundConnectors(
     sites.map((entry) => entry.cutters.lower),
   );
   const lower = plan.type === 'plug' ? sites.reduce<Manifold>((result, entry) => track(result.add(entry.pin)), drilled) : drilled;
-  return { lower, upper, pins: plan.type === 'dowel' ? sites.map((entry) => entry.pin) : [], sites };
+  const pins = plan.type === 'dowel' ? sites.map((entry) => entry.pin) : [];
+  if (parts.plate === undefined) return { lower, upper, pins, sites };
+  const plate = apply(
+    parts.plate,
+    sites.map((entry) => entry.cutters.plate),
+  );
+  return { lower, upper, plate, pins, sites };
 }
 
 const FLAT_SIDE_OVERLAP_MM3 = 0.01;
@@ -655,12 +696,13 @@ function halfTurnAbout([ax, ay, az]: Vec3, [cx, cy, cz]: Vec3): Mat4 {
 /**
  * Checks the built parts in three dimensions; throws ConnectorVerificationError naming the first failed check.
  *
- * - Each half and each dowel is one connected solid, so an integral plug is attached to the lower part.
+ * - Each half, the section plate and each dowel is one connected solid, so an integral plug is attached to the lower part.
  * - Neither half leaves the uncut cylinder, and no hole breaks through its outer surface within its own part; the bit
- *   of a cutter past the cut removes nothing from that part.
+ *   of a cutter past the cut removes nothing from that part. A plug through a section plate stays inside the solid too,
+ *   also within the plate's thickness, where only the plate surrounds it.
  * - Nothing overlaps in the assembled position, also with a dowel pushed to either hole's bottom.
- * - The parts come apart along n: each plug or seated dowel, swept along −n out of the upper part, and each dowel,
- *   swept along +n out of the lower part, meets nothing.
+ * - The parts come apart along n: each plug or seated dowel, swept along −n out of the upper part and the plate, and each
+ *   dowel, swept along +n out of the lower part and the plate, meets nothing.
  * - A pair keys the parts: the upper part turned by 180° about the section's axis meets the plugs or dowels.
  * - A flat side keys each site: its fully inserted plug or dowel, turned by 90° or 180° about its own axis, meets the
  *   receiving part. Regular polygons repeat under their own turns, which is why a single one does not key the parts.
@@ -680,7 +722,8 @@ export function verifyRoundConnectors(
   };
   const { n, origin } = plan.frame;
   const along = (distance: number): Vec3 => [n[0] * distance, n[1] * distance, n[2] * distance];
-  for (const solid of [built.lower, built.upper, ...built.pins]) {
+  const plate = built.plate === undefined ? [] : [built.plate];
+  for (const solid of [built.lower, built.upper, ...plate, ...built.pins]) {
     const pieces = solid.decompose();
     for (const piece of pieces) track(piece);
     if (pieces.length !== 1) fail('connected');
@@ -688,28 +731,33 @@ export function verifyRoundConnectors(
   const envelope = insideEnvelope(track, whole, plan.frame);
   if (volume(built.lower.subtract(envelope)) > tolerance) fail('lower-inside-envelope');
   if (volume(built.upper.subtract(envelope)) > tolerance) fail('upper-inside-envelope');
+  for (const site of built.sites) {
+    if (site.cutters.plate !== undefined && volume(site.pin.subtract(envelope)) > tolerance) fail('pin-inside-envelope');
+  }
   const cutOffset = n[0] * origin[0] + n[1] * origin[1] + n[2] * origin[2];
+  const gap = faceGap(plan);
   for (const { cutters } of built.sites) {
     const inside = [
-      ...(cutters.upper === undefined ? [] : [cutters.upper.trimByPlane([n[0], n[1], n[2]], cutOffset)]),
-      ...(cutters.lower === undefined ? [] : [cutters.lower.trimByPlane([-n[0], -n[1], -n[2]], -cutOffset)]),
+      ...(cutters.upper === undefined ? [] : [cutters.upper.trimByPlane([n[0], n[1], n[2]], cutOffset + gap)]),
+      ...(cutters.lower === undefined ? [] : [cutters.lower.trimByPlane([-n[0], -n[1], -n[2]], -(cutOffset - gap))]),
     ];
     for (const cutter of inside) if (volume(track(cutter).subtract(envelope)) > tolerance) fail('no-breakthrough');
   }
-  if (volume(built.lower.intersect(built.upper)) > tolerance) fail('no-overlap');
+  const pieces = [built.lower, built.upper, ...plate];
+  pieces.forEach((first, index) => {
+    for (const second of pieces.slice(index + 1)) if (volume(first.intersect(second)) > tolerance) fail('no-overlap');
+  });
   built.pins.forEach((pin, index) => {
     for (const shift of [-ROUND_CONNECTOR_DEPTH_ALLOWANCE_MM, 0, ROUND_CONNECTOR_DEPTH_ALLOWANCE_MM]) {
       const moved = track(pin.translate(along(shift)));
-      if (volume(moved.intersect(built.lower)) > tolerance || volume(moved.intersect(built.upper)) > tolerance) {
-        fail('dowel-fit');
-      }
+      if (pieces.some((piece) => volume(moved.intersect(piece)) > tolerance)) fail('dowel-fit');
     }
-    const out = pinSweep(kernel, track, plan, plan.sites[index] as RoundConnectorSite, { above: 2 * plan.insertion + 1 });
-    if (volume(out.intersect(built.lower)) > tolerance) fail('dowel-removal');
+    const out = pinSweep(kernel, track, plan, plan.sites[index] as RoundConnectorSite, { above: dowelLength(plan) + 1 });
+    if ([built.lower, ...plate].some((piece) => volume(out.intersect(piece)) > tolerance)) fail('dowel-removal');
   });
   for (const site of plan.sites) {
-    const sweep = pinSweep(kernel, track, plan, site, { below: plan.holeDepth + 1 });
-    if (volume(sweep.intersect(built.upper)) > tolerance) fail('separation-path');
+    const sweep = pinSweep(kernel, track, plan, site, { below: plan.holeDepth + 2 * gap + 1 });
+    if ([built.upper, ...plate].some((piece) => volume(sweep.intersect(piece)) > tolerance)) fail('separation-path');
   }
   if (plan.sites.length === 2) {
     const turned = track(built.upper.transform(halfTurnAbout(n, origin)));

@@ -27,6 +27,8 @@ import {
   type PyramidBaseType,
   RATIO_LIMITS,
   ROUND_HEIGHT_LIMITS,
+  SECTION_PLATE_MARGIN_LIMITS,
+  SECTION_PLATE_THICKNESS_LIMITS,
   SECTION_POSITION_LIMITS,
   type SectionType,
   type ShapeKind,
@@ -53,7 +55,12 @@ import {
   type ParameterChoices,
   type ParameterKey,
   type ParameterValues,
+  PLATE_MARGIN_INCREMENT_MM,
+  PLATE_THICKNESS_INCREMENT_MM,
+  PLATE_UNAVAILABLE_MESSAGE,
   type PlanarSectionKeys,
+  plateChosen,
+  plateFits,
   type SectionChoice,
   type SectionRanges,
   sectionKeys,
@@ -130,6 +137,9 @@ export type ToggleField = {
   readonly type: 'toggle';
   readonly key: ToggleKey;
   readonly label: string;
+  /** Not to be switched now; the note named by `describedBy` says why. */
+  readonly disabled?: boolean;
+  readonly describedBy?: string;
 };
 
 /**
@@ -403,6 +413,8 @@ export type PanelContext = {
   readonly connectorStatus?: ConnectorStatus | undefined;
   /** The feasible millimetres of the connector's fields, see `SectionRanges`. */
   readonly sectionRanges?: SectionRanges | undefined;
+  /** A connector replaced by the page, such as on turning a section plate on, said once among the connector's fields. */
+  readonly connectorNotice?: string | undefined;
 };
 
 type TiltConfig = {
@@ -624,6 +636,20 @@ const coneSectionHelp: Help = {
     'Частини експортуються окремими об’єктами в одному масштабі; розсування змінює лише перегляд. Межі 10–90 % відсувають ' +
     'площину від основи й вершини, але не гарантують, що тонку частину вдасться надрукувати.',
 };
+
+const CONE_PLATE_HELP =
+  'Січна пластина — окрема пласка деталь, що показує переріз. Із конуса вирізається шар завтовшки з пластину, ' +
+  'посередині якого лежить площина перерізу; частини не зсуваються й не масштабуються, тож складена модель — це той ' +
+  'самий конус, а пластина виступає за його поверхню на заданий виступ. Нижня й верхня грані пластини мають різні ' +
+  'розміри перерізу, у похилого конуса — ще й різні центри. Контур пластини — прямокутник навколо обох граней із ' +
+  'заокругленими кутами.\n\n' +
+  'Товщина обмежена так, щоб кожна частина лишалася не тоншою за 1,2 мм. Пластина з кріпленням друкується разом із ' +
+  'частинами як третій об’єкт.';
+
+const withPlateHelp = (help: Help): Help => ({ ...help, text: `${help.text}\n\n${CONE_PLATE_HELP}` });
+
+const plateThicknessWindow: StepRange = { ...SECTION_PLATE_THICKNESS_LIMITS, increment: PLATE_THICKNESS_INCREMENT_MM };
+const plateMarginRange: StepRange = { ...SECTION_PLATE_MARGIN_LIMITS, increment: PLATE_MARGIN_INCREMENT_MM };
 
 const coneVerticalSectionHelp: Help = {
   label: 'Як задано переріз?',
@@ -849,6 +875,49 @@ const CONE_PRINT_NOTE =
 
 const withConeNote = (help: Help): Help => ({ ...help, text: `${help.text}\n\n${CONE_PRINT_NOTE}` });
 
+const CONE_PLATE_PRINT_NOTE =
+  'У файлі зрізаний конус стоїть на основі, а менший конус — на грані біля пластини, вершиною догори, тож його отвори чи ' +
+  'паз відкриваються до столу й можуть потребувати підтримок. Пластина з отворами або без кріплення лежить пласко. З ' +
+  'виступами на обох гранях вона стоїть на ребрі, виступами вздовж висоти друку: додайте кайму (brim) і перевірте в ' +
+  'слайсері, чи потрібні підтримки.';
+
+const EXPLODED_PLATE_NOTE = 'Розсунутий перегляд лише показує деталі окремо вздовж нормалі до пластини; це не напрям складання.';
+
+const plateDovetailHelp: Help = {
+  label: 'Як працює кріплення?',
+  text:
+    'Виступи друкуються на обох гранях січної пластини, пази — у нижній і верхній частинах. Обидва пази відкриті з ' +
+    'того самого боку й закінчуються упором з протилежного. Утримуючи пластину, насуньте кожну частину вздовж пластини ' +
+    'до упора; знімаються частини незалежно одна від одної, зворотним зсуванням. Похилі боки під кутом 45° не дають ' +
+    'частинам відійти від пластини перпендикулярно до неї, але не блокують зсування.\n\n' +
+    `${EXPLODED_PLATE_NOTE}\n\n` +
+    'Висота, довжина й зазор спільні для обох виступів, і повзунки враховують обидва пази разом. Довжина вимірюється ' +
+    'вздовж напряму насування.\n\n' +
+    `${CONE_PLATE_PRINT_NOTE}\n\n${BOUNDS_HELP}`,
+};
+
+const platePlugHelp: Help = {
+  label: 'Як працює кріплення?',
+  text:
+    'Виступ друкується разом із нижньою частиною, проходить крізь отвір пластини й входить у глухий отвір верхньої ' +
+    'частини. Над нижньою частиною він має висоту, що дорівнює товщині пластини плюс заглибленню; поле задає саме ' +
+    'заглиблення у верхню частину. Глухий отвір має додаткові 0,3 мм глибини.\n\n' +
+    'Отвір пластини наскрізний, із тим самим збільшенням діаметра, що й отвір верхньої частини. Частини й пластину ' +
+    'з’єднують і розбирають рухом перпендикулярно до перерізу.\n\n' +
+    `${EXPLODED_PLATE_NOTE}\n\n${CONE_PLATE_PRINT_NOTE}\n\n${BOUNDS_HELP}`,
+};
+
+const plateDowelHelp: Help = {
+  label: 'Як працює кріплення?',
+  text:
+    'Штифти друкуються окремо, проходять крізь отвори пластини й входять у глухі отвори обох частин. Поле задає довжину ' +
+    'в частинах — суму заглиблень у нижню й верхню; повна довжина штифта більша на товщину пластини. Кожен глухий отвір ' +
+    'має додаткові 0,3 мм глибини.\n\n' +
+    'Отвори пластини мають більше з двох збільшень діаметра: так штифт вільно проходить крізь неї, а посадку визначають ' +
+    'отвори частин.\n\n' +
+    `${EXPLODED_PLATE_NOTE}\n\n${CONE_PLATE_PRINT_NOTE}\n\n${BOUNDS_HELP}`,
+};
+
 const ENTRY_NOTCH_NOTE = 'У звуженій верхній частині може бути помітна виїмка для входу в паз.';
 
 const CONE_VERTICAL_DOVETAIL_MOTION: Readonly<Record<DovetailEntrance, string>> = {
@@ -941,6 +1010,9 @@ function connectorSection(
   const chosen = choices[keys.connector];
   const values = context.values ?? {};
   const offersTwist = twistAvailable(kind, choices, values);
+  // Through a section plate the pins also cross its thickness, which their fields leave out.
+  const plated = plateChosen(kind, choices);
+  const plateThickness = plated ? values.conePlateThicknessMm : undefined;
   const selector: ChoiceField = {
     type: 'choice',
     key: keys.connector,
@@ -1060,6 +1132,7 @@ function connectorSection(
       { value: 'opposite', label: horizontalCut ? 'З протилежного боку' : 'Знизу' },
     ],
   };
+  const plugLength = shown(round.depth);
   const fields: Record<ConnectorChoice, ParameterField[]> = {
     none: [],
     twist:
@@ -1098,6 +1171,7 @@ function connectorSection(
           ],
     dovetail: [
       entranceField,
+      ...(plated ? [note('dovetail-plate', 'Виступи — на обох гранях пластини, пази — в обох частинах.')] : []),
       scaleNote,
       millimetreField(dovetail.size, 'Висота виступу, мм'),
       note(
@@ -1109,16 +1183,32 @@ function connectorSection(
       clearanceField(dovetail.clearance, 'Зазор між поверхнями, мм', dovetailClearanceRange),
     ],
     plug: [
-      ...roundFields(millimetreField(round.depth, 'Висота виступу, мм', ROUND_CONNECTOR_STEPS_MM.length), [
-        note('plug-height', 'Висота від площини перерізу: на стільки виступ заходить в отвір другої частини.'),
-      ]),
+      ...(plated
+        ? roundFields(millimetreField(round.depth, 'Заглиблення виступу, мм', ROUND_CONNECTOR_STEPS_MM.length), [
+            note(
+              'plug-height',
+              `Над нижньою частиною виступ має ${millimetres(plugLength === undefined || plateThickness === undefined ? undefined : plugLength + plateThickness)}: ` +
+                `${millimetres(plateThickness)} крізь пластину й ${millimetres(plugLength)} у верхню частину.`,
+            ),
+          ])
+        : roundFields(millimetreField(round.depth, 'Висота виступу, мм', ROUND_CONNECTOR_STEPS_MM.length), [
+            note('plug-height', 'Висота від площини перерізу: на стільки виступ заходить в отвір другої частини.'),
+          ])),
       clearanceField(round.plugClearance, `${enlargement} отвору, мм`, diametralClearanceRange),
       note('connector-clearance', CLEARANCE_NOTE),
     ],
     dowel: [
-      ...roundFields(millimetreField(round.depth, 'Повна довжина штифта, мм', ROUND_CONNECTOR_STEPS_MM.length), [
-        note('dowel-insertion', `У кожну половинку штифт входить на ${millimetres(shownHalf(shown(round.depth)))}.`),
-      ]),
+      ...(plated
+        ? roundFields(millimetreField(round.depth, 'Довжина штифта в частинах, мм', ROUND_CONNECTOR_STEPS_MM.length), [
+            note(
+              'dowel-insertion',
+              `Повна довжина штифта — ${millimetres(plugLength === undefined || plateThickness === undefined ? undefined : plugLength + plateThickness)}: ` +
+                `по ${millimetres(shownHalf(plugLength))} у кожній частині та ${millimetres(plateThickness)} крізь пластину.`,
+            ),
+          ])
+        : roundFields(millimetreField(round.depth, 'Повна довжина штифта, мм', ROUND_CONNECTOR_STEPS_MM.length), [
+            note('dowel-insertion', `У кожну половинку штифт входить на ${millimetres(shownHalf(shown(round.depth)))}.`),
+          ])),
       clearanceField(
         round.dowelLowerClearance,
         numbered ? `${enlargement} отворів частини 1, мм` : `${enlargement} нижніх отворів, мм`,
@@ -1130,6 +1220,9 @@ function connectorSection(
         diametralClearanceRange,
       ),
       note('connector-clearance', CLEARANCE_NOTE),
+      ...(plated
+        ? [note('plate-hole-clearance', 'Отвори пластини мають більше з двох збільшень, щоб штифт проходив крізь неї вільно.')]
+        : []),
       ...(unavailable === undefined
         ? [{ type: 'action', key: `${kind}-download-pins`, label: 'Завантажити лише штифти', action: 'download-pins' } as const]
         : []),
@@ -1178,6 +1271,7 @@ function connectorSection(
       ? [note('connector-print-placement', PROTRUDING_ON_BALL_NOTE)]
       : [];
   const helpOf = (type: Exclude<ConnectorChoice, 'none'>): Help => {
+    if (plated && type !== 'twist') return { dovetail: plateDovetailHelp, plug: platePlugHelp, dowel: plateDowelHelp }[type];
     if (kind !== 'cone' || type === 'twist') return helps[cut][type];
     if (cut === 'parallel-to-bases') return withConeNote(helps[cut][type]);
     if (cut === 'vertical' && type === 'dovetail') return coneVerticalDovetailHelp(entrance);
@@ -1196,8 +1290,12 @@ function connectorSection(
           ...help,
           text: [help.text, ...(circular ? [] : [PROFILE_CLEARANCE_HELP]), TRIAL_VALUES_HELP].join('\n\n'),
         };
+  const notice =
+    context.connectorNotice === undefined
+      ? []
+      : [{ ...note('connector-notice', context.connectorNotice), tone: 'status' as const }];
   return [
-    section(`${kind}-connector`, 'Кріплення', [selector, ...unsupportedNote, ...printNote, ...fields[chosen]], {
+    section(`${kind}-connector`, 'Кріплення', [selector, ...notice, ...unsupportedNote, ...printNote, ...fields[chosen]], {
       help: chosen === 'none' ? undefined : withRoundNotes(chosen, helpOf(chosen)),
       status:
         chosen !== 'none' && unavailable !== undefined && chosen !== 'dovetail'
@@ -1293,6 +1391,56 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
   };
   const apexAngles = context.sectionRanges?.[coneApexKeys.inclination];
   const throughApex = kind === 'cone' && choices.coneObliqueThrough === 'apex';
+  const plate = keys.plate;
+  const plateOn = plate !== undefined && choices[plate.toggle];
+  const values = context.values;
+  // Whether any plate fits the current valid cone and cut; unknown, and so offered, while one of them is being typed.
+  const fits =
+    values?.printSizeMm === undefined ||
+    values.coneHeightRatio === undefined ||
+    values.coneOffsetRatio === undefined ||
+    values.coneSectionPercent === undefined ||
+    plateFits(
+      { kind: 'cone', heightRatio: values.coneHeightRatio, offsetRatio: values.coneOffsetRatio },
+      values.printSizeMm,
+      values.coneSectionPercent,
+    );
+  const plateNoteId = `${kind}-plate-unavailable`;
+  const thicknessInterval = plate === undefined ? undefined : context.sectionRanges?.[plate.thickness];
+  const plateFields: ParameterField[] =
+    plate === undefined
+      ? []
+      : [
+          {
+            type: 'toggle',
+            key: plate.toggle,
+            label: 'Січна пластина',
+            ...(!fits && !plateOn ? { disabled: true, describedBy: plateNoteId } : {}),
+          },
+          // Once chosen, the thickness field itself says why it does not fit, and the switch stays free to turn it off.
+          ...(fits || plateOn ? [] : [{ type: 'note' as const, key: plateNoteId, text: PLATE_UNAVAILABLE_MESSAGE }]),
+          ...(plateOn
+            ? [
+                {
+                  type: 'number' as const,
+                  key: plate.thickness,
+                  label: 'Товщина пластини, мм',
+                  suffix: '',
+                  range:
+                    thicknessInterval === undefined
+                      ? plateThicknessWindow
+                      : physicalRange(thicknessInterval, PLATE_THICKNESS_INCREMENT_MM),
+                },
+                {
+                  type: 'number' as const,
+                  key: plate.margin,
+                  label: 'Виступ за межі фігури, мм',
+                  suffix: '',
+                  range: plateMarginRange,
+                },
+              ]
+            : []),
+        ];
   const details: Record<SectionChoice, ParameterField[]> = {
     none: [],
     horizontal: [],
@@ -1305,6 +1453,7 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
         range: sectionPositionRange,
       },
       toggle,
+      ...plateFields,
     ],
     vertical: [
       {
@@ -1354,14 +1503,19 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
   const help: Record<SectionChoice, Help | undefined> = {
     none: undefined,
     horizontal: undefined,
-    'parallel-to-bases': kind === 'cone' ? coneSectionHelp : parallelSectionHelp,
+    'parallel-to-bases': kind === 'cone' ? (plateOn ? withPlateHelp(coneSectionHelp) : coneSectionHelp) : parallelSectionHelp,
     vertical: kind === 'cone' ? coneVerticalSectionHelp : verticalSectionHelp,
     oblique: kind === 'cone' ? (throughApex ? coneApexSectionHelp : coneObliqueSectionHelp) : obliqueSectionHelp,
   };
+  // Short enough for the summary line; only a cut parallel to the base has a plate, which its select shows.
+  const withPlate = chosen === 'parallel-to-bases' && plateOn;
   return section(`${kind}-section`, 'Переріз', [selector, ...details[chosen]], {
     initiallyOpen: false,
     help: help[chosen],
-    status: { text: chosen === 'none' ? 'немає' : namesOf(chosen).toLowerCase(), highlighted: chosen !== 'none' },
+    status: {
+      text: chosen === 'none' ? 'немає' : withPlate ? 'з пластиною' : namesOf(chosen).toLowerCase(),
+      highlighted: chosen !== 'none',
+    },
   });
 }
 

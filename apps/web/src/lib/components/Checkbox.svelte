@@ -3,16 +3,21 @@ let {
   id,
   label,
   checked = $bindable(),
+  disabled = false,
+  describedBy,
 }: {
   id: string;
   label: string;
   checked: boolean;
+  /** Not to be switched now; a note among the fields, named by `describedBy`, says why. */
+  disabled?: boolean | undefined;
+  describedBy?: string | undefined;
 } = $props();
 </script>
 
 <!-- A native checkbox: keyboard operation and its state come with the element; the whole row is the touch target. -->
-<label class="checkbox" for={id}>
-  <input {id} class="input" type="checkbox" bind:checked />
+<label class={['checkbox', { disabled }]} for={id}>
+  <input {id} class="input" type="checkbox" bind:checked {disabled} aria-describedby={describedBy} />
   <span>{label}</span>
 </label>
 
@@ -31,6 +36,15 @@ let {
 
   .checkbox:hover {
     color: var(--color-text);
+  }
+
+  .checkbox.disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  .checkbox.disabled:hover {
+    color: var(--color-text-muted);
   }
 
   .input {

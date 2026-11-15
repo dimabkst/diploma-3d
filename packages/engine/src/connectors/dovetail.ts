@@ -84,8 +84,20 @@ export interface DovetailIssue {
     | 'stop-thin'
     | 'backing-thin'
     | 'base-thin';
+  /** Beside a section plate, which part's groove it concerns; the plate carries both tongues. */
+  readonly part?: 'lower' | 'upper';
   readonly valueMm: number;
   readonly minimumMm: number;
+}
+
+/**
+ * One face of a section plate with its tongue, and the part whose groove that tongue slides in: the interface's own frame,
+ * with n from the plate into the part and the plan's u, and how far that part slides along +u to come off.
+ */
+export interface DovetailInterface {
+  readonly part: 'lower' | 'upper';
+  readonly frame: DovetailFrame;
+  readonly exitDistance: number;
 }
 
 export interface DovetailPlan {
@@ -114,6 +126,11 @@ export interface DovetailPlan {
   readonly normalPlay: number;
   /** On each side, how far the head reaches beyond the groove's neck: what keeps the parts together along n. */
   readonly undercut: number;
+  /**
+   * With a section plate: both of its faces, lower first, each with a tongue of these dimensions; `frame` and `exitDistance`
+   * are then the upper interface's. Absent without a plate, where the tongue stands on the lower part.
+   */
+  readonly interfaces?: readonly DovetailInterface[];
   readonly issues: readonly DovetailIssue[];
 }
 
@@ -251,7 +268,24 @@ function wallsOf(
     case 'cone-vertical':
     case 'cone-oblique':
       return coneWalls(section, dimensions, groove, towardsStop);
+    case 'cone-plate':
+      return (['upper', 'lower'] as const).flatMap((part) => plateInterfaceWalls(section.interfaces[part], part, dimensions));
   }
+}
+
+/**
+ * The walls of one part's groove beside a section plate: those of a cone's parallel cut at the plate's face, in the
+ * interface's own frame, towards that interface's stop. The tongue's root lies in the plate, which is solid across its whole
+ * thickness, so no part keeps material under it.
+ */
+function plateInterfaceWalls(
+  section: ConeParallelSection,
+  part: 'lower' | 'upper',
+  dimensions: DovetailDimensions,
+): DovetailIssue[] {
+  return coneWalls(section, dimensions, grooveExtent(dimensions), stopAlongSection(section, dimensions.entrance))
+    .filter(({ code }) => code !== 'base-thin')
+    .map((issue) => ({ ...issue, part }));
 }
 
 /**
@@ -470,7 +504,7 @@ export function dovetailDimensions(
 
 /** Whether the cut is horizontal, so that its slide axis has no upper and lower end; its two sides are then named by u. */
 export const isHorizontalCut = ({ type }: SolidSection): boolean =>
-  type === 'parallel-to-bases' || type === 'cone-parallel' || type === 'ball-horizontal';
+  type === 'parallel-to-bases' || type === 'cone-parallel' || type === 'ball-horizontal' || type === 'cone-plate';
 
 const VERTICAL: Vec3 = [0, 0, 1];
 
@@ -533,10 +567,24 @@ export function planDovetail(
   const { height, length: tongueLength, clearance } = dimensions;
   const { rootWidth, headWidth } = dovetailProfileOfHeight(height);
   const tongueProfile = tongueProfileOf(height, rootWidth, DOVETAIL_ROOT_OVERLAP_MM);
+  const exitOf = (grooved: SolidSection) =>
+    grooveReach(grooved, dimensions) + tongueLength / 2 + clearance + DOVETAIL_EXIT_MARGIN_MM;
+  // Both interfaces keep the middle plane's u, and with it the entrance's side, whichever way their n points.
+  const interfaces =
+    section.type === 'cone-plate'
+      ? (['lower', 'upper'] as const).map(
+          (part): DovetailInterface => ({
+            part,
+            frame: dovetailFrame(section.interfaces[part], dimensions.entrance),
+            exitDistance: exitOf(section.interfaces[part]),
+          }),
+        )
+      : undefined;
+  const upper = interfaces?.[1];
   return {
     type: 'dovetail',
     entrance: dimensions.entrance ?? 'standard',
-    frame: dovetailFrame(section, dimensions.entrance),
+    frame: upper?.frame ?? dovetailFrame(section, dimensions.entrance),
     height,
     rootWidth,
     headWidth,
@@ -545,12 +593,20 @@ export function planDovetail(
     leadIn: DOVETAIL_LEAD_IN_RELATIVE * height,
     tongueProfile,
     grooveProfile: offsetConvexPolygon(tongueProfile, [clearance, clearance, clearance, clearance]),
-    exitDistance: grooveReach(section, dimensions) + tongueLength / 2 + clearance + DOVETAIL_EXIT_MARGIN_MM,
+    exitDistance: upper?.exitDistance ?? exitOf(section),
     normalPlay: clearance * Math.SQRT2,
     undercut: headWidth / 2 - grooveExtent(dimensions).neckHalfWidth,
+    ...(interfaces === undefined ? {} : { interfaces }),
     issues: dovetailChecks(section, dimensions).filter((check) => !satisfies(check)),
   };
 }
+
+/** The plan seen from one interface of a section plate: its frame and exit distance, with the shared dimensions. */
+export const interfacePlan = (plan: DovetailPlan, { frame, exitDistance }: DovetailInterface): DovetailPlan => ({
+  ...plan,
+  frame,
+  exitDistance,
+});
 
 /**
  * How far the part with the groove reaches from the section's centre towards the chosen entrance, where the tongue slides:
@@ -663,6 +719,35 @@ export interface DovetailParts {
   readonly lower: Manifold;
   readonly upper: Manifold;
   readonly tongue: Manifold;
+}
+
+/**
+ * A section plate's dovetail: a tongue on each face of the plate and the swept groove of each in the part beyond that face;
+ * every object is tracked. The parts lie on opposite sides of the plate and slide only parallel to it, so either comes off
+ * while the plate and the other part stay where they are.
+ */
+export function buildPlateDovetail(
+  kernel: GeometryKernel,
+  track: Track,
+  parts: { readonly lower: Manifold; readonly upper: Manifold; readonly plate: Manifold },
+  plan: DovetailPlan,
+): { readonly lower: Manifold; readonly upper: Manifold; readonly plate: Manifold; readonly tongues: readonly Manifold[] } {
+  if (plan.interfaces === undefined) throw new GeometryError('Expected the dovetail of a section plate.');
+  if (!isStrictlyConvex(plan.tongueProfile) || !isStrictlyConvex(plan.grooveProfile)) {
+    throw new GeometryError('The dovetail profile is not convex.');
+  }
+  let { lower, upper, plate } = parts;
+  const tongues: Manifold[] = [];
+  for (const face of plan.interfaces) {
+    const seen = interfacePlan(plan, face);
+    const tongue = track(hullOf(kernel, tonguePoints(seen)));
+    tongues.push(tongue);
+    plate = track(plate.add(tongue));
+    const groove = grooveCutter(kernel, track, seen);
+    if (face.part === 'lower') lower = track(lower.subtract(groove));
+    else upper = track(upper.subtract(groove));
+  }
+  return { lower, upper, plate, tongues };
 }
 
 /** Adds the tongue to the lower part and cuts the swept groove from the upper part; every object is tracked. */

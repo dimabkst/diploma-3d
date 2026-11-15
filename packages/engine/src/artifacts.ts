@@ -1,6 +1,6 @@
 import type { ModelSpecInput } from '@diploma-3d/schema';
 import { obliqueAxes } from './connectors/frame.ts';
-import type { RoundConnectorPlan } from './connectors/round.ts';
+import { dowelLength, type RoundConnectorPlan } from './connectors/round.ts';
 import {
   buildTwistTrial,
   TWIST_TRAVEL_DEG,
@@ -152,10 +152,13 @@ function twistTrialFile(
 /** Millimetres for a file name: thousandths at most, with a point, and no trailing zeros. */
 const fileMillimetres = (value: number): string => String(Number(value.toFixed(3)));
 
-/** What a replacement must match: the profile, each pin's nominal size and the whole length, e.g. "dowels-square-d8-d6.4-L24mm". */
-export function pinsFileName({ profile, sites, insertion }: RoundConnectorPlan): string {
-  const sizes = sites.map(({ pinDiameter }) => `d${fileMillimetres(pinDiameter)}`).join('-');
-  return `dowels-${profile}-${sizes}-L${fileMillimetres(2 * insertion)}mm`;
+/**
+ * What a replacement must match: the profile, each pin's nominal size and the whole length, a section plate's thickness
+ * included, e.g. "dowels-square-d8-d6.4-L24mm".
+ */
+export function pinsFileName(plan: RoundConnectorPlan): string {
+  const sizes = plan.sites.map(({ pinDiameter }) => `d${fileMillimetres(pinDiameter)}`).join('-');
+  return `dowels-${plan.profile}-${sizes}-L${fileMillimetres(dowelLength(plan))}mm`;
 }
 
 /** The part on the positive side of a section's plane: the one with the holes or the groove. */
@@ -171,7 +174,8 @@ const onPositiveSide = ({ part }: Solid) => part === 'upper' || part === 'part-2
 export function previewSeparation({ solids, section, size }: GeneratedModel): number {
   const longest = Math.max(...size);
   const connector = section?.connector;
-  if (section === undefined || connector === undefined || connector.type === 'dovetail') {
+  // Around a section plate the parts move by what still reaches across, measured there; see `explodedAroundPlate`.
+  if (section === undefined || connector === undefined || connector.type === 'dovetail' || section.plate !== undefined) {
     return SECTION_PREVIEW_GAP_RELATIVE * longest;
   }
   const { normal, offset } = section.plane;
@@ -194,8 +198,11 @@ export function previewSeparation({ solids, section, size }: GeneratedModel): nu
  * along +u. In a vertical or oblique cut part 2, with the groove, stays where it is and part 1, with the tongue, moves
  * uphill along −u, which is the way it comes off; the groove opens uphill.
  */
-function previewObjects({ solids, section }: GeneratedModel, gap: number): PreviewObject[] {
-  if (section === undefined || gap === 0) return [...solids];
+function previewObjects(model: GeneratedModel, gap: number): PreviewObject[] {
+  const { solids, section } = model;
+  const shown = solids.map(withAppearance);
+  if (section === undefined || gap === 0) return shown;
+  if (section.plate !== undefined) return explodedAroundPlate(model, shown, gap);
   const { connector, plane, type } = section;
   if (connector?.type === 'twist') {
     // Locked lugs cannot be pulled through their ledges: the upper part is shown turned to where it comes off, and withdrawn.
@@ -213,6 +220,47 @@ function previewObjects({ solids, section }: GeneratedModel, gap: number): Previ
 
 const scaled = (a: Vec3, factor: number): Vec3 => [a[0] * factor, a[1] * factor, a[2] * factor];
 
+/** A section plate is shown in its own neutral colour, apart from the solid and its cut faces. */
+const withAppearance = (solid: Solid): PreviewObject => (solid.part === 'plate' ? { ...solid, appearance: 'plate' } : solid);
+
+/**
+ * The parts of a section plate's assembly moved apart along the plane's normal for display, whatever the connector: the
+ * plate stays, the lower part with any dowels in it moves down and the upper part up, each by `gap` beyond what still
+ * reaches across, measured on the meshes: plugs or dowels through the plate, tongues on its faces. Not an assembly path:
+ * a dovetail's parts slide off parallel to the plate.
+ */
+function explodedAroundPlate(model: GeneratedModel, shown: readonly PreviewObject[], gap: number): PreviewObject[] {
+  const { plane, plate } = model.section as NonNullable<GeneratedModel['section']>;
+  const half = (plate?.thickness ?? 0) / 2;
+  // The extent of a kind of solid along the normal from the middle plane; empty, and so never reaching, without one.
+  const heights = (part: Solid['part']) => {
+    let [min, max] = [Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY];
+    for (const { mesh } of model.solids.filter((solid) => solid.part === part)) {
+      for (let vertex = 0; vertex < vertexCount(mesh); vertex += 1) {
+        const [x, y, z] = vertexAt(mesh, vertex);
+        const height = plane.normal[0] * x + plane.normal[1] * y + plane.normal[2] * z - plane.offset;
+        [min, max] = [Math.min(min, height), Math.max(max, height)];
+      }
+    }
+    return { min, max };
+  };
+  const [lower, upper, plateHeights, dowels] = (['lower', 'upper', 'plate', 'dowel'] as const).map(heights) as [
+    ReturnType<typeof heights>,
+    ReturnType<typeof heights>,
+    ReturnType<typeof heights>,
+    ReturnType<typeof heights>,
+  ];
+  // How far what moves down reaches above the plate's lower face, and the plate below it; likewise upwards.
+  const down = Math.max(0, lower.max + half, dowels.max + half) + Math.max(0, -half - plateHeights.min) + gap;
+  const up = Math.max(0, half - upper.min) + Math.max(0, plateHeights.max - half) + gap;
+  return shown.map((object, index) => {
+    const part = model.solids[index]?.part;
+    if (part === 'lower' || part === 'dowel') return { ...object, displayOffset: scaled(plane.normal, -down) };
+    if (part === 'upper') return { ...object, displayOffset: scaled(plane.normal, up) };
+    return object;
+  });
+}
+
 /**
  * The print file's objects in their print orientation, by proper rotations only, before they are laid out side by side on
  * the build plate. Flat cut faces keep the parts as they are. With a parallel
@@ -224,6 +272,11 @@ const scaled = (a: Vec3, factor: number): Vec3 => [a[0] * factor, a[1] * factor,
  * upright too, so a connector along them may need another orientation in the slicer. An oblique cut's parts each choose
  * their own resting face, see `restOnFlatFace`; the parts of a plane through a cone's apex both keep some of the base,
  * and stay upright on it. Removable dowels stand upright on an end face.
+ *
+ * A section plate lies flat on a face, also with plugs or dowels through it. With a dovetail it carries a tongue on each
+ * face, so it stands on its edge instead, the tongues' sliding direction u upwards: each tongue then rises as a prism with
+ * its lead-in at the top and nothing overhangs, but the plate is a thin wall on a narrow edge and needs a brim at least;
+ * nothing here claims it prints without supports.
  */
 function printOrientation({ solids, section, spec }: GeneratedModel): readonly (Solid & ThreeMfObject)[] {
   if (solids.length === 1) return solids;
@@ -261,6 +314,7 @@ function printOrientation({ solids, section, spec }: GeneratedModel): readonly (
   const { u, n } = connector.frame;
   return solids.map((solid) => {
     if (solid.part === 'dowel') return { ...solid, mesh: rotateOntoZ(solid.mesh, n) };
+    if (solid.part === 'plate') return connector.type === 'dovetail' ? { ...solid, mesh: rotateOntoZ(solid.mesh, u) } : solid;
     // A twist connector's recess is made for its mouth on the bed: the ledges are the first layers, the roof slopes at 45°.
     const turnsOver = solid.part === 'upper' && spec.shape.kind !== 'cone' && connector.type !== 'twist';
     return turnsOver ? { ...solid, mesh: rotateHalfTurn(solid.mesh, u) } : solid;

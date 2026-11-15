@@ -178,10 +178,31 @@ export const CONNECTOR_TYPES = ['dovetail', 'plug', 'dowel', 'twist'] as const;
 
 export type ConnectorType = (typeof CONNECTOR_TYPES)[number];
 
+// The section plate's windows in millimetres: policies for print trials, not geometric limits. The solid and the cut's
+// position narrow the thickness further, which the engine checks.
+export const SECTION_PLATE_THICKNESS_LIMITS = { min: 1.2, max: 4 } as const;
+export const SECTION_PLATE_MARGIN_LIMITS = { min: 3, max: 30 } as const;
+
+export const DEFAULT_SECTION_PLATE = { thicknessMm: 1.6, marginMm: 10 } as const;
+
+/**
+ * A separate flat plate that shows the section: the slab of thickness T centred on the cutting plane is removed from the
+ * solid and printed as a third object, whose outline is the slab's own extent within the plane grown by the margin. The
+ * parts keep their scale and position, so the assembly is the original solid with the plate's margin around the cut.
+ */
+export const sectionPlateSchema = z.strictObject({
+  thicknessMm: z.number().min(SECTION_PLATE_THICKNESS_LIMITS.min).max(SECTION_PLATE_THICKNESS_LIMITS.max),
+  marginMm: z.number().min(SECTION_PLATE_MARGIN_LIMITS.min).max(SECTION_PLATE_MARGIN_LIMITS.max),
+});
+
+export type SectionPlate = z.infer<typeof sectionPlateSchema>;
+
 /** The plane z = zBottom + t·h with t = positionPercent/100: parallel to the base or bases, also of an oblique solid. */
 export const parallelSectionSchema = z.strictObject({
   type: z.literal('parallel-to-bases'),
   positionPercent: sectionPositionSchema,
+  /** Only a cone offers one so far, and not with a twist connector; the engine refuses the rest. */
+  plate: sectionPlateSchema.optional(),
   /** Joins the parts; without one, both cut faces stay flat. */
   connector: connectorSchema.optional(),
 });

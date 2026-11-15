@@ -15,6 +15,7 @@ export {
 } from './connectors/bounds.ts';
 export {
   buildDovetail,
+  buildPlateDovetail,
   DOVETAIL_EXIT_MARGIN_MM,
   DOVETAIL_LEAD_IN_RELATIVE,
   DOVETAIL_MINIMUMS_MM,
@@ -22,6 +23,7 @@ export {
   DOVETAIL_ROOT_OVERLAP_MM,
   type DovetailDimensions,
   type DovetailFrame,
+  type DovetailInterface,
   type DovetailIssue,
   type DovetailParameter,
   type DovetailParts,
@@ -32,6 +34,7 @@ export {
   dovetailFeasibility,
   dovetailProfileMm,
   dovetailProfileOfHeight,
+  interfacePlan,
   isHorizontalCut,
   isStrictlyConvex,
   offsetConvexPolygon,
@@ -50,18 +53,24 @@ export {
   CONSTRAINT_ROUNDOFF_MM,
   type ConeObliqueSection,
   type ConeParallelSection,
+  type ConePlateSection,
   type ConeVerticalSection,
   coneApexAngleBounds,
   coneApexChord,
   coneObliqueSection,
+  conePlateSection,
+  conePlateThicknessRange,
   coneSection,
   coneVerticalSection,
   connectorVolumeTolerance,
   cutOfSection,
   cylinderSection,
+  type FrameExtent,
   frameMatrix,
   framePoint,
   isApexChordUsable,
+  isPlateCut,
+  isPlateThicknessFeasible,
   lateralWall,
   type Measurement,
   type ObliqueCut,
@@ -72,6 +81,7 @@ export {
   obliquePlaneContainsAxis,
   obliqueSplitReach,
   type ParallelCylinderSection,
+  type PlateCut,
   type SectionedShape,
   type SectionFrame,
   type SolidCut,
@@ -88,9 +98,12 @@ export {
 export { profileMinWidth, profileReach, profileRing, profileSupport } from './connectors/profile.ts';
 export {
   buildRoundConnectors,
+  dowelLength,
   leastInsertion,
   PLUG_ROOT_OVERLAP_MM,
   planRoundConnectors,
+  plateHoleClearance,
+  plugHeight,
   ROUND_CONNECTOR_CHAMFER,
   ROUND_CONNECTOR_DEPTH_ALLOWANCE_MM,
   ROUND_CONNECTOR_MINIMUMS_MM,
@@ -202,6 +215,13 @@ export {
   type SectionPart,
   type Solid,
 } from './model.ts';
+export {
+  buildSectionPlate,
+  PLATE_CORNER_RADIUS_MM,
+  plateOutline,
+  type SectionPlateGeometry,
+  sectionPlateGeometry,
+} from './plate.ts';
 export { type Plane, type SplitParts, sectionPlane, splitByPlane } from './section.ts';
 export { cosSinDeg } from './shapes/angle.ts';
 export {

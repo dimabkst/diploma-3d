@@ -224,7 +224,13 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
                 </Button>
               </div>
             {:else if field.type === 'toggle'}
-              <Checkbox id={field.key} label={field.label} bind:checked={choices[field.key]} />
+              <Checkbox
+                id={field.key}
+                label={field.label}
+                bind:checked={choices[field.key]}
+                disabled={field.disabled}
+                describedBy={field.describedBy}
+              />
             {:else if field.type === 'tilt'}
               <SegmentedControl
                 legend="Спосіб задання"

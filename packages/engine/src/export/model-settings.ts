@@ -1,7 +1,7 @@
 import type { Connector, PhysicalScale, Shape } from '@diploma-3d/schema';
 import enginePackage from '../../package.json' with { type: 'json' };
 import type { DovetailPlan } from '../connectors/dovetail.ts';
-import type { RoundConnectorPlan } from '../connectors/round.ts';
+import { dowelLength, plugHeight, type RoundConnectorPlan } from '../connectors/round.ts';
 import { type TwistPlan, twistTrialDimensions } from '../connectors/twist.ts';
 import { GeometryError } from '../errors.ts';
 import type { GeneratedModel } from '../model.ts';
@@ -142,6 +142,9 @@ function bodyDimensions(shape: Shape, scale: PhysicalScale) {
 const dovetailConnector = (plan: DovetailPlan) => ({
   conventions: {
     clearanceMm: 'the gap between each pair of mating surfaces, measured normal to them; not a total of both sides',
+    ...(plan.interfaces === undefined
+      ? {}
+      : { placement: 'a tongue of these dimensions on each face of the section plate, its groove in the part beyond' }),
   },
   dimensions: {
     tongueHeightMm: plan.height,
@@ -163,7 +166,9 @@ const roundConnector = (plan: RoundConnectorPlan) => ({
       offsetFromCentreMm: site.along,
       chamferMm: site.chamfer,
     })),
-    ...(plan.type === 'plug' ? { plugHeightMm: plan.insertion } : { dowelLengthMm: 2 * plan.insertion }),
+    ...(plan.type === 'plug' ? { plugHeightMm: plugHeight(plan) } : { dowelLengthMm: dowelLength(plan) }),
+    // Through a section plate a plug stands its thickness higher and a dowel is that much longer than the engagement.
+    ...(plan.plateThickness === undefined ? {} : { engagementMm: plan.insertion }),
     holeDepthMm: plan.holeDepth,
   },
 });
@@ -195,11 +200,23 @@ function connectorSettings(model: GeneratedModel) {
   return { settings, ...resolved };
 }
 
+/** A section plate's outline as built; its thickness and margin are among the section's settings. */
+function plateDimensions(model: GeneratedModel) {
+  const plate = model.section?.plate;
+  if (plate === undefined) return undefined;
+  return {
+    conventions: { outlineLengthMm: 'along the cut frame’s u, the dovetail’s sliding direction: +Y for a cone' },
+    outlineLengthMm: plate.outline.u.max - plate.outline.u.min,
+    outlineWidthMm: plate.outline.v.max - plate.outline.v.min,
+    cornerRadiusMm: plate.cornerRadius,
+  };
+}
+
 /** What a file of pins or a trial holds apart from the model whose settings it records: the parts actually exported. */
 function exportedParts(model: GeneratedModel, kind: ExportKind) {
   const plan = model.section?.connector;
   if (kind === 'pins' && plan !== undefined && plan.type !== 'dovetail' && plan.type !== 'twist') {
-    return { pins: plan.sites.map((site) => ({ nominalSizeMm: site.pinDiameter, lengthMm: 2 * plan.insertion })) };
+    return { pins: plan.sites.map((site) => ({ nominalSizeMm: site.pinDiameter, lengthMm: dowelLength(plan) })) };
   }
   if (kind === 'connector-trial' && plan?.type === 'twist') {
     const { outerRadius, maleBaseHeight, femaleHeight } = twistTrialDimensions(plan.layout);
@@ -222,6 +239,7 @@ function exportedParts(model: GeneratedModel, kind: ExportKind) {
 export function modelSettingsDocument(model: GeneratedModel, kind: ExportKind, input: ModelSettingsInput = {}) {
   const { shape, scale, section } = model.spec;
   const connector = connectorSettings(model);
+  const plate = plateDimensions(model);
   const { connector: _connector, ...cut } = section ?? {};
   const parts = exportedParts(model, kind);
   return {
@@ -234,6 +252,7 @@ export function modelSettingsDocument(model: GeneratedModel, kind: ExportKind, i
       longestDimensionMm: scale.longestDimensionMm,
       bodyDimensions: bodyDimensions(shape, scale),
       ...(section === undefined ? {} : { section: cut }),
+      ...(plate === undefined ? {} : { sectionPlate: plate }),
       ...(connector === undefined ? {} : { connector }),
     },
     ...(parts === undefined ? {} : { exportedParts: parts }),

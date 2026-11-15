@@ -39,6 +39,8 @@ export interface PreviewObject {
   readonly displayOffset?: Vec3;
   /** A turn about a line, also of the node only, applied before `displayOffset`; the mesh keeps the exported positions. */
   readonly displayTurn?: { readonly angleDeg: number; readonly axis: Vec3; readonly pivot: Vec3 };
+  /** `plate`: a section plate, all of it in a neutral colour of its own, as it belongs to neither part of the solid. */
+  readonly appearance?: 'plate';
 }
 
 export const GLB_MEDIA_TYPE = 'model/gltf-binary';
@@ -54,6 +56,8 @@ const SURFACE_COLOR = [0.2, 0.27, 0.4, 1] as const;
 const EDGE_COLOR = [0.9, 0.92, 0.95, 1] as const;
 // A warm tone that no lit side face takes, so that cut faces stand out from the solid's own faces.
 const CUT_COLOR = [0.85, 0.42, 0.08, 1] as const;
+// A mid neutral grey, apart from both the bluish solid and the orange cut faces, for a section plate; lighter, it washes out.
+const PLATE_COLOR = [0.3, 0.3, 0.29, 1] as const;
 
 // On a smoothly shaded solid, edges between faces meeting at a smaller angle are tessellation edges of a curved surface.
 // Smooth shading blends exactly these faces, so outlined edges such as a cylinder's rims stay sharp.
@@ -111,6 +115,16 @@ export async function createPreviewGlb(objects: readonly PreviewObject[]): Promi
     return cutMaterial;
   };
 
+  let plateMaterial: Material | undefined;
+  const plateMaterialOnce = () => {
+    plateMaterial ??= document
+      .createMaterial('plate')
+      .setBaseColorFactor([...PLATE_COLOR])
+      .setMetallicFactor(0)
+      .setRoughnessFactor(0.75);
+    return plateMaterial;
+  };
+
   for (const object of objects) {
     assertValidSolidMesh(object.mesh);
     const smooth = object.smoothShading ?? false;
@@ -127,7 +141,7 @@ export async function createPreviewGlb(objects: readonly PreviewObject[]): Promi
           .setMode(TRIANGLES)
           .setAttribute('POSITION', document.createAccessor().setType('VEC3').setArray(selected.positions).setBuffer(buffer))
           .setAttribute('NORMAL', document.createAccessor().setType('VEC3').setArray(selected.normals).setBuffer(buffer))
-          .setMaterial(cut ? cutMaterialOnce() : surfaceMaterial),
+          .setMaterial(object.appearance === 'plate' ? plateMaterialOnce() : cut ? cutMaterialOnce() : surfaceMaterial),
       );
     }
 
