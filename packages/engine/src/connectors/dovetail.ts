@@ -274,12 +274,12 @@ function wallsOf(
 }
 
 /**
- * The walls of one part's groove beside a section plate: those of a cone's parallel cut at the plate's face, in the
- * interface's own frame, towards that interface's stop. The tongue's root lies in the plate, which is solid across its whole
+ * The walls of one part's groove beside a section plate: those of the cone's cut at the plate's face, in the interface's own
+ * frame, towards that interface's stop. The tongue's root lies in the plate, which is solid across its whole
  * thickness, so no part keeps material under it.
  */
 function plateInterfaceWalls(
-  section: ConeParallelSection,
+  section: ConeParallelSection | ConeVerticalSection | ConeObliqueSection,
   part: 'lower' | 'upper',
   dimensions: DovetailDimensions,
 ): DovetailIssue[] {
@@ -503,8 +503,10 @@ export function dovetailDimensions(
 }
 
 /** Whether the cut is horizontal, so that its slide axis has no upper and lower end; its two sides are then named by u. */
-export const isHorizontalCut = ({ type }: SolidSection): boolean =>
-  type === 'parallel-to-bases' || type === 'cone-parallel' || type === 'ball-horizontal' || type === 'cone-plate';
+export const isHorizontalCut = (section: SolidSection): boolean => {
+  const type = section.type === 'cone-plate' ? section.baseType : section.type;
+  return type === 'parallel-to-bases' || type === 'cone-parallel' || type === 'ball-horizontal';
+};
 
 const VERTICAL: Vec3 = [0, 0, 1];
 

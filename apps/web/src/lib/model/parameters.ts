@@ -852,7 +852,7 @@ export function plateConnectorFallback(kind: ShapeKind, state: ParameterState): 
   const keys = sectionKeys[kind];
   const plate = keys === undefined || !('position' in keys) ? undefined : (keys as PlanarSectionKeys).plate;
   if (keys === undefined || plate === undefined || !state.choices[plate.toggle]) return undefined;
-  if (activeSection(kind, state.choices) !== 'parallel-to-bases' || state.choices[keys.connector] !== 'twist') return undefined;
+  if (activeSection(kind, state.choices) === undefined || state.choices[keys.connector] !== 'twist') return undefined;
   return { ...state, choices: { ...state.choices, [keys.connector]: 'none' } };
 }
 
@@ -860,7 +860,7 @@ export function plateConnectorFallback(kind: ShapeKind, state: ParameterState): 
 export function plateChosen(kind: ShapeKind, choices: ParameterChoices): boolean {
   const keys = sectionKeys[kind];
   const plate = keys === undefined || !('position' in keys) ? undefined : (keys as PlanarSectionKeys).plate;
-  return plate !== undefined && choices[plate.toggle] && activeSection(kind, choices) === 'parallel-to-bases';
+  return plate !== undefined && choices[plate.toggle] && activeSection(kind, choices) !== undefined;
 }
 
 /** Why the twist connector is not offered here, for a choice made before the solid or the cut changed. */
@@ -1170,13 +1170,7 @@ function sectionChecks(
 ): SectionCheck | undefined {
   const keys = sectionKeys[kind];
   if (keys === undefined || (shape.kind !== 'cylinder' && shape.kind !== 'cone' && shape.kind !== 'ball')) return undefined;
-  if (section.type === 'parallel-to-bases') {
-    const plate = (keys as PlanarSectionKeys).plate;
-    if (section.plate === undefined || plate === undefined || shape.kind !== 'cone') {
-      return connectorChecks(keys, shape as RoundShape, longestDimensionMm, section, edits);
-    }
-    return plateChecks(keys, plate, shape as ConeShape, longestDimensionMm, section, edits);
-  }
+  if (section.type === 'parallel-to-bases') return connectorChecks(keys, shape as RoundShape, longestDimensionMm, section, edits);
   const solid = shape as RoundShape;
   const scale = { longestDimensionMm };
   if (section.type === 'horizontal')
@@ -1221,43 +1215,62 @@ export const PLATE_UNAVAILABLE_MESSAGE =
   'Січна пластина тут не вміщується: навіть найтонша залишила б одну з частин тоншою за 1,2 мм. Пересуньте переріз ' +
   'ближче до середини, збільште найбільший габарит або вимкніть пластину.';
 
-/** Whether any section plate fits a cone's parallel cut at this position. */
-export function plateFits(shape: ConeShape, longestDimensionMm: number, positionPercent: number): boolean {
-  const { min, max } = conePlateThicknessRange(shape, { longestDimensionMm }, positionPercent);
-  return min <= max + CONSTRAINT_ROUNDOFF_MM;
-}
+/** The same for a cut with no position along the height to move: its offset or angles change it instead. */
+export const PLATE_UNAVAILABLE_ELSEWHERE_MESSAGE =
+  'Січна пластина тут не вміщується: навіть найтонша залишила б одну з частин тоншою за 1,2 мм уздовж нормалі до ' +
+  'перерізу. Змініть переріз, збільште найбільший габарит або вимкніть пластину.';
+
+/** The section plate's fields of a solid that offers one. */
+const plateKeysOf = (keys: SectionKeys) => ('position' in keys ? (keys as PlanarSectionKeys).plate : undefined);
+
+/** The section as it is without a plate. */
+const withoutPlate = (section: Section): Section => {
+  if (!('plate' in section)) return section;
+  const { plate: _plate, ...plane } = section;
+  return plane as Section;
+};
 
 /**
- * A section plate's thicknesses that leave both parts their thickness, and only then the connector's checks, which already
- * read the plate: each part's face lies half of it from the plane. Nothing is moved to make the plate fit, and the plate is
- * never left out silently: a thickness beyond the range, or a cut where none fits, is the thickness field's error.
+ * A cone's section plate on any of its cuts, and the connector's checks, which already read the plate: each part's face lies
+ * half of it from the plane, along the plane's normal. The thicknesses that leave both parts their thickness are a range of
+ * every valid cone cut, also while the plate is off, so that the switch says when none fits. Nothing is moved to make the
+ * plate fit, and it is never left out silently: a thickness beyond the range, or a cut where none fits, is the thickness
+ * field's error. Other solids go straight to the connector's checks.
  */
-function plateChecks(
+function connectorChecks(
   keys: SectionKeys,
-  plate: NonNullable<PlanarSectionKeys['plate']>,
-  shape: ConeShape,
+  shape: SectionedShape,
   longestDimensionMm: number,
-  section: Extract<Section, { type: 'parallel-to-bases' }>,
+  section: Section,
   edits: ConnectorEdits | undefined,
-): SectionCheck {
-  const range = conePlateThicknessRange(shape, { longestDimensionMm }, section.positionPercent);
+): SectionCheck | undefined {
+  const plate = plateKeysOf(keys);
+  if (plate === undefined || shape.kind !== 'cone') return jointChecks(keys, shape, longestDimensionMm, section, edits);
+  const plane = cutOfSection(withoutPlate(section));
+  const range = conePlateThicknessRange(shape, { longestDimensionMm }, plane as Exclude<typeof plane, { plate: unknown }>);
   const fits = range.min <= range.max + CONSTRAINT_ROUNDOFF_MM;
-  const ranges: SectionRanges = { [plate.thickness]: fits ? range : null, [plate.margin]: SECTION_PLATE_MARGIN_LIMITS };
-  if (!fits) return { errors: { [plate.thickness]: PLATE_UNAVAILABLE_MESSAGE }, ranges };
-  const thickness = section.plate?.thicknessMm ?? range.min;
-  if (thickness > range.max + CONSTRAINT_ROUNDOFF_MM) {
+  const ranges: SectionRanges = { [plate.thickness]: fits ? range : null };
+  const chosen = 'plate' in section ? section.plate : undefined;
+  const withRanges = (joint: SectionCheck | undefined): SectionCheck =>
+    joint === undefined ? { errors: {}, ranges } : { ...joint, ranges: { ...ranges, ...joint.ranges } };
+  if (chosen === undefined) return withRanges(jointChecks(keys, shape, longestDimensionMm, section, edits));
+  ranges[plate.margin] = SECTION_PLATE_MARGIN_LIMITS;
+  const parallel = section.type === 'parallel-to-bases';
+  if (!fits) {
+    return { errors: { [plate.thickness]: parallel ? PLATE_UNAVAILABLE_MESSAGE : PLATE_UNAVAILABLE_ELSEWHERE_MESSAGE }, ranges };
+  }
+  if (chosen.thicknessMm > range.max + CONSTRAINT_ROUNDOFF_MM) {
     const shown = physicalRange(range, PLATE_THICKNESS_INCREMENT_MM) ?? { ...range, increment: PLATE_THICKNESS_INCREMENT_MM };
     return {
       errors: {
         [plate.thickness]:
-          `За цього положення перерізу допустимо від ${formatMillimetres(shown.min)} мм до ${formatMillimetres(shown.max)} мм: ` +
-          'кожна частина має лишатися не тоншою за 1,2 мм.',
+          `За цього ${parallel ? 'положення перерізу' : 'перерізу'} допустимо від ${formatMillimetres(shown.min)} мм до ` +
+          `${formatMillimetres(shown.max)} мм: кожна частина має лишатися не тоншою за 1,2 мм.`,
       },
       ranges,
     };
   }
-  const connector = connectorChecks(keys, shape, longestDimensionMm, section, edits);
-  return connector === undefined ? { errors: {}, ranges } : { ...connector, ranges: { ...ranges, ...connector.ranges } };
+  return withRanges(jointChecks(keys, shape, longestDimensionMm, section, edits));
 }
 
 /** The steps of the plate's fields: its thickness by 0,2 mm, its margin by 1 mm. */
@@ -1354,7 +1367,7 @@ const APEX_START_INCREMENT_DEG = 5;
  * a plug, is explained at the cut's own field. All of it holds for the dimensions a round connector actually gets, see
  * `resolveRound`.
  */
-function connectorChecks(
+function jointChecks(
   keys: SectionKeys,
   shape: SectionedShape,
   longestDimensionMm: number,
@@ -1369,6 +1382,7 @@ function connectorChecks(
   const feasibility = cachedFeasibility(shape, longestDimensionMm, section);
   if (feasibility === undefined) return undefined;
   const { dovetail, round } = keys;
+  // Beside a plate on another cut the parts keep their numbers, which the cut's own words give.
   const wording: CutWording =
     shape.kind === 'cone' && section.type === 'parallel-to-bases'
       ? section.plate === undefined
@@ -1584,8 +1598,22 @@ const millimetres = (value: number) => `${formatDecimal(Math.max(0, Math.floor(v
  * A groove's problem beside a section plate, which concerns one part: the plate carries both tongues, and each part's face
  * lies half the plate's thickness from the cut, so a thinner plate helps where the cone narrows above it.
  */
-function plateDovetailIssueMessage(issue: DovetailIssue & { readonly part: 'lower' | 'upper' }, shortfall: string): string {
-  const where = issue.part === 'upper' ? 'у верхній частині' : 'у нижній частині';
+function plateDovetailIssueMessage(
+  issue: DovetailIssue & { readonly part: 'lower' | 'upper' },
+  shortfall: string,
+  cut: CutWording,
+): string {
+  const where = partInMessage(issue.part, cut);
+  if (cut !== 'cone-plate') {
+    const what = { 'groove-wall-thin': 'Стінка біля паза', 'stop-thin': 'За упором паза', 'backing-thin': 'За пазом' }[
+      issue.code as 'groove-wall-thin'
+    ];
+    const verb = issue.code === 'groove-wall-thin' ? '—' : 'лишається';
+    return (
+      `${what ?? 'Паз'} ${where} ${verb} ${shortfall}. Зменште висоту чи довжину виступу, товщину пластини або ` +
+      `${changePlane(cut)}.`
+    );
+  }
   const towards = issue.part === 'upper' ? ', опустіть переріз або зменште товщину пластини' : ' або підніміть переріз';
   switch (issue.code) {
     case 'groove-wall-thin':
@@ -1602,7 +1630,7 @@ function plateDovetailIssueMessage(issue: DovetailIssue & { readonly part: 'lowe
 /** What falls short, by how much, and what to change; in Ukrainian for the interface. */
 export function dovetailIssueMessage(issue: DovetailIssue, cut: CutWording = 'parallel-to-bases'): string {
   const shortfall = `${millimetres(issue.valueMm)}, потрібно щонайменше ${millimetres(issue.minimumMm)}`;
-  if (issue.part !== undefined) return plateDovetailIssueMessage({ ...issue, part: issue.part }, shortfall);
+  if (issue.part !== undefined) return plateDovetailIssueMessage({ ...issue, part: issue.part }, shortfall, cut);
   switch (issue.code) {
     case 'tongue-too-low':
       return `Виступ заввишки ${shortfall}. Збільште висоту виступу.`;
@@ -1908,13 +1936,13 @@ function resolveSection(
   // one a point on the axis and two angles, a plane through an apex those angles alone.
   const planar = 'position' in keys ? (keys as PlanarSectionKeys) : undefined;
   const plate = planar?.plate !== undefined && choices[planar.plate.toggle] ? planar.plate : undefined;
+  const plateFields: IndependentKey[] = plate === undefined ? [] : [plate.thickness, plate.margin];
   const cutFields: Readonly<Record<SectionType, readonly IndependentKey[]>> = {
-    'parallel-to-bases':
-      planar === undefined ? [] : [planar.position, ...(plate === undefined ? [] : [plate.thickness, plate.margin])],
-    vertical: [keys.offset],
+    'parallel-to-bases': planar === undefined ? [] : [planar.position, ...plateFields],
+    vertical: [keys.offset, ...plateFields],
     horizontal: [keys.offset],
-    oblique: planar === undefined ? [] : Object.values(planar.oblique),
-    'oblique-apex': Object.values(coneApexKeys),
+    oblique: planar === undefined ? [] : [...Object.values(planar.oblique), ...plateFields],
+    'oblique-apex': [...Object.values(coneApexKeys), ...plateFields],
   };
   const cutKeys = cutFields[type];
   const { values, errors } = validateFields([...cutKeys, ...fields], texts, exact);
@@ -1976,19 +2004,17 @@ function resolveSection(
                 upperClearanceMm: read(round.dowelUpperClearance),
               }
             : undefined;
-  const joining = connector === undefined ? {} : { connector };
+  const joining = {
+    ...(plate === undefined ? {} : { plate: { thicknessMm: read(plate.thickness), marginMm: read(plate.margin) } }),
+    ...(connector === undefined ? {} : { connector }),
+  };
   const sectionOf = (): Section => {
     switch (type) {
       case 'vertical':
       case 'horizontal':
         return { type, offsetPercent: read(keys.offset), ...joining };
       case 'parallel-to-bases':
-        return {
-          type,
-          positionPercent: read(planarKeysOf(keys).position),
-          ...(plate === undefined ? {} : { plate: { thicknessMm: read(plate.thickness), marginMm: read(plate.margin) } }),
-          ...joining,
-        };
+        return { type, positionPercent: read(planarKeysOf(keys).position), ...joining };
       case 'oblique': {
         const { position, inclination, direction } = planarKeysOf(keys).oblique;
         return {
@@ -2381,10 +2407,10 @@ function inactiveSectionKeys(kind: ShapeKind, choices: ParameterChoices): (keyof
     plate === undefined ? [] : [plate.toggle, ...(choices[plate.toggle] ? [plate.thickness, plate.margin] : [])];
   const cutFields: Readonly<Record<SectionType, readonly (keyof ParameterChoices | ParameterKey)[]>> = {
     'parallel-to-bases': planar === undefined ? [] : [planar.position, ...plateFields],
-    vertical: [keys.offset],
+    vertical: [keys.offset, ...plateFields],
     horizontal: [keys.offset],
-    oblique: [...obliqueFields, 'coneObliqueThrough'],
-    'oblique-apex': [...apexFields, 'coneObliqueThrough'],
+    oblique: [...obliqueFields, 'coneObliqueThrough', ...plateFields],
+    'oblique-apex': [...apexFields, 'coneObliqueThrough', ...plateFields],
   };
   const active = new Set<string>(section === undefined ? [] : cutFields[section]);
   const allPlateFields = plate === undefined ? [] : [plate.toggle, plate.thickness, plate.margin];

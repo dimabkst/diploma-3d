@@ -12,6 +12,7 @@ import {
   type ParameterState,
   type ParameterTexts,
   PLATE_TWIST_NOTICE,
+  PLATE_UNAVAILABLE_ELSEWHERE_MESSAGE,
   PLATE_UNAVAILABLE_MESSAGE,
   plateConnectorFallback,
   resetShapeParameters,
@@ -78,8 +79,12 @@ describe('the section plate of a cone', () => {
       { key: 'conePlateMarginMm', label: 'Виступ за межі фігури, мм', range: { min: 3, max: 30, increment: 1 } },
     ]);
     expect(group.help?.text).toContain('Січна пластина — окрема пласка деталь');
-    // Another cut, or no cut, carries no plate, though the switch keeps its state.
-    expect(request({}, { conePlate: true, coneSection: 'vertical' }).spec?.section).not.toHaveProperty('plate');
+    // Every cut of the cone carries it while the switch is on; without a cut there is none.
+    expect(request({}, { conePlate: true, coneSection: 'vertical' }).spec?.section).toMatchObject({
+      type: 'vertical',
+      plate: { thicknessMm: 1.6, marginMm: 10 },
+    });
+    expect(request({}, { conePlate: true, coneSection: 'none' }).spec?.section).toBeUndefined();
   });
 
   it('holds typed values to the same bounds as the sliders, narrowed by the cone', () => {
@@ -243,5 +248,73 @@ describe('the download of a plate', () => {
     expect(json.sourceModel.section.plate).toEqual({ thicknessMm: 2, marginMm: 8 });
     expect(artifacts.model.solids.map((solid) => solid.part)).toEqual(['lower', 'upper', 'plate']);
     expect(artifacts.printFile.fileName).toBe('cone-parallel-section-plate.3mf');
+  });
+});
+
+describe('the plate on every cut of the cone', () => {
+  const plated = { conePlate: true } as const;
+  const modes = [
+    ['vertical', { coneSection: 'vertical' }, 'type: vertical'],
+    ['oblique', { coneSection: 'oblique' }, 'type: oblique'],
+    ['through the apex', { coneSection: 'oblique', coneObliqueThrough: 'apex' }, 'type: oblique-apex'],
+  ] as const;
+
+  it.each(modes)('a %s cut offers the same switch and fields after its own, and carries the plate', (_, chosen) => {
+    const result = request({ coneApexInclinationDeg: '75' }, { ...chosen, ...plated, coneConnector: 'dowel' });
+    expect(result.errors).toEqual({});
+    expect(result.spec?.section).toMatchObject({ plate: { thicknessMm: 1.6, marginMm: 10 }, connector: { type: 'dowel' } });
+    const group = cutGroup({ coneApexInclinationDeg: '75' }, { ...chosen, ...plated });
+    const keys = group.fields.map((field) => field.key);
+    expect(keys.slice(-4)).toEqual(['conePartsSeparated', 'conePlate', 'conePlateThicknessMm', 'conePlateMarginMm']);
+    expect(group.status).toEqual({ text: 'з пластиною', highlighted: true });
+    expect(group.help?.text).toContain('товщина вимірюється перпендикулярно до площини');
+    // Its parts keep their numbers in the connector's fields and help.
+    const connector = connectorGroup({ coneApexInclinationDeg: '75' }, { ...chosen, ...plated, coneConnector: 'plug' });
+    expect(connector.fields).toContainEqual(
+      expect.objectContaining({ text: expect.stringMatching(/^Над частиною 1 виступ має/) }),
+    );
+    expect(connector.help?.text).toContain('Виступ друкується разом із частиною 1');
+  });
+
+  it('switching between cuts keeps the plate, its settings and the connector, and fits the connector to each', () => {
+    const stored = { conePlateThicknessMm: '2,4', conePlateMarginMm: '14', coneApexInclinationDeg: '75' };
+    const results = [{ coneSection: 'parallel-to-bases' }, ...modes.map(([, chosen]) => chosen)].map((chosen) =>
+      request(stored, { ...chosen, ...plated, coneConnector: 'dowel' } as Partial<ParameterChoices>),
+    );
+    for (const result of results) {
+      expect(result.errors).toEqual({});
+      expect(result.spec?.section).toMatchObject({ plate: { thicknessMm: 2.4, marginMm: 14 }, connector: { type: 'dowel' } });
+    }
+    // Each cut resolves the connector's dimensions against its own assembly.
+    expect(new Set(results.map((result) => result.values.coneRoundDepth)).size).toBeGreaterThan(1);
+  });
+
+  it('the thickness follows each part’s reach along the normal, and the switch is off where none fits', () => {
+    // r = 10 mm and H = 20 mm: a vertical plane at 70 % of r leaves part 2 about 3 mm deep.
+    const small = { printSizeMm: '20', coneSectionOffsetPercent: '70' };
+    const vertical = request({ ...small, conePlateThicknessMm: '4' }, { coneSection: 'vertical', ...plated });
+    const range = vertical.sectionRanges?.conePlateThicknessMm;
+    expect(range?.max).toBeLessThan(4);
+    expect(vertical.errors.conePlateThicknessMm).toMatch(/^За цього перерізу допустимо від 1,2 мм до /);
+    expect(vertical.spec).toBeUndefined();
+    // At 10 mm (r = 5 mm) a vertical plane at 75 % of r, within its own limit of 76 %, leaves part 2 too little for any plate.
+    const tiny = { printSizeMm: '10', coneSectionOffsetPercent: '75' };
+    expect(request(tiny, { coneSection: 'vertical' }).errors).toEqual({});
+    const off = cutGroup(tiny, { coneSection: 'vertical' });
+    expect(off.fields.find((field) => field.key === 'conePlate')).toMatchObject({ disabled: true });
+    expect(off.fields).toContainEqual(expect.objectContaining({ text: PLATE_UNAVAILABLE_ELSEWHERE_MESSAGE }));
+    expect(request(tiny, { coneSection: 'vertical', ...plated }).errors.conePlateThicknessMm).toBe(
+      PLATE_UNAVAILABLE_ELSEWHERE_MESSAGE,
+    );
+  });
+
+  it('records the cut with its plate in the download', async () => {
+    const result = request({ coneSectionOffsetPercent: '20' }, { coneSection: 'vertical', ...plated, coneConnector: 'dovetail' });
+    if (result.spec === undefined) throw new Error('expected a model');
+    const artifacts = await buildModelArtifacts(kernel, result.spec, result.settingsInput);
+    const json = JSON.parse(readThreeMfPart(artifacts.printFile.bytes, MODEL_SETTINGS_PATH) as string);
+    expect(json.sourceModel.section).toEqual({ type: 'vertical', offsetPercent: 20, plate: { thicknessMm: 1.6, marginMm: 10 } });
+    expect(artifacts.model.solids.map((solid) => solid.part)).toEqual(['part-1', 'part-2', 'plate']);
+    expect(artifacts.printFile.fileName).toBe('cone-vertical-section-plate.3mf');
   });
 });

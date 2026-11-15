@@ -205,7 +205,10 @@ function plateDimensions(model: GeneratedModel) {
   const plate = model.section?.plate;
   if (plate === undefined) return undefined;
   return {
-    conventions: { outlineLengthMm: 'along the cut frame’s u, the dovetail’s sliding direction: +Y for a cone' },
+    conventions: {
+      outlineLengthMm:
+        'along the cut frame’s u, the dovetail’s sliding axis: +Y on a cut parallel to the base, +Z on a vertical one, uphill on an oblique one',
+    },
     outlineLengthMm: plate.outline.u.max - plate.outline.u.min,
     outlineWidthMm: plate.outline.v.max - plate.outline.v.min,
     cornerRadiusMm: plate.cornerRadius,

@@ -224,8 +224,9 @@ const scaled = (a: Vec3, factor: number): Vec3 => [a[0] * factor, a[1] * factor,
 const withAppearance = (solid: Solid): PreviewObject => (solid.part === 'plate' ? { ...solid, appearance: 'plate' } : solid);
 
 /**
- * The parts of a section plate's assembly moved apart along the plane's normal for display, whatever the connector: the
- * plate stays, the lower part with any dowels in it moves down and the upper part up, each by `gap` beyond what still
+ * The parts of a section plate's assembly moved apart along the plane's normal for display, whatever the connector and the
+ * cut: the plate stays, the part on the normal's negative side with any dowels in it moves along −n and the other one along
+ * +n, each by `gap` beyond what still
  * reaches across, measured on the meshes: plugs or dowels through the plate, tongues on its faces. Not an assembly path:
  * a dovetail's parts slide off parallel to the plate.
  */
@@ -244,7 +245,10 @@ function explodedAroundPlate(model: GeneratedModel, shown: readonly PreviewObjec
     }
     return { min, max };
   };
-  const [lower, upper, plateHeights, dowels] = (['lower', 'upper', 'plate', 'dowel'] as const).map(heights) as [
+  // The parts by the side of the plane they lie on: below or above a horizontal plate, numbered beside another one.
+  const negative = model.solids.some((solid) => solid.part === 'part-1') ? 'part-1' : 'lower';
+  const positive = negative === 'part-1' ? 'part-2' : 'upper';
+  const [lower, upper, plateHeights, dowels] = ([negative, positive, 'plate', 'dowel'] as const).map(heights) as [
     ReturnType<typeof heights>,
     ReturnType<typeof heights>,
     ReturnType<typeof heights>,
@@ -255,8 +259,8 @@ function explodedAroundPlate(model: GeneratedModel, shown: readonly PreviewObjec
   const up = Math.max(0, half - upper.min) + Math.max(0, plateHeights.max - half) + gap;
   return shown.map((object, index) => {
     const part = model.solids[index]?.part;
-    if (part === 'lower' || part === 'dowel') return { ...object, displayOffset: scaled(plane.normal, -down) };
-    if (part === 'upper') return { ...object, displayOffset: scaled(plane.normal, up) };
+    if (part === negative || part === 'dowel') return { ...object, displayOffset: scaled(plane.normal, -down) };
+    if (part === positive) return { ...object, displayOffset: scaled(plane.normal, up) };
     return object;
   });
 }
@@ -273,12 +277,25 @@ function explodedAroundPlate(model: GeneratedModel, shown: readonly PreviewObjec
  * their own resting face, see `restOnFlatFace`; the parts of a plane through a cone's apex both keep some of the base,
  * and stay upright on it. Removable dowels stand upright on an end face.
  *
- * A section plate lies flat on a face, also with plugs or dowels through it. With a dovetail it carries a tongue on each
- * face, so it stands on its edge instead, the tongues' sliding direction u upwards: each tongue then rises as a prism with
- * its lead-in at the top and nothing overhangs, but the plate is a thin wall on a narrow edge and needs a brim at least;
- * nothing here claims it prints without supports.
+ * A section plate lies flat on a face, also with plugs or dowels through it, whichever way its cut runs. With a dovetail it
+ * carries a tongue on each face, so it stands on its edge instead, the tongues' sliding direction u upwards: each tongue then
+ * rises as a prism along its own axis and nothing of it overhangs, but the plate is a thin wall on a narrow edge and needs a
+ * brim at least; nothing here claims it prints without supports.
  */
-function printOrientation({ solids, section, spec }: GeneratedModel): readonly (Solid & ThreeMfObject)[] {
+function printOrientation(model: GeneratedModel): readonly (Solid & ThreeMfObject)[] {
+  const { section } = model;
+  const plate = section?.plate;
+  const connector = section?.connector;
+  if (plate === undefined) return partsOrientation(model);
+  // On its edge, the tongues' sliding direction upwards, or flat on a face, its normal along the cut's.
+  const up = connector?.type === 'dovetail' ? connector.frame.u : plate.frame.n;
+  return partsOrientation(model).map((solid) =>
+    solid.part === 'plate' ? { ...solid, mesh: rotateOntoZ(solid.mesh, up) } : solid,
+  );
+}
+
+/** The parts' and dowels' print orientation; a section plate, as built, is turned by `printOrientation`. */
+function partsOrientation({ solids, section, spec }: GeneratedModel): readonly (Solid & ThreeMfObject)[] {
   if (solids.length === 1) return solids;
   const connector = section?.connector;
   if (spec.shape.kind === 'ball') {
@@ -293,9 +310,11 @@ function printOrientation({ solids, section, spec }: GeneratedModel): readonly (
     const isCone = spec.shape.kind === 'cone';
     const baseHeight = roundDimensionsMm(spec.shape, spec.scale).height;
     const { n, v } = obliqueAxes(spec.section.inclinationDeg, spec.section.directionDeg);
-    // Whichever part keeps the base or the apex, a plug or a tongue on the cut face could not rest on the bed.
-    const protrudes = connector?.type === 'plug' || connector?.type === 'dovetail';
+    // Whichever part keeps the base or the apex, a plug or a tongue on the cut face could not rest on the bed; beside a
+    // section plate the tongues are the plate's, and the parts only have grooves.
+    const protrudes = connector?.type === 'plug' || (connector?.type === 'dovetail' && section?.plate === undefined);
     return solids.map((solid) => {
+      if (solid.part === 'plate') return solid;
       if (solid.part === 'dowel') return { ...solid, mesh: rotateOntoZ(solid.mesh, n) };
       const outward = solid.part === 'part-1' ? n : scaled(n, -1);
       const cutFaceFree = isCone ? !(protrudes && solid.part === 'part-1') : connector === undefined;
@@ -314,7 +333,6 @@ function printOrientation({ solids, section, spec }: GeneratedModel): readonly (
   const { u, n } = connector.frame;
   return solids.map((solid) => {
     if (solid.part === 'dowel') return { ...solid, mesh: rotateOntoZ(solid.mesh, n) };
-    if (solid.part === 'plate') return connector.type === 'dovetail' ? { ...solid, mesh: rotateOntoZ(solid.mesh, u) } : solid;
     // A twist connector's recess is made for its mouth on the bed: the ledges are the first layers, the roof slopes at 45°.
     const turnsOver = solid.part === 'upper' && spec.shape.kind !== 'cone' && connector.type !== 'twist';
     return turnsOver ? { ...solid, mesh: rotateHalfTurn(solid.mesh, u) } : solid;

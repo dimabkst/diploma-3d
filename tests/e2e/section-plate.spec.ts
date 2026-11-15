@@ -73,3 +73,31 @@ test('a thickness beyond what the cone leaves is the field’s error and blocks 
   expect((await download(page, partsButton(page))).objects).toEqual(['cone-lower-part', 'cone-upper-part']);
   expect(errors).toEqual([]);
 });
+
+test('a vertical cut keeps its plate and connector when the cut changes, and downloads both numbered parts with it', async ({
+  page,
+}) => {
+  const errors = collectErrors(page);
+  await coneWithParallelCut(page);
+  await page.getByRole('checkbox', { name: 'Січна пластина' }).check();
+  await entry(page, 'Товщина пластини, мм').fill('2');
+  await entry(page, 'Тип кріплення').selectOption({ label: 'Ластівчин хвіст' });
+  await entry(page, 'Тип перерізу').selectOption({ label: 'Вертикальний' });
+  // The plate, its thickness and the connector stay; the groove may open at the bottom, away from the apex.
+  await expect(page.getByRole('checkbox', { name: 'Січна пластина' })).toBeChecked();
+  await expect(entry(page, 'Товщина пластини, мм')).toHaveValue('2');
+  await expect(entry(page, 'Тип кріплення')).toHaveValue('dovetail');
+  await entry(page, 'Вхід у паз').selectOption({ label: 'Знизу' });
+  await expect(previewViewport(page)).toHaveAttribute('data-preview-status', 'loaded', { timeout: 30_000 });
+  await expect(partsButton(page)).toBeEnabled({ timeout: 30_000 });
+  const parts = await download(page, partsButton(page));
+  expect(parts.fileName).toBe('cone-vertical-section-plate.3mf');
+  expect(parts.objects).toEqual(['cone-part-1', 'cone-part-2', 'cone-section-plate']);
+  expect(parts.json.sourceModel.section).toEqual({
+    type: 'vertical',
+    offsetPercent: 0,
+    plate: { thicknessMm: 2, marginMm: 10 },
+  });
+  expect(parts.json.sourceModel.connector.settings).toMatchObject({ type: 'dovetail', entrance: 'opposite' });
+  expect(errors).toEqual([]);
+});

@@ -186,8 +186,9 @@ export const SECTION_PLATE_MARGIN_LIMITS = { min: 3, max: 30 } as const;
 export const DEFAULT_SECTION_PLATE = { thicknessMm: 1.6, marginMm: 10 } as const;
 
 /**
- * A separate flat plate that shows the section: the slab of thickness T centred on the cutting plane is removed from the
- * solid and printed as a third object, whose outline is the slab's own extent within the plane grown by the margin. The
+ * A separate flat plate that shows the section: the slab of thickness T, measured along the plane's normal and centred on the
+ * plane, is removed from the solid and printed as a third object, whose outline is the slab's own extent within the plane
+ * grown by the margin. The
  * parts keep their scale and position, so the assembly is the original solid with the plate's margin around the cut.
  */
 export const sectionPlateSchema = z.strictObject({
@@ -201,7 +202,7 @@ export type SectionPlate = z.infer<typeof sectionPlateSchema>;
 export const parallelSectionSchema = z.strictObject({
   type: z.literal('parallel-to-bases'),
   positionPercent: sectionPositionSchema,
-  /** Only a cone offers one so far, and not with a twist connector; the engine refuses the rest. */
+  /** A section plate on this plane; only a cone offers one so far, not with a twist connector, which the engine checks. */
   plate: sectionPlateSchema.optional(),
   /** Joins the parts; without one, both cut faces stay flat. */
   connector: connectorSchema.optional(),
@@ -216,6 +217,8 @@ export type ParallelSection = z.infer<typeof parallelSectionSchema>;
 export const verticalSectionSchema = z.strictObject({
   type: z.literal('vertical'),
   offsetPercent: sectionOffsetSchema.default(DEFAULT_SECTION_OFFSET_PERCENT),
+  /** A section plate on this plane; only a cone offers one so far, which the engine checks. */
+  plate: sectionPlateSchema.optional(),
   /** Joins the parts; without one, both cut faces stay flat. */
   connector: connectorSchema.optional(),
 });
@@ -239,6 +242,8 @@ export const obliqueSectionSchema = z.strictObject({
     .min(OBLIQUE_DIRECTION_LIMITS.min)
     .max(OBLIQUE_DIRECTION_LIMITS.max)
     .default(DEFAULT_OBLIQUE_SECTION.directionDeg),
+  /** A section plate on this plane; only a cone offers one so far, which the engine checks. */
+  plate: sectionPlateSchema.optional(),
   /** Joins the parts; without one, both cut faces stay flat. */
   connector: connectorSchema.optional(),
 });
@@ -254,6 +259,8 @@ export const apexSectionSchema = z.strictObject({
   type: z.literal('oblique-apex'),
   inclinationDeg: z.number().gt(0).max(APEX_INCLINATION_MAX_DEG),
   directionDeg: z.number().min(OBLIQUE_DIRECTION_LIMITS.min).max(OBLIQUE_DIRECTION_LIMITS.max),
+  /** A section plate on this plane; only a cone offers one so far, which the engine checks. */
+  plate: sectionPlateSchema.optional(),
   /** Joins the parts; without one, both cut faces stay flat. */
   connector: connectorSchema.optional(),
 });

@@ -32,6 +32,7 @@ import {
   obliqueCylinderSection,
   obliqueSplitReach,
   type PlateCut,
+  planeOfPlateCut,
   satisfies,
   sectionOffsetMm,
   verticalCylinderSection,
@@ -305,18 +306,18 @@ function assertConnected(solid: Manifold): void {
 }
 
 /**
- * A section plate's geometry, refused before anything is built where it does not apply: only a cone's cut parallel to its
- * base offers one so far, not with a twist connector, and its thickness must leave both parts.
+ * A section plate's geometry, refused before anything is built where it does not apply: only a cone's cuts offer one so far,
+ * not with a twist connector, and its thickness, along the plane's normal, must leave both parts.
  */
 function planPlate({ shape, scale, section }: ModelSpec): SectionPlateGeometry | undefined {
-  if (section?.type !== 'parallel-to-bases' || section.plate === undefined) return undefined;
+  if (section === undefined || !('plate' in section) || section.plate === undefined) return undefined;
   if (shape.kind !== 'cone') throw new InvalidModelSpecError(['section.plate: only a cone offers a section plate so far.']);
   if (section.connector?.type === 'twist') {
     throw new InvalidModelSpecError(['section.plate: a twist connector cannot join the parts through a section plate.']);
   }
   const cut = cutOfSection(section) as PlateCut;
   if (!isPlateCut(cut) || !isPlateThicknessFeasible(shape, scale, cut)) {
-    const { max } = conePlateThicknessRange(shape, scale, section.positionPercent);
+    const { max } = conePlateThicknessRange(shape, scale, planeOfPlateCut(cut));
     throw new InvalidModelSpecError([
       `section.plate.thicknessMm: ${section.plate.thicknessMm} mm leaves a part thinner than allowed; at most ${max} mm fits here.`,
     ]);

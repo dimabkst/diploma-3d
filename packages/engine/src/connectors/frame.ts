@@ -170,22 +170,31 @@ export interface FrameExtent {
   readonly max: number;
 }
 
+/** A cone's cut without a plate, read off its faces. */
+export type ConeCutSection = ConeParallelSection | ConeVerticalSection | ConeObliqueSection;
+
 /**
- * A cone's cut parallel to its base with a section plate of thickness T between the parts. Frame, contour, faces and span are
- * those of the middle plane, where the cut lies; the lower part ends T/2 below it and the upper part starts T/2 above it, so
- * that everything stays where the solid had it. The interfaces are the actual sections at the plate's two faces, with their
- * own sizes and, in an oblique cone, their own centroids: each has n pointing from the plate into its part and the middle
- * frame's u, so that v turns over with n below the plate and a dovetail's entrance lies on the same side of both.
+ * Any cut of a cone with a section plate of thickness T between the parts, measured along the cut's normal n. Frame, contour,
+ * faces and span are those of the middle plane, the cut as chosen; with s(x) = n·(x − P), part 1 or the lower part keeps
+ * s ≤ −T/2 and part 2 or the upper part s ≥ T/2, so that everything stays where the solid had it. The interfaces are the actual
+ * sections at the plate's two faces, with their own sizes and centroids, not the middle one moved: a plane through the apex
+ * cuts a triangle, its faces do not. Each interface has n pointing from the plate into its part and the middle frame's u, so
+ * that v turns over with n on the negative side and a dovetail's entrance lies at the same end of both; it keeps the type of
+ * the cut it was read off, which says where that entrance is.
  */
 export interface ConePlateSection extends FacetedSection {
   readonly type: 'cone-plate';
+  /** The cut the plate lies on. */
+  readonly baseType: ConeCutSection['type'];
   /** T/2: how far each part's face lies from the middle plane along n. */
   readonly halfThickness: number;
   readonly margin: number;
-  readonly interfaces: { readonly lower: ConeParallelSection; readonly upper: ConeParallelSection };
+  /** On the negative side of the middle plane (`lower`) and on the positive one (`upper`), whatever the cut. */
+  readonly interfaces: { readonly lower: ConeCutSection; readonly upper: ConeCutSection };
   /**
-   * How far the cone between the plate's faces reaches along the middle frame's u and v from its origin: of both faces'
-   * contours, as the cone is convex and has no corner between them; the plate's outline is this grown by the margin.
+   * How far the cone between the plate's faces reaches along the middle frame's u and v from its origin: the convex hull of
+   * both faces' contours and of the solid's corners between them, such as an apex on the middle plane; the plate's outline is
+   * this grown by the margin.
    */
   readonly slab: { readonly u: FrameExtent; readonly v: FrameExtent };
 }
@@ -221,16 +230,28 @@ export interface ApexCut {
   readonly directionDeg: number;
 }
 
-/** A cut parallel to the base at this percentage of the height that removes a section plate centred on the plane. */
-export interface PlateCut {
-  readonly positionPercent: number;
+/** A plane without a plate: parallel to the base at this percentage of the height, or another plane. */
+export type PlaneCut = number | OffsetCut | ObliqueCut | ApexCut;
+
+/**
+ * A cut that removes a section plate centred on its plane: the plane's own fields, a parallel cut's position among them, and
+ * the plate's.
+ */
+export type PlateCut = (OffsetCut | ObliqueCut | ApexCut | { readonly positionPercent: number }) & {
   readonly plate: { readonly thicknessMm: number; readonly marginMm: number };
-}
+};
 
 /** Where a round solid is cut: a plane parallel to the base at this percentage of the height, or another plane. */
-export type SolidCut = number | OffsetCut | ObliqueCut | ApexCut | PlateCut;
+export type SolidCut = PlaneCut | PlateCut;
 
 export const isPlateCut = (cut: SolidCut): cut is PlateCut => typeof cut !== 'number' && 'plate' in cut;
+
+/** The plane a plate lies on, as it is given without one. */
+export function planeOfPlateCut(cut: PlateCut): PlaneCut {
+  const { plate: _plate, ...plane } = cut;
+  if ('offsetPercent' in plane || 'inclinationDeg' in plane) return plane as OffsetCut | ObliqueCut | ApexCut;
+  return plane.positionPercent;
+}
 
 const normalised = (a: Vec3): Vec3 => {
   const norm = length(a);
@@ -597,52 +618,56 @@ export function coneSection(shape: ConeShape, scale: PhysicalScale, positionPerc
   };
 }
 
+/** The cone's own section for a plane without a plate. */
+function coneCut(shape: ConeShape, scale: PhysicalScale, cut: PlaneCut): ConeCutSection {
+  if (typeof cut === 'number') return coneSection(shape, scale, cut);
+  return 'offsetPercent' in cut ? coneVerticalSection(shape, scale, cut.offsetPercent) : coneObliqueSection(shape, scale, cut);
+}
+
 /**
- * The plate thicknesses that leave both parts of a cone at this position at least one minimum wall thick along the height,
- * within the schema's window: min > max when none does. An application restriction like the cut's 10–90 %, which excludes
- * slivers; it does not make every part printable.
+ * The plate thicknesses that leave each part of a cone at least one minimum wall beyond its face, measured along the cut's
+ * normal from how far the part reaches from the middle plane, within the schema's window: min > max when none does. An
+ * application restriction like the cut's own limits, which excludes slivers; it does not make every part printable. For a
+ * cut parallel to the base each part's reach is its height.
  */
-export function conePlateThicknessRange(shape: ConeShape, scale: PhysicalScale, positionPercent: number): FrameExtent {
-  const { height } = roundDimensionsMm(shape, scale);
-  const below = (positionPercent / 100) * height;
-  const room = 2 * (Math.min(below, height - below) - CONNECTOR_MIN_WALL_MM);
+export function conePlateThicknessRange(shape: ConeShape, scale: PhysicalScale, cut: PlaneCut): FrameExtent {
+  const { reach } = coneCut(shape, scale, cut);
+  const room = 2 * (Math.min(reach.negative, reach.positive) - CONNECTOR_MIN_WALL_MM);
   return { min: SECTION_PLATE_THICKNESS_LIMITS.min, max: Math.min(SECTION_PLATE_THICKNESS_LIMITS.max, room) };
 }
 
 /** Whether the plate's thickness leaves both parts their thickness, up to the plans' roundoff. */
 export function isPlateThicknessFeasible(shape: ConeShape, scale: PhysicalScale, cut: PlateCut): boolean {
-  const range = conePlateThicknessRange(shape, scale, cut.positionPercent);
+  const range = conePlateThicknessRange(shape, scale, planeOfPlateCut(cut));
   const thickness = cut.plate.thicknessMm;
   return thickness >= range.min - CONSTRAINT_ROUNDOFF_MM && thickness <= range.max + CONSTRAINT_ROUNDOFF_MM;
 }
 
-/** A cone's parallel cut with a section plate; see `ConePlateSection`. The thickness must leave both parts, as checked first. */
+/** A cone's cut with a section plate; see `ConePlateSection`. The thickness must leave both parts, as checked first. */
 export function conePlateSection(shape: ConeShape, scale: PhysicalScale, cut: PlateCut): ConePlateSection {
   if (!isPlateThicknessFeasible(shape, scale, cut)) {
     throw new GeometryError(`A plate ${cut.plate.thicknessMm} mm thick leaves a part of the cone too thin.`);
   }
   const dimensions = roundDimensionsMm(shape, scale);
   const polyhedron = conePolyhedron(dimensions);
-  const n: Vec3 = [0, 0, 1];
-  const u: Vec3 = [0, 1, 0];
-  const v = cross(u, n);
-  const down: Vec3 = [0, 0, -1];
-  const middle = (cut.positionPercent / 100) * dimensions.height;
+  const centre = coneCut(shape, scale, planeOfPlateCut(cut));
+  const { n, u, v } = centre.frame;
+  // + 0 turns −0 into 0, as for a normal written out.
+  const flipped: Vec3 = [-n[0] + 0, -n[1] + 0, -n[2] + 0];
+  const middle = centre.plane.offset;
   const halfThickness = cut.plate.thicknessMm / 2;
-  const centre = facetedSection(polyhedron, { n, u, v }, middle, dimensions.radius);
+  // Each interface is its cut read off the plate's face: its identity, its geometry from that face. n·x = −(m − T/2) is the
+  // plane n·x = m − T/2 with its normal into part 1 or the lower part.
   const interfaces = {
-    // n·x = −(z_mid − T/2) is the plane z = z_mid − T/2 with its normal into the lower part.
     lower: {
-      ...facetedSection(polyhedron, { n: down, u, v: cross(u, down) }, -(middle - halfThickness), dimensions.radius),
-      type: 'cone-parallel' as const,
+      ...centre,
+      ...facetedSection(polyhedron, { n: flipped, u, v: cross(u, flipped) }, -(middle - halfThickness), dimensions.radius),
     },
-    upper: {
-      ...facetedSection(polyhedron, { n, u, v }, middle + halfThickness, dimensions.radius),
-      type: 'cone-parallel' as const,
-    },
+    upper: { ...centre, ...facetedSection(polyhedron, { n, u, v }, middle + halfThickness, dimensions.radius) },
   };
   const { origin } = centre.frame;
-  const corners = [...interfaces.lower.contour, ...interfaces.upper.contour].map(
+  const between = polyhedron.vertices.filter((vertex) => Math.abs(dot(n, vertex) - middle) <= halfThickness);
+  const corners = [...interfaces.lower.contour, ...interfaces.upper.contour, ...between].map(
     (point): Vec3 => [point[0] - origin[0], point[1] - origin[1], point[2] - origin[2]],
   );
   const extent = (axis: Vec3): FrameExtent => {
@@ -652,6 +677,7 @@ export function conePlateSection(shape: ConeShape, scale: PhysicalScale, cut: Pl
   return {
     ...centre,
     type: 'cone-plate',
+    baseType: centre.type,
     halfThickness,
     margin: cut.plate.marginMm,
     interfaces,
@@ -856,6 +882,14 @@ export const facesOfPart = ({ faces }: FacetedSection, part: 'negative' | 'posit
 
 /** Where the specification's section cuts the cylinder. */
 export const cutOfSection = (section: Section): SolidCut => {
+  const plane = planeCutOf(section);
+  if (!('plate' in section) || section.plate === undefined) return plane;
+  const plate = { thicknessMm: section.plate.thicknessMm, marginMm: section.plate.marginMm };
+  return typeof plane === 'number' ? { positionPercent: plane, plate } : { ...plane, plate };
+};
+
+/** Where the specification's section cuts the cylinder, whether or not a plate lies on it. */
+const planeCutOf = (section: Section): PlaneCut => {
   switch (section.type) {
     case 'vertical':
     case 'horizontal':
@@ -869,12 +903,7 @@ export const cutOfSection = (section: Section): SolidCut => {
     case 'oblique-apex':
       return { inclinationDeg: section.inclinationDeg, directionDeg: section.directionDeg };
     case 'parallel-to-bases':
-      return section.plate === undefined
-        ? section.positionPercent
-        : {
-            positionPercent: section.positionPercent,
-            plate: { thicknessMm: section.plate.thicknessMm, marginMm: section.plate.marginMm },
-          };
+      return section.positionPercent;
   }
 };
 
