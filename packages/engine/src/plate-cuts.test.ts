@@ -520,8 +520,9 @@ describe('preview, files and settings of a plate on the other cuts', () => {
     const standing = readThreeMf(withTongues.printFile.bytes).model.objects.find(
       (object) => object.name === 'cone-section-plate',
     ) as { mesh: TriangleMesh };
-    const outline = (withTongues.model.section as ModelSection).plate?.outline as NonNullable<ModelSection['plate']>['outline'];
-    expect(measureMesh(standing.mesh).size[2]).toBeCloseTo(outline.u.max - outline.u.min, 3);
+    // As built: the base cuts the outline's lower margin off.
+    const extent = (withTongues.model.section as ModelSection).plate?.extent as NonNullable<ModelSection['plate']>['extent'];
+    expect(measureMesh(standing.mesh).size[2]).toBeCloseTo(extent.u.max - extent.u.min, 3);
   });
 
   it('the settings record the cut with its plate, and the plate’s outline as built', async () => {

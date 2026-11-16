@@ -151,6 +151,7 @@ const panel = $derived(
         sectionRanges,
         connectorStatus: request?.connectorStatus,
         connectorNotice: plateNotice,
+        plateClipped: request?.plateClipped,
       }),
 );
 const invalidFields = $derived(

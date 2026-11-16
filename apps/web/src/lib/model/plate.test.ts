@@ -11,6 +11,7 @@ import {
   type ParameterChoices,
   type ParameterState,
   type ParameterTexts,
+  PLATE_CLIPPED_NOTE,
   PLATE_TWIST_NOTICE,
   PLATE_UNAVAILABLE_ELSEWHERE_MESSAGE,
   PLATE_UNAVAILABLE_MESSAGE,
@@ -316,5 +317,25 @@ describe('the plate on every cut of the cone', () => {
     expect(json.sourceModel.section).toEqual({ type: 'vertical', offsetPercent: 20, plate: { thicknessMm: 1.6, marginMm: 10 } });
     expect(artifacts.model.solids.map((solid) => solid.part)).toEqual(['part-1', 'part-2', 'plate']);
     expect(artifacts.printFile.fileName).toBe('cone-vertical-section-plate.3mf');
+  });
+});
+
+describe('a plate cut off at the figure’s base', () => {
+  it('says so where the base cuts it, and keeps the margin as given', () => {
+    const vertical = request({}, { coneSection: 'vertical', conePlate: true });
+    expect(vertical.plateClipped).toBe(true);
+    expect(vertical.spec?.section).toMatchObject({ plate: { thicknessMm: 1.6, marginMm: 10 } });
+    const { values, sectionRanges } = vertical;
+    const panel = shapePanel('cone', choices({ coneSection: 'vertical', conePlate: true }), {
+      values,
+      sectionRanges,
+      plateClipped: vertical.plateClipped,
+    });
+    const group = panel.type === 'parameters' ? panel.sections.find((part) => part.title === 'Переріз') : undefined;
+    const keys = group?.fields.map((field) => field.key) ?? [];
+    expect(keys.slice(-2)).toEqual(['conePlateMarginMm', 'cone-plate-clipped']);
+    expect(group?.fields.at(-1)).toMatchObject({ type: 'note', text: PLATE_CLIPPED_NOTE });
+    // A plate parallel to the base never reaches it.
+    expect(request({ coneSectionPercent: '10', conePlateMarginMm: '30' }, { conePlate: true }).plateClipped).toBe(false);
   });
 });

@@ -227,7 +227,10 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
       if (joined.plate !== undefined) plate = checked(joined.plate);
       dowels = joined.pins.map(checked);
     }
-    if (plate !== undefined) assertConnected(plate);
+    if (plate !== undefined) {
+      assertConnected(plate);
+      assertStanding(plate, solid, plateGeometry as SectionPlateGeometry);
+    }
     return {
       type: spec.section.type,
       plane,
@@ -296,6 +299,21 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
 function plateSolid(name: string, mesh: TriangleMesh): Solid {
   assertValidSolidMesh(mesh);
   return { name, mesh, measurements: measureMesh(mesh), smoothShading: true, part: 'plate' };
+}
+
+/**
+ * The finished plate, with every connector feature on it, stays on or above the plane the uncut solid stands on, which is
+ * the one its geometry was cut by: the solid's own lower base, before any cut or connector.
+ */
+function assertStanding(plate: Manifold, solid: Manifold, geometry: SectionPlateGeometry): void {
+  const level = solid.boundingBox().min[2];
+  if (Math.abs(level - geometry.standingLevel) > CONSTRAINT_ROUNDOFF_MM) {
+    throw new GeometryError(`The plate was cut at ${geometry.standingLevel} mm, not at the solid's base at ${level} mm.`);
+  }
+  const lowest = plate.boundingBox().min[2];
+  if (lowest < level - CONSTRAINT_ROUNDOFF_MM) {
+    throw new GeometryError(`The section plate reaches ${level - lowest} mm below the solid's base.`);
+  }
 }
 
 function assertConnected(solid: Manifold): void {

@@ -209,8 +209,9 @@ function plateDimensions(model: GeneratedModel) {
       outlineLengthMm:
         'along the cut frame’s u, the dovetail’s sliding axis: +Y on a cut parallel to the base, +Z on a vertical one, uphill on an oblique one',
     },
-    outlineLengthMm: plate.outline.u.max - plate.outline.u.min,
-    outlineWidthMm: plate.outline.v.max - plate.outline.v.min,
+    // As built: where the solid's base cuts the plate off, smaller than the outline grown by the margin.
+    outlineLengthMm: plate.extent.u.max - plate.extent.u.min,
+    outlineWidthMm: plate.extent.v.max - plate.extent.v.min,
     cornerRadiusMm: plate.cornerRadius,
   };
 }

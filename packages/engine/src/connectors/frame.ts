@@ -197,6 +197,8 @@ export interface ConePlateSection extends FacetedSection {
    * this grown by the margin.
    */
   readonly slab: { readonly u: FrameExtent; readonly v: FrameExtent };
+  /** The height of the plane the uncut solid stands on, its lower base: no part of the plate may reach below it. */
+  readonly standingLevel: number;
 }
 
 export type SolidSection =
@@ -682,6 +684,7 @@ export function conePlateSection(shape: ConeShape, scale: PhysicalScale, cut: Pl
     margin: cut.plate.marginMm,
     interfaces,
     slab: { u: extent(u), v: extent(v) },
+    standingLevel: Math.min(...polyhedron.vertices.map((vertex) => vertex[2])),
   };
 }
 

@@ -55,6 +55,7 @@ import {
   type ParameterChoices,
   type ParameterKey,
   type ParameterValues,
+  PLATE_CLIPPED_NOTE,
   PLATE_MARGIN_INCREMENT_MM,
   PLATE_THICKNESS_INCREMENT_MM,
   PLATE_UNAVAILABLE_ELSEWHERE_MESSAGE,
@@ -413,6 +414,8 @@ export type PanelContext = {
   readonly connectorStatus?: ConnectorStatus | undefined;
   /** The feasible millimetres of the connector's fields, see `SectionRanges`. */
   readonly sectionRanges?: SectionRanges | undefined;
+  /** Whether the solid's lower base cuts the chosen section plate off. */
+  readonly plateClipped?: boolean | undefined;
   /** A connector replaced by the page, such as on turning a section plate on, said once among the connector's fields. */
   readonly connectorNotice?: string | undefined;
 };
@@ -1465,6 +1468,9 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
                   suffix: '',
                   range: plateMarginRange,
                 },
+                ...(context.plateClipped === true
+                  ? [{ type: 'note' as const, key: `${kind}-plate-clipped`, text: PLATE_CLIPPED_NOTE }]
+                  : []),
               ]
             : []),
         ];

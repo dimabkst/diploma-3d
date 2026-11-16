@@ -6,6 +6,7 @@ import {
   type ConnectorFeasibility,
   coneApexAngleBounds,
   coneApexChord,
+  conePlateSection,
   conePlateThicknessRange,
   cutOfSection,
   type DovetailIssue,
@@ -22,6 +23,7 @@ import {
   obliqueSplitReach,
   type ParameterBounds,
   type ParameterFeasibility,
+  type PlateCut,
   ROUND_CONNECTOR_PROPORTIONS,
   type RoundConnectorIssue,
   type RoundConnectorOutcome,
@@ -31,6 +33,7 @@ import {
   type SectionedShape,
   satisfies,
   sectionOffsetMm,
+  sectionPlateGeometry,
   type TwistIssue,
   type TwistOutcome,
   twistFeasibility,
@@ -331,6 +334,8 @@ export type ModelRequest = {
   readonly sectionRanges?: SectionRanges | undefined;
   /** Present for a round connector on a usable cut, when the request knows the edits. */
   readonly connectorStatus?: ConnectorStatus | undefined;
+  /** Whether the lower base of the solid cuts the chosen section plate off, which the panel then says. */
+  readonly plateClipped?: boolean | undefined;
 } & (
   | {
       readonly spec: ModelSpec;
@@ -827,7 +832,8 @@ export function resolveModelRequest(
     : checked?.resolved?.status;
   Object.assign(values, checked?.resolved?.values);
   if (Object.keys(errors).length > 0) {
-    return { values, errors, sectionRanges, connectorStatus, spec: undefined, key: undefined };
+    const plateClipped = checked?.plateClipped;
+    return { values, errors, sectionRanges, connectorStatus, plateClipped, spec: undefined, key: undefined };
   }
   const built = checked?.resolved?.section ?? section.section;
   const spec = modelSpecSchema.parse({
@@ -838,7 +844,8 @@ export function resolveModelRequest(
   // The plain cut shown for an unavailable connector is not the plain cut chosen without one: only the latter is for download.
   const key = `${JSON.stringify(spec)}${connectorStatus?.unavailable === undefined ? '' : ':connector-unavailable'}`;
   const settingsInput: ModelSettingsInput = inclinationInputOf(kind, values, options.tiltModes);
-  return { values, errors, sectionRanges, connectorStatus, spec, key, settingsInput };
+  const plateClipped = checked?.plateClipped;
+  return { values, errors, sectionRanges, connectorStatus, plateClipped, spec, key, settingsInput };
 }
 
 /** What a twist connector became when a section plate was turned on: no connector, said so rather than done silently. */
@@ -941,7 +948,12 @@ type RoundResolution = {
   readonly section: Section;
 };
 
-type SectionCheck = { errors: ParameterErrors; ranges: SectionRanges; resolved?: RoundResolution | undefined };
+type SectionCheck = {
+  errors: ParameterErrors;
+  ranges: SectionRanges;
+  resolved?: RoundResolution | undefined;
+  plateClipped?: boolean | undefined;
+};
 
 const roundOutcomeCache = new Map<string, RoundConnectorOutcome>();
 
@@ -1210,6 +1222,9 @@ function sectionChecks(
   );
 }
 
+/** Said where the solid's lower base cuts a section plate's margin off; its margin stays as given elsewhere. */
+export const PLATE_CLIPPED_NOTE = 'Знизу пластина обрізається по рівню основи фігури.';
+
 /** Why no section plate fits at this cut, briefly, and the ways on. */
 export const PLATE_UNAVAILABLE_MESSAGE =
   'Січна пластина тут не вміщується: навіть найтонша залишила б одну з частин тоншою за 1,2 мм. Пересуньте переріз ' +
@@ -1270,7 +1285,9 @@ function connectorChecks(
       ranges,
     };
   }
-  return withRanges(jointChecks(keys, shape, longestDimensionMm, section, edits));
+  const scale = { longestDimensionMm };
+  const geometry = sectionPlateGeometry(conePlateSection(shape, scale, cutOfSection(section) as PlateCut));
+  return { ...withRanges(jointChecks(keys, shape, longestDimensionMm, section, edits)), plateClipped: geometry.clippedAtBase };
 }
 
 /** The steps of the plate's fields: its thickness by 0,2 mm, its margin by 1 mm. */
