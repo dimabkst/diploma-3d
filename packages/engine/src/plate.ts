@@ -1,10 +1,10 @@
 import type { Vec2 as KernelVec2, Manifold } from 'manifold-3d';
 import {
   CONSTRAINT_ROUNDOFF_MM,
-  type ConePlateSection,
   type FrameExtent,
   frameMatrix,
   framePoint,
+  type PlateSection,
   type SectionFrame,
 } from './connectors/frame.ts';
 import type { GeometryKernel } from './kernel.ts';
@@ -42,7 +42,7 @@ export interface SectionPlateGeometry {
   readonly extent: { readonly u: FrameExtent; readonly v: FrameExtent };
 }
 
-export function sectionPlateGeometry(section: ConePlateSection): SectionPlateGeometry {
+export function sectionPlateGeometry(section: PlateSection): SectionPlateGeometry {
   const { margin, slab, standingLevel } = section;
   const grown = ({ min, max }: FrameExtent): FrameExtent => ({ min: min - margin, max: max + margin });
   const unclipped = {

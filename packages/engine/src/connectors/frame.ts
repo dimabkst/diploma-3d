@@ -182,24 +182,50 @@ export type ConeCutSection = ConeParallelSection | ConeVerticalSection | ConeObl
  * that v turns over with n on the negative side and a dovetail's entrance lies at the same end of both; it keeps the type of
  * the cut it was read off, which says where that entrance is.
  */
-export interface ConePlateSection extends FacetedSection {
+export interface ConePlateSection extends FacetedSection, PlateFields {
   readonly type: 'cone-plate';
   /** The cut the plate lies on. */
   readonly baseType: ConeCutSection['type'];
+  /** On the negative side of the middle plane (`lower`) and on the positive one (`upper`), whatever the cut. */
+  readonly interfaces: { readonly lower: ConeCutSection; readonly upper: ConeCutSection };
+}
+
+/** What every section plate adds to its cut, whatever the solid. */
+interface PlateFields {
   /** T/2: how far each part's face lies from the middle plane along n. */
   readonly halfThickness: number;
   readonly margin: number;
-  /** On the negative side of the middle plane (`lower`) and on the positive one (`upper`), whatever the cut. */
-  readonly interfaces: { readonly lower: ConeCutSection; readonly upper: ConeCutSection };
   /**
-   * How far the cone between the plate's faces reaches along the middle frame's u and v from its origin: the convex hull of
-   * both faces' contours and of the solid's corners between them, such as an apex on the middle plane; the plate's outline is
-   * this grown by the margin.
+   * How far the solid between the plate's faces reaches along the middle frame's u and v from its origin: the convex hull of
+   * both faces' contours and of the solid's corners between them, such as an apex on the middle plane or a ball's equator; the
+   * plate's outline is this grown by the margin.
    */
   readonly slab: { readonly u: FrameExtent; readonly v: FrameExtent };
-  /** The height of the plane the uncut solid stands on, its lower base: no part of the plate may reach below it. */
+  /** The height of the plane the uncut solid stands on, its lowest level: no part of the plate may reach below it. */
   readonly standingLevel: number;
 }
+
+/**
+ * A ball's horizontal cut with a section plate of thickness T, as a cone's: frame, contour and `offset` are those of the middle
+ * plane; the lower part keeps z ≤ m − T/2 and the upper part z ≥ m + T/2. The interfaces are the polyhedron's own sections at
+ * the plate's faces, of different radii wherever the cut is off the centre. The lower one has n = −Z, and with it its `offset`
+ * and its plane taken along that n, so that the walls, which depend on a point's distance from the centre alone, read it as
+ * any other ball section.
+ */
+export interface BallPlateSection extends Omit<BallHorizontalSection, 'type'>, PlateFields {
+  readonly type: 'ball-plate';
+  readonly baseType: 'ball-horizontal';
+  readonly interfaces: { readonly lower: BallHorizontalSection; readonly upper: BallHorizontalSection };
+}
+
+/** A cut with a section plate, of any solid that offers one. */
+export type PlateSection = ConePlateSection | BallPlateSection;
+
+export const isPlateSection = (section: SolidSection): section is PlateSection =>
+  section.type === 'cone-plate' || section.type === 'ball-plate';
+
+/** How far each part's face lies from the cut's plane: half a plate's thickness, or nothing without one. */
+export const faceGapOf = (section: SolidSection): number => (isPlateSection(section) ? section.halfThickness : 0);
 
 export type SolidSection =
   | BallHorizontalSection
@@ -209,7 +235,8 @@ export type SolidSection =
   | ConeParallelSection
   | ConeVerticalSection
   | ConeObliqueSection
-  | ConePlateSection;
+  | ConePlateSection
+  | BallPlateSection;
 
 /** Whether the section was read off the actual solid's faces. */
 export const isFaceted = (section: SolidSection): section is SolidSection & FacetedSection => 'faces' in section;
@@ -632,15 +659,32 @@ function coneCut(shape: ConeShape, scale: PhysicalScale, cut: PlaneCut): ConeCut
  * application restriction like the cut's own limits, which excludes slivers; it does not make every part printable. For a
  * cut parallel to the base each part's reach is its height.
  */
-export function conePlateThicknessRange(shape: ConeShape, scale: PhysicalScale, cut: PlaneCut): FrameExtent {
-  const { reach } = coneCut(shape, scale, cut);
+export function plateThicknessRange(shape: PlatedShape, scale: PhysicalScale, cut: PlaneCut): FrameExtent {
+  const reach = shape.kind === 'ball' ? ballReach(scale, cut) : coneCut(shape, scale, cut).reach;
   const room = 2 * (Math.min(reach.negative, reach.positive) - CONNECTOR_MIN_WALL_MM);
   return { min: SECTION_PLATE_THICKNESS_LIMITS.min, max: Math.min(SECTION_PLATE_THICKNESS_LIMITS.max, room) };
 }
 
+/** The same for a cone. */
+export const conePlateThicknessRange = (shape: ConeShape, scale: PhysicalScale, cut: PlaneCut): FrameExtent =>
+  plateThicknessRange(shape, scale, cut);
+
+/** The solids that offer a section plate. */
+export type PlatedShape = ConeShape | BallShape;
+
+/** How far each part of a ball reaches from a horizontal plane: to the polyhedron's poles, which lie on the sphere. */
+function ballReach(scale: PhysicalScale, cut: PlaneCut): { readonly negative: number; readonly positive: number } {
+  if (typeof cut === 'number' || !('offsetPercent' in cut)) throw new GeometryError('A ball offers only a horizontal cut.');
+  const radius = ballRadiusMm(scale);
+  const { vertices } = ballPolyhedron(radius);
+  const offset = sectionOffsetMm(cut.offsetPercent, radius);
+  const heights = vertices.map((vertex) => vertex[2]);
+  return { negative: offset - Math.min(...heights), positive: Math.max(...heights) - offset };
+}
+
 /** Whether the plate's thickness leaves both parts their thickness, up to the plans' roundoff. */
-export function isPlateThicknessFeasible(shape: ConeShape, scale: PhysicalScale, cut: PlateCut): boolean {
-  const range = conePlateThicknessRange(shape, scale, planeOfPlateCut(cut));
+export function isPlateThicknessFeasible(shape: PlatedShape, scale: PhysicalScale, cut: PlateCut): boolean {
+  const range = plateThicknessRange(shape, scale, planeOfPlateCut(cut));
   const thickness = cut.plate.thicknessMm;
   return thickness >= range.min - CONSTRAINT_ROUNDOFF_MM && thickness <= range.max + CONSTRAINT_ROUNDOFF_MM;
 }
@@ -667,15 +711,7 @@ export function conePlateSection(shape: ConeShape, scale: PhysicalScale, cut: Pl
     },
     upper: { ...centre, ...facetedSection(polyhedron, { n, u, v }, middle + halfThickness, dimensions.radius) },
   };
-  const { origin } = centre.frame;
   const between = polyhedron.vertices.filter((vertex) => Math.abs(dot(n, vertex) - middle) <= halfThickness);
-  const corners = [...interfaces.lower.contour, ...interfaces.upper.contour, ...between].map(
-    (point): Vec3 => [point[0] - origin[0], point[1] - origin[1], point[2] - origin[2]],
-  );
-  const extent = (axis: Vec3): FrameExtent => {
-    const along = corners.map((point) => dot(point, axis));
-    return { min: Math.min(...along), max: Math.max(...along) };
-  };
   return {
     ...centre,
     type: 'cone-plate',
@@ -683,8 +719,59 @@ export function conePlateSection(shape: ConeShape, scale: PhysicalScale, cut: Pl
     halfThickness,
     margin: cut.plate.marginMm,
     interfaces,
-    slab: { u: extent(u), v: extent(v) },
+    slab: slabExtent([...interfaces.lower.contour, ...interfaces.upper.contour, ...between], centre.frame),
     standingLevel: Math.min(...polyhedron.vertices.map((vertex) => vertex[2])),
+  };
+}
+
+/** The cut with a section plate of a solid that offers one; see `ConePlateSection` and `BallPlateSection`. */
+export function plateSection(shape: SectionedShape, scale: PhysicalScale, cut: PlateCut): PlateSection {
+  if (shape.kind === 'cone') return conePlateSection(shape, scale, cut);
+  if (shape.kind === 'ball') return ballPlateSection(scale, cut);
+  throw new GeometryError('Only a cone and a ball offer a section plate so far.');
+}
+
+/**
+ * The extent along the frame's u and v from its origin of the points, which hold the solid between the plate's faces: both
+ * faces' contours and the solid's corners between them.
+ */
+function slabExtent(points: readonly Vec3[], { origin, u, v }: SectionFrame): { u: FrameExtent; v: FrameExtent } {
+  const relative = points.map((point): Vec3 => [point[0] - origin[0], point[1] - origin[1], point[2] - origin[2]]);
+  const extent = (axis: Vec3): FrameExtent => {
+    const along = relative.map((point) => dot(point, axis));
+    return { min: Math.min(...along), max: Math.max(...along) };
+  };
+  return { u: extent(u), v: extent(v) };
+}
+
+/** A ball's horizontal cut with a section plate; see `BallPlateSection`. The thickness must leave both parts, as checked first. */
+export function ballPlateSection(scale: PhysicalScale, cut: PlateCut): BallPlateSection {
+  if (!isPlateThicknessFeasible({ kind: 'ball' }, scale, cut)) {
+    throw new GeometryError(`A plate ${cut.plate.thicknessMm} mm thick leaves a part of the ball too thin.`);
+  }
+  const plane = planeOfPlateCut(cut);
+  if (typeof plane === 'number' || !('offsetPercent' in plane)) throw new GeometryError('A ball offers only a horizontal cut.');
+  const radius = ballRadiusMm(scale);
+  const centre = ballCentreMm(scale);
+  const middle = ballSection(scale, plane.offsetPercent);
+  const halfThickness = cut.plate.thicknessMm / 2;
+  const interfaces = {
+    lower: ballSectionAt(scale, middle.offset - halfThickness, true),
+    upper: ballSectionAt(scale, middle.offset + halfThickness, false),
+  };
+  const corners = ballPolyhedron(radius)
+    .vertices.filter((vertex) => Math.abs(vertex[2] - middle.offset) <= halfThickness)
+    .map((vertex): Vec3 => [vertex[0] + centre[0], vertex[1] + centre[1], vertex[2] + centre[2]]);
+  const lowest = Math.min(...ballPolyhedron(radius).vertices.map((vertex) => vertex[2]));
+  return {
+    ...middle,
+    type: 'ball-plate',
+    baseType: 'ball-horizontal',
+    halfThickness,
+    margin: cut.plate.marginMm,
+    interfaces,
+    slab: slabExtent([...interfaces.lower.contour, ...interfaces.upper.contour, ...corners], middle.frame),
+    standingLevel: centre[2] + lowest,
   };
 }
 
@@ -787,12 +874,20 @@ export function coneApexAngleBounds(
  * the same. The frame is a parallel cut's: u is +Y, the groove's entrance at −u.
  */
 export function ballSection(scale: PhysicalScale, offsetPercent: number): BallHorizontalSection {
+  return ballSectionAt(scale, sectionOffsetMm(offsetPercent, ballRadiusMm(scale)), false);
+}
+
+/**
+ * A ball's section by the plane `height` above its centre. `downwards` turns n to −Z, u staying +Y, for the face below a
+ * section plate: `offset` and the plane are then taken along that n, −height and −(centre + height).
+ */
+function ballSectionAt(scale: PhysicalScale, height: number, downwards: boolean): BallHorizontalSection {
   const radius = ballRadiusMm(scale);
   const centre = ballCentreMm(scale);
-  const n: Vec3 = [0, 0, 1];
+  const n: Vec3 = downwards ? [0, 0, -1] : [0, 0, 1];
   const u: Vec3 = [0, 1, 0];
   const v = cross(u, n);
-  const offset = sectionOffsetMm(offsetPercent, radius);
+  const offset = downwards ? -height : height;
   const { vertices, edges } = ballPolyhedron(radius);
   const contour = planeContour(vertices, edges, { n, u, v }, offset).map(
     ([x, y, z]): Vec3 => [x + centre[0], y + centre[1], z + centre[2]],
@@ -808,7 +903,7 @@ export function ballSection(scale: PhysicalScale, offsetPercent: number): BallHo
     span: Math.max(...alongPlane) - Math.min(...alongPlane),
     depthExtent: 2 * radius,
     offset,
-    plane: { normal: n, offset: centre[2] + offset },
+    plane: { normal: n, offset: dot(n, centre) + offset },
     contour,
     area,
   };
@@ -824,32 +919,27 @@ export function ballOffsetLimitPercent(scale: PhysicalScale): number {
   return Math.min(BALL_OFFSET_LIMITS.max, Math.max(0, sectionOffsetPercent(radius - thinnest, radius)));
 }
 
+/** What a ball's walls are measured from: the sphere inside the polyhedron, and the plane's offset from its centre along n. */
+type BallWalls = Pick<BallHorizontalSection, 'inradius' | 'offset'>;
+
 /**
  * The wall around a circle of a hole in a ball, `normal` from the plane along n with its axis `along` from the centroid:
  * R − √((|along| + radius)² + (offset + normal)²), with R the sphere inside the polyhedron. Its farthest point from the
  * centre sets it, on any convex cavity one of its extreme circles.
  */
-export const ballDiscWall = (
-  { inradius, offset }: BallHorizontalSection,
-  along: number,
-  normal: number,
-  radius: number,
-): number => inradius - Math.hypot(Math.abs(along) + radius, offset + normal);
+export const ballDiscWall = ({ inradius, offset }: BallWalls, along: number, normal: number, radius: number): number =>
+  inradius - Math.hypot(Math.abs(along) + radius, offset + normal);
 
 /**
  * The wall around any ring of a cavity `normal` from the plane along n, whose farthest point lies `reach` from the vertical
  * through the centre within the ring's plane; `ballDiscWall` is its case of a circle.
  */
-export const ballInnerWall = ({ inradius, offset }: BallHorizontalSection, reach: number, normal: number): number =>
+export const ballInnerWall = ({ inradius, offset }: BallWalls, reach: number, normal: number): number =>
   inradius - Math.hypot(reach, offset + normal);
 
 /** The same for a point (along u, across v, along n) in the frame. */
-export const ballPointWall = (
-  { inradius, offset }: BallHorizontalSection,
-  along: number,
-  across: number,
-  normal: number,
-): number => inradius - Math.hypot(along, across, offset + normal);
+export const ballPointWall = ({ inradius, offset }: BallWalls, along: number, across: number, normal: number): number =>
+  inradius - Math.hypot(along, across, offset + normal);
 
 /**
  * The least distance each part must keep from the plane along the normal for a usable part, in millimetres: the rule of
@@ -915,10 +1005,7 @@ export type SectionedShape = RoundShape | BallShape;
 
 /** The geometry of the cut. */
 export function solidCut(shape: SectionedShape, scale: PhysicalScale, cut: SolidCut): SolidSection {
-  if (isPlateCut(cut)) {
-    if (shape.kind !== 'cone') throw new GeometryError('Only a cone offers a section plate so far.');
-    return conePlateSection(shape, scale, cut);
-  }
+  if (isPlateCut(cut)) return plateSection(shape, scale, cut);
   if (shape.kind === 'ball') {
     if (typeof cut === 'number' || !('offsetPercent' in cut)) throw new GeometryError('A ball offers only a horizontal cut.');
     return ballSection(scale, cut.offsetPercent);

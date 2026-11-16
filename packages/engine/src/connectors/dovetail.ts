@@ -19,6 +19,7 @@ import {
   framePoint,
   insideEnvelope,
   isFaceted,
+  isPlateSection,
   lateralWall,
   type ObliqueCylinderSection,
   type ParallelCylinderSection,
@@ -270,6 +271,8 @@ function wallsOf(
       return coneWalls(section, dimensions, groove, towardsStop);
     case 'cone-plate':
       return (['upper', 'lower'] as const).flatMap((part) => plateInterfaceWalls(section.interfaces[part], part, dimensions));
+    case 'ball-plate':
+      return (['upper', 'lower'] as const).flatMap((part) => plateInterfaceWalls(section.interfaces[part], part, dimensions));
   }
 }
 
@@ -279,13 +282,17 @@ function wallsOf(
  * thickness, so no part keeps material under it.
  */
 function plateInterfaceWalls(
-  section: ConeParallelSection | ConeVerticalSection | ConeObliqueSection,
+  section: ConeParallelSection | ConeVerticalSection | ConeObliqueSection | BallHorizontalSection,
   part: 'lower' | 'upper',
   dimensions: DovetailDimensions,
 ): DovetailIssue[] {
-  return coneWalls(section, dimensions, grooveExtent(dimensions), stopAlongSection(section, dimensions.entrance))
-    .filter(({ code }) => code !== 'base-thin')
-    .map((issue) => ({ ...issue, part }));
+  const groove = grooveExtent(dimensions);
+  const towardsStop = stopAlongSection(section, dimensions.entrance);
+  const walls =
+    section.type === 'ball-horizontal'
+      ? ballWalls(section, dimensions, groove, towardsStop)
+      : coneWalls(section, dimensions, groove, towardsStop);
+  return walls.filter(({ code }) => code !== 'base-thin').map((issue) => ({ ...issue, part }));
 }
 
 /**
@@ -504,7 +511,7 @@ export function dovetailDimensions(
 
 /** Whether the cut is horizontal, so that its slide axis has no upper and lower end; its two sides are then named by u. */
 export const isHorizontalCut = (section: SolidSection): boolean => {
-  const type = section.type === 'cone-plate' ? section.baseType : section.type;
+  const type = isPlateSection(section) ? section.baseType : section.type;
   return type === 'parallel-to-bases' || type === 'cone-parallel' || type === 'ball-horizontal';
 };
 
@@ -572,16 +579,15 @@ export function planDovetail(
   const exitOf = (grooved: SolidSection) =>
     grooveReach(grooved, dimensions) + tongueLength / 2 + clearance + DOVETAIL_EXIT_MARGIN_MM;
   // Both interfaces keep the middle plane's u, and with it the entrance's side, whichever way their n points.
-  const interfaces =
-    section.type === 'cone-plate'
-      ? (['lower', 'upper'] as const).map(
-          (part): DovetailInterface => ({
-            part,
-            frame: dovetailFrame(section.interfaces[part], dimensions.entrance),
-            exitDistance: exitOf(section.interfaces[part]),
-          }),
-        )
-      : undefined;
+  const interfaces = isPlateSection(section)
+    ? (['lower', 'upper'] as const).map(
+        (part): DovetailInterface => ({
+          part,
+          frame: dovetailFrame(section.interfaces[part], dimensions.entrance),
+          exitDistance: exitOf(section.interfaces[part]),
+        }),
+      )
+    : undefined;
   const upper = interfaces?.[1];
   return {
     type: 'dovetail',

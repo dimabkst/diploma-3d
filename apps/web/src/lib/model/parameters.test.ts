@@ -226,6 +226,8 @@ describe('resolveModelRequest', () => {
       coneDowelLowerClearanceMm: '0,4',
       coneDowelUpperClearanceMm: '0,5',
       ballSectionOffsetPercent: '0',
+      ballPlateThicknessMm: '1,6',
+      ballPlateMarginMm: '10',
       ballDovetailSize: '1',
       ballDovetailLengthPercent: '50',
       ballDovetailClearanceMm: '0,2',
@@ -279,6 +281,7 @@ describe('resolveModelRequest', () => {
       ballRoundCount: 1,
       ballRoundProfile: 'flatted-circle',
       ballPartsSeparated: true,
+      ballPlate: false,
     });
     expect(resolveModelRequest('cuboid', initialParameterTexts(), triangle).spec).toEqual({
       shape: { kind: 'cuboid', widthRatio: 1.5, heightRatio: 2 },
@@ -2957,7 +2960,11 @@ describe('a horizontal section of the ball', () => {
     expect(cut.help?.text).toContain(
       'Переріз кулі площиною — круг. За зміщення 0% площина проходить через центр і ділить кулю на дві півкулі. Додатне значення піднімає площину, від’ємне — опускає. Що далі площина від центра, то менший круг перерізу.',
     );
-    expect(cut.fields.at(-1)).toMatchObject({ type: 'toggle', key: 'ballPartsSeparated' });
+    // The section plate's switch follows the separation's, off until chosen.
+    expect(cut.fields.slice(-2)).toMatchObject([
+      { type: 'toggle', key: 'ballPartsSeparated' },
+      { type: 'toggle', key: 'ballPlate', label: 'Січна пластина' },
+    ]);
     const titles = groupsOf(choose('plug')).map(({ title }) => title);
     expect(titles).toEqual(['Переріз', 'Кріплення']);
   });

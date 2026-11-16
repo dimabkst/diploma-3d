@@ -271,6 +271,8 @@ export type ApexSection = z.infer<typeof apexSectionSchema>;
 export const horizontalSectionSchema = z.strictObject({
   type: z.literal('horizontal'),
   offsetPercent: z.number().min(BALL_OFFSET_LIMITS.min).max(BALL_OFFSET_LIMITS.max).default(DEFAULT_SECTION_OFFSET_PERCENT),
+  /** A section plate on this plane, centred on it. */
+  plate: sectionPlateSchema.optional(),
   /** Joins the parts; without one, both cut faces stay flat. */
   connector: connectorSchema.optional(),
 });

@@ -301,7 +301,8 @@ function partsOrientation({ solids, section, spec }: GeneratedModel): readonly (
   if (spec.shape.kind === 'ball') {
     // No base to stand on, and nothing is flattened to make one: each part rests on its cut face if that is free, so the
     // lower part turns over; with a plug or a tongue on it, it keeps its cut face up, on its curved side and on supports.
-    const protrudes = connector?.type === 'plug' || connector?.type === 'dovetail';
+    // Beside a section plate the tongues are the plate's, and the lower part has a groove only.
+    const protrudes = connector?.type === 'plug' || (connector?.type === 'dovetail' && section?.plate === undefined);
     return solids.map((solid) =>
       solid.part === 'lower' && !protrudes ? { ...solid, mesh: rotateHalfTurn(solid.mesh, [1, 0, 0]) } : solid,
     );

@@ -101,3 +101,27 @@ test('a vertical cut keeps its plate and connector when the cut changes, and dow
   expect(parts.json.sourceModel.connector.settings).toMatchObject({ type: 'dovetail', entrance: 'opposite' });
   expect(errors).toEqual([]);
 });
+
+test('a ball’s horizontal cut takes a plate with plugs, and downloads both parts with it', async ({ page }) => {
+  const errors = collectErrors(page);
+  await page.goto('/');
+  await shapeSelect(page).selectOption({ label: 'Куля' });
+  await openSection(page, 'Переріз');
+  await entry(page, 'Тип перерізу').selectOption({ label: 'Горизонтальний' });
+  await page.getByRole('checkbox', { name: 'Січна пластина' }).check();
+  await entry(page, 'Товщина пластини, мм').fill('2,4');
+  await entry(page, 'Тип кріплення').selectOption({ label: 'Виступ і отвір' });
+  await expect(previewViewport(page)).toHaveAttribute('data-preview-status', 'loaded', { timeout: 30_000 });
+  await expect(partsButton(page)).toBeEnabled({ timeout: 30_000 });
+  const parts = await download(page, partsButton(page));
+  expect(parts.fileName).toBe('ball-horizontal-section-plate.3mf');
+  expect(parts.objects).toEqual(['ball-lower-part', 'ball-upper-part', 'ball-section-plate']);
+  expect(parts.json.sourceModel.section).toEqual({
+    type: 'horizontal',
+    offsetPercent: 0,
+    plate: { thicknessMm: 2.4, marginMm: 10 },
+  });
+  const dimensions = parts.json.sourceModel.connector.dimensions;
+  expect(dimensions.plugHeightMm).toBeCloseTo(dimensions.engagementMm + 2.4, 9);
+  expect(errors).toEqual([]);
+});

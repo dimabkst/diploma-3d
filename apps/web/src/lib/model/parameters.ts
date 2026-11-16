@@ -6,8 +6,6 @@ import {
   type ConnectorFeasibility,
   coneApexAngleBounds,
   coneApexChord,
-  conePlateSection,
-  conePlateThicknessRange,
   cutOfSection,
   type DovetailIssue,
   defaultRoundConnector,
@@ -24,6 +22,8 @@ import {
   type ParameterBounds,
   type ParameterFeasibility,
   type PlateCut,
+  plateSection,
+  plateThicknessRange,
   ROUND_CONNECTOR_PROPORTIONS,
   type RoundConnectorIssue,
   type RoundConnectorOutcome,
@@ -214,6 +214,8 @@ export type ParameterKey =
   | 'coneDowelLowerClearanceMm'
   | 'coneDowelUpperClearanceMm'
   | 'ballSectionOffsetPercent'
+  | 'ballPlateThicknessMm'
+  | 'ballPlateMarginMm'
   | 'ballDovetailSize'
   | 'ballDovetailLengthPercent'
   | 'ballDovetailClearanceMm'
@@ -268,10 +270,11 @@ export type ParameterChoices = {
   ballRoundCount: 1 | 2;
   ballRoundProfile: ConnectorProfile;
   ballPartsSeparated: boolean;
+  ballPlate: boolean;
 };
 
 /** The switches among the choices. */
-export type ToggleKey = 'cylinderPartsSeparated' | 'conePartsSeparated' | 'conePlate' | 'ballPartsSeparated';
+export type ToggleKey = 'cylinderPartsSeparated' | 'conePartsSeparated' | 'conePlate' | 'ballPartsSeparated' | 'ballPlate';
 
 /** The choices picked from options. */
 export type ChoiceKey = Exclude<keyof ParameterChoices, ToggleKey | 'coneApexStarted'>;
@@ -428,6 +431,8 @@ export const initialParameterTexts = (): ParameterTexts => ({
   coneDowelLowerClearanceMm: formatDecimal(DEFAULT_DOWEL_CLEARANCES_MM.lower),
   coneDowelUpperClearanceMm: formatDecimal(DEFAULT_DOWEL_CLEARANCES_MM.upper),
   ballSectionOffsetPercent: formatDecimal(DEFAULT_SECTION_OFFSET_PERCENT),
+  ballPlateThicknessMm: formatDecimal(DEFAULT_SECTION_PLATE.thicknessMm),
+  ballPlateMarginMm: formatDecimal(DEFAULT_SECTION_PLATE.marginMm),
   ballDovetailSize: formatDecimal(DEFAULT_DOVETAIL.sizeFactor),
   ballDovetailLengthPercent: formatDecimal(DEFAULT_DOVETAIL.lengthPercent),
   ballDovetailClearanceMm: formatDecimal(DEFAULT_DOVETAIL.clearanceMm),
@@ -466,6 +471,7 @@ export const initialParameterChoices = (): ParameterChoices => ({
   ballRoundCount: DEFAULT_ROUND_CONNECTOR.count,
   ballRoundProfile: DEFAULT_CONNECTOR_PROFILE,
   ballPartsSeparated: true,
+  ballPlate: false,
 });
 
 type Validation = { value: number } | { error: string };
@@ -582,6 +588,12 @@ export const validatePrintSize = (text: string): Validation =>
     ' мм',
   );
 
+/** A section plate's thickness and margin within their windows; the solid and the cut narrow the thickness further. */
+const validatePlateThickness = (text: string, exact?: number): Validation =>
+  validateNumber(text, inclusiveRange(SECTION_PLATE_THICKNESS_LIMITS), SECTION_PLATE_THICKNESS_LIMITS, '1,6', ' мм', exact);
+const validatePlateMargin = (text: string, exact?: number): Validation =>
+  validateNumber(text, inclusiveRange(SECTION_PLATE_MARGIN_LIMITS), SECTION_PLATE_MARGIN_LIMITS, '10', ' мм', exact);
+
 /** Every field validated on its own; inclinations depend on the height and direction and are checked with them. */
 type IndependentKey = Exclude<ParameterKey, InclinationKey>;
 
@@ -639,10 +651,8 @@ const validators: Readonly<Record<IndependentKey, (text: string, exact?: number)
   cylinderTwistAxialMm: (text, exact) =>
     validateNumber(text, inclusiveRange(TWIST_AXIAL_CLEARANCE_LIMITS), TWIST_AXIAL_CLEARANCE_LIMITS, '0,2', ' мм', exact),
   coneSectionPercent: validateSectionPosition,
-  conePlateThicknessMm: (text, exact) =>
-    validateNumber(text, inclusiveRange(SECTION_PLATE_THICKNESS_LIMITS), SECTION_PLATE_THICKNESS_LIMITS, '1,6', ' мм', exact),
-  conePlateMarginMm: (text, exact) =>
-    validateNumber(text, inclusiveRange(SECTION_PLATE_MARGIN_LIMITS), SECTION_PLATE_MARGIN_LIMITS, '10', ' мм', exact),
+  conePlateThicknessMm: validatePlateThickness,
+  conePlateMarginMm: validatePlateMargin,
   coneSectionOffsetPercent: validateSectionOffset,
   coneObliquePositionPercent: validateSectionPosition,
   coneObliqueInclinationDeg: validateObliqueInclination,
@@ -659,6 +669,8 @@ const validators: Readonly<Record<IndependentKey, (text: string, exact?: number)
   coneDowelLowerClearanceMm: validateDiametralClearance,
   coneDowelUpperClearanceMm: validateDiametralClearance,
   ballSectionOffsetPercent: validateSectionOffset,
+  ballPlateThicknessMm: validatePlateThickness,
+  ballPlateMarginMm: validatePlateMargin,
   ballDovetailSize: validateConnectorDimension,
   ballDovetailLengthPercent: validateConnectorDimension,
   ballDovetailClearanceMm: validateDovetailClearance,
@@ -857,7 +869,7 @@ export const PLATE_TWIST_NOTICE = 'Поворотне з’єднання не �
  */
 export function plateConnectorFallback(kind: ShapeKind, state: ParameterState): ParameterState | undefined {
   const keys = sectionKeys[kind];
-  const plate = keys === undefined || !('position' in keys) ? undefined : (keys as PlanarSectionKeys).plate;
+  const plate = keys?.plate;
   if (keys === undefined || plate === undefined || !state.choices[plate.toggle]) return undefined;
   if (activeSection(kind, state.choices) === undefined || state.choices[keys.connector] !== 'twist') return undefined;
   return { ...state, choices: { ...state.choices, [keys.connector]: 'none' } };
@@ -866,7 +878,7 @@ export function plateConnectorFallback(kind: ShapeKind, state: ParameterState): 
 /** Whether a section plate is chosen for the shape's active cut. */
 export function plateChosen(kind: ShapeKind, choices: ParameterChoices): boolean {
   const keys = sectionKeys[kind];
-  const plate = keys === undefined || !('position' in keys) ? undefined : (keys as PlanarSectionKeys).plate;
+  const plate = keys?.plate;
   return plate !== undefined && choices[plate.toggle] && activeSection(kind, choices) !== undefined;
 }
 
@@ -1236,7 +1248,7 @@ export const PLATE_UNAVAILABLE_ELSEWHERE_MESSAGE =
   'перерізу. Змініть переріз, збільште найбільший габарит або вимкніть пластину.';
 
 /** The section plate's fields of a solid that offers one. */
-const plateKeysOf = (keys: SectionKeys) => ('position' in keys ? (keys as PlanarSectionKeys).plate : undefined);
+const plateKeysOf = (keys: SectionKeys) => keys.plate;
 
 /** The section as it is without a plate. */
 const withoutPlate = (section: Section): Section => {
@@ -1260,9 +1272,11 @@ function connectorChecks(
   edits: ConnectorEdits | undefined,
 ): SectionCheck | undefined {
   const plate = plateKeysOf(keys);
-  if (plate === undefined || shape.kind !== 'cone') return jointChecks(keys, shape, longestDimensionMm, section, edits);
+  if (plate === undefined || (shape.kind !== 'cone' && shape.kind !== 'ball')) {
+    return jointChecks(keys, shape, longestDimensionMm, section, edits);
+  }
   const plane = cutOfSection(withoutPlate(section));
-  const range = conePlateThicknessRange(shape, { longestDimensionMm }, plane as Exclude<typeof plane, { plate: unknown }>);
+  const range = plateThicknessRange(shape, { longestDimensionMm }, plane as Exclude<typeof plane, { plate: unknown }>);
   const fits = range.min <= range.max + CONSTRAINT_ROUNDOFF_MM;
   const ranges: SectionRanges = { [plate.thickness]: fits ? range : null };
   const chosen = 'plate' in section ? section.plate : undefined;
@@ -1286,7 +1300,7 @@ function connectorChecks(
     };
   }
   const scale = { longestDimensionMm };
-  const geometry = sectionPlateGeometry(conePlateSection(shape, scale, cutOfSection(section) as PlateCut));
+  const geometry = sectionPlateGeometry(plateSection(shape, scale, cutOfSection(section) as PlateCut));
   return { ...withRanges(jointChecks(keys, shape, longestDimensionMm, section, edits)), plateClipped: geometry.clippedAtBase };
 }
 
@@ -1621,6 +1635,13 @@ function plateDovetailIssueMessage(
   cut: CutWording,
 ): string {
   const where = partInMessage(issue.part, cut);
+  if (cut === 'horizontal') {
+    const what = { 'groove-wall-thin': 'Стінка біля паза', 'stop-thin': 'За упором паза', 'backing-thin': 'За пазом' }[
+      issue.code as 'groove-wall-thin'
+    ];
+    const verb = issue.code === 'groove-wall-thin' ? '—' : 'лишається';
+    return `${what ?? 'Паз'} ${where} ${verb} ${shortfall}. Зменште висоту чи довжину виступу, товщину пластини або ${BALL_REPAIR}.`;
+  }
   if (cut !== 'cone-plate') {
     const what = { 'groove-wall-thin': 'Стінка біля паза', 'stop-thin': 'За упором паза', 'backing-thin': 'За пазом' }[
       issue.code as 'groove-wall-thin'
@@ -1713,6 +1734,12 @@ type SectionKeys = {
     readonly dowelUpperClearance: 'cylinderDowelUpperClearanceMm' | 'coneDowelUpperClearanceMm' | 'ballDowelUpperClearanceMm';
   };
   readonly twist?: typeof TWIST_KEYS;
+  /** The section plate of a solid that offers one, on any of its cuts: the switch, the thickness and the margin. */
+  readonly plate?: {
+    readonly toggle: 'conePlate' | 'ballPlate';
+    readonly thickness: 'conePlateThicknessMm' | 'ballPlateThicknessMm';
+    readonly margin: 'conePlateMarginMm' | 'ballPlateMarginMm';
+  };
 };
 
 /** The further fields of the solids with an axis: a plane parallel to their base and a plane through a point on the axis. */
@@ -1722,12 +1749,6 @@ export type PlanarSectionKeys = SectionKeys & {
     readonly position: 'cylinderObliquePositionPercent' | 'coneObliquePositionPercent';
     readonly inclination: 'cylinderObliqueInclinationDeg' | 'coneObliqueInclinationDeg';
     readonly direction: 'cylinderObliqueDirectionDeg' | 'coneObliqueDirectionDeg';
-  };
-  /** A cone's section plate on its cut parallel to the base: the switch, the thickness and the margin. */
-  readonly plate?: {
-    readonly toggle: 'conePlate';
-    readonly thickness: 'conePlateThicknessMm';
-    readonly margin: 'conePlateMarginMm';
   };
 };
 
@@ -1788,6 +1809,7 @@ export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys | Plana
     choice: 'ballSection',
     offset: 'ballSectionOffsetPercent',
     separated: 'ballPartsSeparated',
+    plate: { toggle: 'ballPlate', thickness: 'ballPlateThicknessMm', margin: 'ballPlateMarginMm' },
     connector: 'ballConnector',
     dovetailEntrance: 'ballDovetailEntrance',
     dovetail: {
@@ -1952,12 +1974,12 @@ function resolveSection(
   // A plane parallel to the bases has a position along the height, a vertical one a distance from the axis, an oblique
   // one a point on the axis and two angles, a plane through an apex those angles alone.
   const planar = 'position' in keys ? (keys as PlanarSectionKeys) : undefined;
-  const plate = planar?.plate !== undefined && choices[planar.plate.toggle] ? planar.plate : undefined;
+  const plate = keys.plate !== undefined && choices[keys.plate.toggle] ? keys.plate : undefined;
   const plateFields: IndependentKey[] = plate === undefined ? [] : [plate.thickness, plate.margin];
   const cutFields: Readonly<Record<SectionType, readonly IndependentKey[]>> = {
     'parallel-to-bases': planar === undefined ? [] : [planar.position, ...plateFields],
     vertical: [keys.offset, ...plateFields],
-    horizontal: [keys.offset],
+    horizontal: [keys.offset, ...plateFields],
     oblique: planar === undefined ? [] : [...Object.values(planar.oblique), ...plateFields],
     'oblique-apex': [...Object.values(coneApexKeys), ...plateFields],
   };
@@ -2319,6 +2341,8 @@ export const shapeParameterKeys: Readonly<
   ball: {
     texts: [
       'ballSectionOffsetPercent',
+      'ballPlateThicknessMm',
+      'ballPlateMarginMm',
       'ballDovetailSize',
       'ballDovetailLengthPercent',
       'ballDovetailClearanceMm',
@@ -2329,7 +2353,15 @@ export const shapeParameterKeys: Readonly<
       'ballDowelLowerClearanceMm',
       'ballDowelUpperClearanceMm',
     ],
-    choices: ['ballSection', 'ballPartsSeparated', 'ballConnector', 'ballDovetailEntrance', 'ballRoundCount', 'ballRoundProfile'],
+    choices: [
+      'ballSection',
+      'ballPartsSeparated',
+      'ballPlate',
+      'ballConnector',
+      'ballDovetailEntrance',
+      'ballRoundCount',
+      'ballRoundProfile',
+    ],
   },
 };
 
@@ -2419,13 +2451,13 @@ function inactiveSectionKeys(kind: ShapeKind, choices: ParameterChoices): (keyof
   const planar = 'position' in keys ? (keys as PlanarSectionKeys) : undefined;
   const obliqueFields = planar === undefined ? [] : Object.values(planar.oblique);
   const apexFields = Object.values(coneApexKeys);
-  const plate = planar?.plate;
+  const plate = keys.plate;
   const plateFields =
     plate === undefined ? [] : [plate.toggle, ...(choices[plate.toggle] ? [plate.thickness, plate.margin] : [])];
   const cutFields: Readonly<Record<SectionType, readonly (keyof ParameterChoices | ParameterKey)[]>> = {
     'parallel-to-bases': planar === undefined ? [] : [planar.position, ...plateFields],
     vertical: [keys.offset, ...plateFields],
-    horizontal: [keys.offset],
+    horizontal: [keys.offset, ...plateFields],
     oblique: [...obliqueFields, 'coneObliqueThrough', ...plateFields],
     'oblique-apex': [...apexFields, 'coneObliqueThrough', ...plateFields],
   };

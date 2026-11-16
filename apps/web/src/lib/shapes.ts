@@ -641,10 +641,10 @@ const coneSectionHelp: Help = {
 };
 
 const CONE_PLATE_HELP =
-  'Січна пластина — окрема пласка деталь, що показує переріз. Із конуса вирізається шар завтовшки з пластину, ' +
+  'Січна пластина — окрема пласка деталь, що показує переріз. Із фігури вирізається шар завтовшки з пластину, ' +
   'посередині якого лежить площина перерізу; товщина вимірюється перпендикулярно до площини. Частини не зсуваються й не ' +
-  'масштабуються, тож складена модель — це той самий конус, а пластина виступає за його поверхню на заданий виступ. Дві ' +
-  'грані пластини перетинають конус по різних перерізах, з різними розмірами й центрами. Контур пластини — прямокутник у ' +
+  'масштабуються, тож складена модель — це та сама фігура, а пластина виступає за її поверхню на заданий виступ. Дві ' +
+  'грані пластини перетинають фігуру по різних перерізах, з різними розмірами й центрами. Контур пластини — прямокутник у ' +
   'площині перерізу навколо всього вирізаного шару, із заокругленими кутами.\n\n' +
   'Товщина обмежена так, щоб кожна частина лишалася не тоншою за 1,2 мм. Пластина з кріпленням друкується разом із ' +
   'частинами як третій об’єкт.';
@@ -653,9 +653,15 @@ const APEX_PLATE_HELP =
   'Площина проходить через вершину, тож шар пластини забирає вершину з обох частин: їхні грані біля пластини вже не ' +
   'трикутники, а вершина опиняється всередині пластини.';
 
-const withPlateHelp = (help: Help, throughApex = false): Help => ({
+const BALL_PLATE_HELP =
+  'Якщо шар пластини містить центр кулі, куля найширша саме всередині пластини: контур пластини охоплює весь екватор, хоча ' +
+  'обидві грані менші за нього.';
+
+const withPlateHelp = (help: Help, throughApex = false, extra?: string): Help => ({
   ...help,
-  text: [help.text, CONE_PLATE_HELP, ...(throughApex ? [APEX_PLATE_HELP] : [])].join('\n\n'),
+  text: [help.text, CONE_PLATE_HELP, ...(throughApex ? [APEX_PLATE_HELP] : []), ...(extra === undefined ? [] : [extra])].join(
+    '\n\n',
+  ),
 });
 
 const plateThicknessWindow: StepRange = { ...SECTION_PLATE_THICKNESS_LIMITS, increment: PLATE_THICKNESS_INCREMENT_MM };
@@ -893,6 +899,11 @@ const CONE_PLATE_PRINT_NOTE =
 
 const EXPLODED_PLATE_NOTE = 'Розсунутий перегляд лише показує деталі окремо вздовж нормалі до пластини; це не напрям складання.';
 
+const BALL_PLATE_PRINT_NOTE =
+  'У файлі кожна частина кулі без виступу лежить гранню біля пластини на столі, тож склепіння її отворів чи паза можуть ' +
+  'потребувати підтримок. Пластина з отворами або без кріплення лежить пласко. З виступами на обох гранях вона стоїть на ребрі, ' +
+  'виступами вздовж висоти друку: додайте кайму (brim) і перевірте в слайсері, чи потрібні підтримки.';
+
 const NUMBERED_PLATE_PRINT_NOTE =
   'У файлі частини стоять так само, як без пластини, а вісь кріплення лежить уздовж нормалі до перерізу, тож отвори й ' +
   'пази можуть потребувати підтримок або іншої орієнтації в слайсері. Пластина з отворами або без кріплення лежить ' +
@@ -911,7 +922,7 @@ const plateParts = (numbered: boolean) =>
         into: 'верхню частину',
       };
 
-const plateDovetailHelp = (numbered: boolean, entrance: DovetailEntrance): Help => ({
+const plateDovetailHelp = (numbered: boolean, entrance: DovetailEntrance, printNote: string): Help => ({
   label: 'Як працює кріплення?',
   text:
     `Виступи друкуються на обох гранях січної пластини, пази — у ${plateParts(numbered).both}. Обидва пази відкриті з ` +
@@ -922,10 +933,10 @@ const plateDovetailHelp = (numbered: boolean, entrance: DovetailEntrance): Help 
     `${EXPLODED_PLATE_NOTE}\n\n` +
     'Висота, довжина й зазор спільні для обох виступів, і повзунки враховують обидва пази разом. Довжина вимірюється ' +
     'вздовж напряму насування.\n\n' +
-    `${numbered ? NUMBERED_PLATE_PRINT_NOTE : CONE_PLATE_PRINT_NOTE}\n\n${BOUNDS_HELP}`,
+    `${printNote}\n\n${BOUNDS_HELP}`,
 });
 
-const platePlugHelp = (numbered: boolean): Help => {
+const platePlugHelp = (numbered: boolean, printNote: string): Help => {
   const names = plateParts(numbered);
   return {
     label: 'Як працює кріплення?',
@@ -935,11 +946,11 @@ const platePlugHelp = (numbered: boolean): Help => {
       `${names.into}. Глухий отвір має додаткові 0,3 мм глибини.\n\n` +
       `Отвір пластини наскрізний, із тим самим збільшенням діаметра, що й отвір ${names.second}. Частини й пластину ` +
       'з’єднують і розбирають рухом перпендикулярно до перерізу.\n\n' +
-      `${EXPLODED_PLATE_NOTE}\n\n${numbered ? NUMBERED_PLATE_PRINT_NOTE : CONE_PLATE_PRINT_NOTE}\n\n${BOUNDS_HELP}`,
+      `${EXPLODED_PLATE_NOTE}\n\n${printNote}\n\n${BOUNDS_HELP}`,
   };
 };
 
-const plateDowelHelp = (numbered: boolean): Help => ({
+const plateDowelHelp = (numbered: boolean, printNote: string): Help => ({
   label: 'Як працює кріплення?',
   text:
     'Штифти друкуються окремо, проходять крізь отвори пластини й входять у глухі отвори обох частин. Поле задає довжину ' +
@@ -947,7 +958,7 @@ const plateDowelHelp = (numbered: boolean): Help => ({
     'товщину пластини. Кожен глухий отвір має додаткові 0,3 мм глибини.\n\n' +
     'Отвори пластини мають більше з двох збільшень діаметра: так штифт вільно проходить крізь неї, а посадку визначають ' +
     'отвори частин.\n\n' +
-    `${EXPLODED_PLATE_NOTE}\n\n${numbered ? NUMBERED_PLATE_PRINT_NOTE : CONE_PLATE_PRINT_NOTE}\n\n${BOUNDS_HELP}`,
+    `${EXPLODED_PLATE_NOTE}\n\n${printNote}\n\n${BOUNDS_HELP}`,
 });
 
 const ENTRY_NOTCH_NOTE = 'У звуженій верхній частині може бути помітна виїмка для входу в паз.';
@@ -1299,16 +1310,17 @@ function connectorSection(
       : [];
   // Only this part leaves the bed without a flat face, and it holds for this model, whatever the plane.
   const printNote =
-    kind === 'ball' && (chosen === 'plug' || chosen === 'dovetail')
+    kind === 'ball' && (chosen === 'plug' || (chosen === 'dovetail' && !plated))
       ? [note('connector-print-placement', PROTRUDING_ON_BALL_NOTE)]
       : [];
   const helpOf = (type: Exclude<ConnectorChoice, 'none'>): Help => {
     if (plated && type !== 'twist') {
+      const note = kind === 'ball' ? BALL_PLATE_PRINT_NOTE : numbered ? NUMBERED_PLATE_PRINT_NOTE : CONE_PLATE_PRINT_NOTE;
       return type === 'dovetail'
-        ? plateDovetailHelp(numbered, entrance)
+        ? plateDovetailHelp(numbered, entrance, note)
         : type === 'plug'
-          ? platePlugHelp(numbered)
-          : plateDowelHelp(numbered);
+          ? platePlugHelp(numbered, note)
+          : plateDowelHelp(numbered, note);
     }
     if (kind !== 'cone' || type === 'twist') return helps[cut][type];
     if (cut === 'parallel-to-bases') return withConeNote(helps[cut][type]);
@@ -1369,6 +1381,7 @@ function ballPlaneSection(choices: ParameterChoices, context: PanelContext): Par
   const keys = sectionKeys.ball;
   if (keys === undefined) throw new Error('No section fields for the ball.');
   const chosen = choices[keys.choice];
+  const plateOn = keys.plate !== undefined && choices[keys.plate.toggle];
   const interval = context.sectionRanges?.[keys.offset];
   const offset: NumericField = {
     type: 'number',
@@ -1390,14 +1403,72 @@ function ballPlaneSection(choices: ParameterChoices, context: PanelContext): Par
           { value: 'horizontal', label: sectionNames.horizontal },
         ],
       },
-      ...(chosen === 'horizontal' ? [offset, { type: 'toggle' as const, key: keys.separated, label: 'Розсунути частини' }] : []),
+      ...(chosen === 'horizontal'
+        ? [
+            offset,
+            { type: 'toggle' as const, key: keys.separated, label: 'Розсунути частини' },
+            ...plateFieldsOf('ball', keys, choices, context, chosen),
+          ]
+        : []),
     ],
     {
       initiallyOpen: false,
-      help: chosen === 'horizontal' ? ballSectionHelp : undefined,
-      status: { text: chosen === 'none' ? 'немає' : sectionNames[chosen].toLowerCase(), highlighted: chosen !== 'none' },
+      help:
+        chosen !== 'horizontal' ? undefined : plateOn ? withPlateHelp(ballSectionHelp, false, BALL_PLATE_HELP) : ballSectionHelp,
+      status: {
+        text: chosen === 'none' ? 'немає' : plateOn ? 'з пластиною' : sectionNames[chosen].toLowerCase(),
+        highlighted: chosen !== 'none',
+      },
     },
   );
+}
+
+/**
+ * The section plate's switch and, once it is on, its thickness and margin, for a solid that offers one: the switch is off where
+ * no plate fits the current valid solid and cut, which the request knows, and offered while one of them is being typed.
+ */
+function plateFieldsOf(
+  kind: 'cylinder' | 'cone' | 'ball',
+  keys: NonNullable<(typeof sectionKeys)[ShapeKind]>,
+  choices: ParameterChoices,
+  context: PanelContext,
+  chosen: SectionChoice,
+): ParameterField[] {
+  const plate = keys.plate;
+  if (plate === undefined) return [];
+  const plateOn = choices[plate.toggle];
+  const thicknessInterval = context.sectionRanges?.[plate.thickness];
+  const fits = thicknessInterval !== null;
+  const plateNoteId = `${kind}-plate-unavailable`;
+  const unavailableText = chosen === 'parallel-to-bases' ? PLATE_UNAVAILABLE_MESSAGE : PLATE_UNAVAILABLE_ELSEWHERE_MESSAGE;
+  return [
+    {
+      type: 'toggle',
+      key: plate.toggle,
+      label: 'Січна пластина',
+      ...(!fits && !plateOn ? { disabled: true, describedBy: plateNoteId } : {}),
+    },
+    // Once chosen, the thickness field itself says why it does not fit, and the switch stays free to turn it off.
+    ...(fits || plateOn ? [] : [{ type: 'note' as const, key: plateNoteId, text: unavailableText }]),
+    ...(plateOn
+      ? [
+          {
+            type: 'number' as const,
+            key: plate.thickness,
+            label: 'Товщина пластини, мм',
+            suffix: '',
+            range:
+              thicknessInterval === undefined || thicknessInterval === null
+                ? plateThicknessWindow
+                : physicalRange(thicknessInterval, PLATE_THICKNESS_INCREMENT_MM),
+          },
+          { type: 'number' as const, key: plate.margin, label: 'Виступ за межі фігури, мм', suffix: '', range: plateMarginRange },
+          ...(context.plateClipped === true
+            ? [{ type: 'note' as const, key: `${kind}-plate-clipped`, text: PLATE_CLIPPED_NOTE }]
+            : []),
+        ]
+      : []),
+  ];
 }
 
 function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, context: PanelContext): ParameterSection {
@@ -1431,49 +1502,7 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
   const throughApex = kind === 'cone' && choices.coneObliqueThrough === 'apex';
   const plate = keys.plate;
   const plateOn = plate !== undefined && choices[plate.toggle];
-  // Whether any plate fits the current valid cone and cut, which the request knows; unknown, and so offered, while one of them
-  // is being typed.
-  const thicknessInterval = plate === undefined ? undefined : context.sectionRanges?.[plate.thickness];
-  const fits = thicknessInterval !== null;
-  const plateNoteId = `${kind}-plate-unavailable`;
-  const unavailableText = chosen === 'parallel-to-bases' ? PLATE_UNAVAILABLE_MESSAGE : PLATE_UNAVAILABLE_ELSEWHERE_MESSAGE;
-  const plateFields: ParameterField[] =
-    plate === undefined
-      ? []
-      : [
-          {
-            type: 'toggle',
-            key: plate.toggle,
-            label: 'Січна пластина',
-            ...(!fits && !plateOn ? { disabled: true, describedBy: plateNoteId } : {}),
-          },
-          // Once chosen, the thickness field itself says why it does not fit, and the switch stays free to turn it off.
-          ...(fits || plateOn ? [] : [{ type: 'note' as const, key: plateNoteId, text: unavailableText }]),
-          ...(plateOn
-            ? [
-                {
-                  type: 'number' as const,
-                  key: plate.thickness,
-                  label: 'Товщина пластини, мм',
-                  suffix: '',
-                  range:
-                    thicknessInterval === undefined || thicknessInterval === null
-                      ? plateThicknessWindow
-                      : physicalRange(thicknessInterval, PLATE_THICKNESS_INCREMENT_MM),
-                },
-                {
-                  type: 'number' as const,
-                  key: plate.margin,
-                  label: 'Виступ за межі фігури, мм',
-                  suffix: '',
-                  range: plateMarginRange,
-                },
-                ...(context.plateClipped === true
-                  ? [{ type: 'note' as const, key: `${kind}-plate-clipped`, text: PLATE_CLIPPED_NOTE }]
-                  : []),
-              ]
-            : []),
-        ];
+  const plateFields = plateFieldsOf(kind, keys, choices, context, chosen);
   const details: Record<SectionChoice, ParameterField[]> = {
     none: [],
     horizontal: [],

@@ -8,15 +8,18 @@ import { circularSegments } from '../shapes/round.ts';
 import { type ConnectorFeasibility, connectorFeasibility, type ParameterSpec } from './bounds.ts';
 import {
   type BallHorizontalSection,
+  type BallPlateSection,
   ballInnerWall,
   CONNECTOR_MIN_WALL_MM,
   connectorVolumeTolerance,
   type FacetedSection,
+  faceGapOf,
   facesOfPart,
   frameMatrix,
   framePoint,
   insideEnvelope,
   isFaceted,
+  isPlateSection,
   lateralWall,
   type SectionedShape,
   type SectionFrame,
@@ -318,7 +321,7 @@ function holeWalls(section: SolidSection, part: Part, hole: HoleExtent, holeDept
     };
   }
   if (isFaceted(section)) return facetedHoleWalls(section, part, hole, holeDepth);
-  if (section.type === 'ball-horizontal') return ballHoleWalls(section, part, hole, holeDepth);
+  if (section.type === 'ball-horizontal' || section.type === 'ball-plate') return ballHoleWalls(section, part, hole, holeDepth);
   const { offset, height } = section;
   const farthest = (depth: number) => Math.max(Math.abs(offset), Math.abs(offset + towards * depth));
   return {
@@ -357,13 +360,18 @@ function verticalReach(
  * chamfer and at the bottom bound it, and a cavity whose mouth fits with room to spare is still measured where it reaches
  * furthest.
  */
-function ballHoleWalls(section: BallHorizontalSection, part: Part, hole: HoleExtent, holeDepth: number) {
+function ballHoleWalls(section: BallHorizontalSection | BallPlateSection, part: Part, hole: HoleExtent, holeDepth: number) {
   const { profile, radius, along, chamfer, straight, opening } = hole;
   const towards = part === 'upper' ? 1 : -1;
+  // Beside a section plate the hole starts at its part's own face, half the plate's thickness from the middle plane.
+  const start = section.type === 'ball-plate' ? section.halfThickness : 0;
   const reach = (offset: number) => profileReach(profile, radius, offset, 0, along);
   return {
-    side: Math.min(ballInnerWall(section, reach(opening), 0), ballInnerWall(section, reach(straight), towards * chamfer)),
-    bottom: ballInnerWall(section, reach(straight), towards * holeDepth),
+    side: Math.min(
+      ballInnerWall(section, reach(opening), towards * start),
+      ballInnerWall(section, reach(straight), towards * (start + chamfer)),
+    ),
+    bottom: ballInnerWall(section, reach(straight), towards * (start + holeDepth)),
   };
 }
 
@@ -386,7 +394,7 @@ function facetedHoleWalls(section: SolidSection & FacetedSection, part: Part, ho
   const towards = part === 'upper' ? 1 : -1;
   const faces = facesOfPart(section, part === 'upper' ? 'positive' : 'negative');
   // Beside a section plate the hole starts at its part's own face, half the plate's thickness from the middle plane.
-  const start = section.type === 'cone-plate' ? section.halfThickness : 0;
+  const start = faceGapOf(section);
   const wallAt = (depth: number, offset: number) =>
     Math.min(...faces.map((face) => ringWall(face, hole, towards * (start + depth), offset)));
   return { side: Math.min(wallAt(0, opening), wallAt(chamfer, straight)), bottom: wallAt(holeDepth, straight) };
@@ -400,16 +408,15 @@ function plugBacking(
 ): number {
   if (section.type === 'parallel-to-bases') return section.lowerThickness - PLUG_ROOT_OVERLAP_MM;
   const rings = sites.map(({ along, pinDiameter }) => ({ profile, radius: pinDiameter / 2, along }));
-  if (section.type === 'ball-horizontal') {
+  if (section.type === 'ball-horizontal' || section.type === 'ball-plate') {
+    const root = -PLUG_ROOT_OVERLAP_MM - faceGapOf(section);
     return Math.min(
-      ...rings.map(({ radius, along }) =>
-        ballInnerWall(section, profileReach(profile, radius, 0, 0, along), -PLUG_ROOT_OVERLAP_MM),
-      ),
+      ...rings.map(({ radius, along }) => ballInnerWall(section, profileReach(profile, radius, 0, 0, along), root)),
     );
   }
   if (isFaceted(section)) {
     const faces = facesOfPart(section, 'negative');
-    const root = -PLUG_ROOT_OVERLAP_MM - (section.type === 'cone-plate' ? section.halfThickness : 0);
+    const root = -PLUG_ROOT_OVERLAP_MM - faceGapOf(section);
     return Math.min(...rings.flatMap((ring) => faces.map((face) => ringWall(face, ring, root, 0))));
   }
   return Math.min(
@@ -443,7 +450,7 @@ export function planRoundConnectors(
     holeDepth: insertion + ROUND_CONNECTOR_DEPTH_ALLOWANCE_MM,
     clearance,
     straightEngagement: Math.min(...sites.map(({ chamfer }) => insertion - play - 2 * chamfer)),
-    ...(section.type === 'cone-plate' ? { plateThickness: 2 * section.halfThickness } : {}),
+    ...(isPlateSection(section) ? { plateThickness: 2 * section.halfThickness } : {}),
     issues: roundConnectorChecks(section, dimensions).filter((check) => !satisfies(check)),
   };
 }

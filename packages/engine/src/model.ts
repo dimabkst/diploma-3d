@@ -22,8 +22,6 @@ import {
   CONSTRAINT_ROUNDOFF_MM,
   coneApexChord,
   coneObliqueSection,
-  conePlateSection,
-  conePlateThicknessRange,
   coneVerticalSection,
   cutOfSection,
   isApexChordUsable,
@@ -33,6 +31,8 @@ import {
   obliqueSplitReach,
   type PlateCut,
   planeOfPlateCut,
+  plateSection,
+  plateThicknessRange,
   satisfies,
   sectionOffsetMm,
   verticalCylinderSection,
@@ -324,23 +324,26 @@ function assertConnected(solid: Manifold): void {
 }
 
 /**
- * A section plate's geometry, refused before anything is built where it does not apply: only a cone's cuts offer one so far,
- * not with a twist connector, and its thickness, along the plane's normal, must leave both parts.
+ * A section plate's geometry, refused before anything is built where it does not apply: only a cone's cuts and a ball's
+ * horizontal one offer one so far, not with a twist connector, and its thickness, along the plane's normal, must leave both
+ * parts. The plane itself was checked before, by the cut's own limits.
  */
 function planPlate({ shape, scale, section }: ModelSpec): SectionPlateGeometry | undefined {
   if (section === undefined || !('plate' in section) || section.plate === undefined) return undefined;
-  if (shape.kind !== 'cone') throw new InvalidModelSpecError(['section.plate: only a cone offers a section plate so far.']);
+  if (shape.kind !== 'cone' && shape.kind !== 'ball') {
+    throw new InvalidModelSpecError(['section.plate: only a cone and a ball offer a section plate so far.']);
+  }
   if (section.connector?.type === 'twist') {
     throw new InvalidModelSpecError(['section.plate: a twist connector cannot join the parts through a section plate.']);
   }
   const cut = cutOfSection(section) as PlateCut;
   if (!isPlateCut(cut) || !isPlateThicknessFeasible(shape, scale, cut)) {
-    const { max } = conePlateThicknessRange(shape, scale, planeOfPlateCut(cut));
+    const { max } = plateThicknessRange(shape, scale, planeOfPlateCut(cut));
     throw new InvalidModelSpecError([
       `section.plate.thicknessMm: ${section.plate.thicknessMm} mm leaves a part thinner than allowed; at most ${max} mm fits here.`,
     ]);
   }
-  return sectionPlateGeometry(conePlateSection(shape, scale, cut));
+  return sectionPlateGeometry(plateSection(shape, scale, cut));
 }
 
 /** The plane of a section read off a round solid: a cylinder's or a cone's vertical one, or a cylinder's oblique one. */

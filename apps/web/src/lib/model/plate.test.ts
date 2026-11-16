@@ -339,3 +339,87 @@ describe('a plate cut off at the figure’s base', () => {
     expect(request({ coneSectionPercent: '10', conePlateMarginMm: '30' }, { conePlate: true }).plateClipped).toBe(false);
   });
 });
+
+describe('the section plate of a ball', () => {
+  const ballChoices = (overrides: Partial<ParameterChoices> = {}): ParameterChoices => ({
+    ...initialParameterChoices(),
+    ballSection: 'horizontal',
+    ...overrides,
+  });
+  const ballRequest = (overrides: Partial<ParameterTexts> = {}, chosen: Partial<ParameterChoices> = {}) =>
+    resolveModelRequest('ball', texts(overrides), ballChoices(chosen), { connectorEdits: {} });
+  const ballGroup = (title: string, overrides: Partial<ParameterTexts> = {}, chosen: Partial<ParameterChoices> = {}) => {
+    const { values, sectionRanges, connectorStatus } = ballRequest(overrides, chosen);
+    const panel = shapePanel('ball', ballChoices(chosen), { values, sectionRanges, connectorStatus });
+    const found = panel.type === 'parameters' ? panel.sections.find((group) => group.title === title) : undefined;
+    if (found === undefined) throw new Error(`No ${title}`);
+    return found;
+  };
+
+  it('offers the same switch and fields after the cut’s own, off at first, and the cut without it stays as it was', () => {
+    expect(initialParameterChoices().ballPlate).toBe(false);
+    expect(ballRequest().spec?.section).toEqual({ type: 'horizontal', offsetPercent: 0 });
+    const plated = ballRequest({ ballSectionOffsetPercent: '30' }, { ballPlate: true, ballConnector: 'dowel' });
+    expect(plated.errors).toEqual({});
+    expect(plated.spec?.section).toMatchObject({
+      type: 'horizontal',
+      offsetPercent: 30,
+      plate: { thicknessMm: 1.6, marginMm: 10 },
+      connector: { type: 'dowel' },
+    });
+    const group = ballGroup('Переріз', {}, { ballPlate: true });
+    expect(group.fields.map((field) => field.key).slice(-4)).toEqual([
+      'ballPartsSeparated',
+      'ballPlate',
+      'ballPlateThicknessMm',
+      'ballPlateMarginMm',
+    ]);
+    expect(group.status).toEqual({ text: 'з пластиною', highlighted: true });
+    expect(group.help?.text).toContain('контур пластини охоплює весь екватор');
+    const connector = ballGroup('Кріплення', {}, { ballPlate: true, ballConnector: 'plug' });
+    expect(connector.help?.text).toContain('Виступ друкується разом із нижньою частиною');
+    expect(connector.help?.text).toContain('кожна частина кулі без виступу лежить гранню біля пластини');
+    const dovetail = ballGroup('Кріплення', {}, { ballPlate: true, ballConnector: 'dovetail' });
+    // The tongues are the plate's: no part of the ball carries one that would keep it off its cut face.
+    expect(dovetail.fields.some((field) => field.key === 'ball-connector-print-placement')).toBe(false);
+  });
+
+  it('narrows the thickness to what both caps keep, and is unavailable where none fits', () => {
+    // R = 10 mm at 20 mm; at 75 % of r the upper cap reaches 2,5 mm.
+    const tight = ballRequest(
+      { printSizeMm: '20', ballSectionOffsetPercent: '75', ballPlateThicknessMm: '3' },
+      { ballPlate: true },
+    );
+    expect(tight.sectionRanges?.ballPlateThicknessMm?.max).toBeCloseTo(2.6, 9);
+    expect(tight.errors.ballPlateThicknessMm).toMatch(/^За цього перерізу допустимо від 1,2 мм до 2,6 мм/);
+    // R = 5 mm at 10 mm; at 70 % the cap reaches 1,5 mm, too little for any plate.
+    const none = ballGroup('Переріз', { printSizeMm: '10', ballSectionOffsetPercent: '70' });
+    expect(none.fields.find((field) => field.key === 'ballPlate')).toMatchObject({ disabled: true });
+    expect(none.fields).toContainEqual(expect.objectContaining({ text: PLATE_UNAVAILABLE_ELSEWHERE_MESSAGE }));
+  });
+
+  it('reset turns it off with its defaults and keeps the print size', () => {
+    const state: ParameterState = {
+      texts: texts({ printSizeMm: '120', ballPlateThicknessMm: '3', ballPlateMarginMm: '20' }),
+      choices: ballChoices({ ballPlate: true }),
+    };
+    expect(canResetShapeParameters('ball', state)).toBe(true);
+    const reset = resetShapeParameters('ball', state);
+    expect(reset.choices.ballPlate).toBe(false);
+    expect(reset.texts).toMatchObject({ printSizeMm: '120', ballPlateThicknessMm: '1,6', ballPlateMarginMm: '10' });
+  });
+
+  it('records the ball’s cut with its plate in the download', async () => {
+    const result = ballRequest({ ballSectionOffsetPercent: '-20' }, { ballPlate: true, ballConnector: 'dovetail' });
+    if (result.spec === undefined) throw new Error('expected a model');
+    const artifacts = await buildModelArtifacts(kernel, result.spec, result.settingsInput);
+    const json = JSON.parse(readThreeMfPart(artifacts.printFile.bytes, MODEL_SETTINGS_PATH) as string);
+    expect(json.sourceModel.section).toEqual({
+      type: 'horizontal',
+      offsetPercent: -20,
+      plate: { thicknessMm: 1.6, marginMm: 10 },
+    });
+    expect(artifacts.model.solids.map((solid) => solid.part)).toEqual(['lower', 'upper', 'plate']);
+    expect(artifacts.printFile.fileName).toBe('ball-horizontal-section-plate.3mf');
+  });
+});
