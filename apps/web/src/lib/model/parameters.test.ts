@@ -254,6 +254,8 @@ describe('resolveModelRequest', () => {
       cylinderTwistSizeMm: '18',
       cylinderTwistClearanceMm: '0,5',
       cylinderTwistAxialMm: '0,2',
+      cylinderPlateThicknessMm: '1,6',
+      cylinderPlateMarginMm: '10',
     });
     expect(initialParameterChoices()).toEqual({
       prismBaseType: 'regular',
@@ -262,6 +264,7 @@ describe('resolveModelRequest', () => {
       pyramidBaseSides: 4,
       cylinderSection: 'none',
       cylinderPartsSeparated: true,
+      cylinderPlate: false,
       cylinderConnector: 'none',
       cylinderDovetailEntrance: 'standard',
       cylinderRoundCount: 1,
@@ -1319,6 +1322,7 @@ describe('a cylinder section parallel to the bases', () => {
       ['choice', 'cylinderSection'],
       ['number', 'cylinderSectionPercent'],
       ['toggle', 'cylinderPartsSeparated'],
+      ['toggle', 'cylinderPlate'],
     ]);
     expect(sectionNumberFields(group)[0]?.range).toEqual({ min: 10, max: 90, increment: 5 });
     expect(partsSeparated('cylinder', parallel)).toBe(true);
@@ -1442,6 +1446,7 @@ describe('a dovetail joining the cylinder’s parts', () => {
       'cylinderSection',
       'cylinderSectionPercent',
       'cylinderPartsSeparated',
+      'cylinderPlate',
     ]);
     expect(cut?.help?.label).toBe('Як задано переріз?');
     const connector = groupsOf(sectioned).find((group) => group.title === 'Кріплення');
@@ -1872,6 +1877,7 @@ describe('a vertical section of the cylinder', () => {
       ['choice', 'cylinderSection'],
       ['number', 'cylinderSectionOffsetPercent'],
       ['toggle', 'cylinderPartsSeparated'],
+      ['toggle', 'cylinderPlate'],
     ]);
     // The thinner part keeps 10 % of the extent across the plane: ±0,8·r, in steps of 5 like the position along h.
     const field = sectionNumberFields(cut)[0];
@@ -2168,7 +2174,8 @@ describe('an oblique section of the cylinder', () => {
       },
       { key: 'cylinderObliqueDirectionDeg', label: 'Напрям нахилу', suffix: '°', range: { min: 0, max: 360, increment: 5 } },
     ]);
-    expect(cut.fields.at(-1)).toMatchObject({ type: 'toggle', key: 'cylinderPartsSeparated' });
+    expect(cut.fields.at(-2)).toMatchObject({ type: 'toggle', key: 'cylinderPartsSeparated' });
+    expect(cut.fields.at(-1)).toMatchObject({ type: 'toggle', key: 'cylinderPlate', label: 'Січна пластина' });
   });
 
   it('holds typed values to the same bounds as the sliders', () => {

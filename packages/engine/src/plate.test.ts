@@ -147,12 +147,18 @@ describe('the plate is optional', () => {
   });
 
   it('the engine refuses a plate where it does not apply', () => {
+    // A right cylinder's parallel cut takes a twist connector without a plate, never through one.
     const cylinder = { kind: 'cylinder', heightRatio: 2, offsetRatio: 0 } as const;
     expect(() =>
       generateModel(kernel, {
         shape: cylinder,
         scale: { longestDimensionMm: 80 },
-        section: { type: 'parallel-to-bases', positionPercent: 50, plate: plate() },
+        section: {
+          type: 'parallel-to-bases',
+          positionPercent: 50,
+          plate: plate(),
+          connector: { type: 'twist', sizeMm: 14, holeClearanceMm: 0.5, axialClearanceMm: 0.2 },
+        },
       }),
     ).toThrow(InvalidModelSpecError);
     expect(() =>

@@ -175,12 +175,22 @@ describe('the section plate stands on or above the figure’s base', () => {
       const plateSolid = manifoldOf(track, slab.mesh);
       expect(plateSolid.decompose().map(track)).toHaveLength(1);
       expect(plateSolid.genus()).toBe(0);
-      // Only what lay below the base is gone: the unclipped plate cut at the base is the plate, and above the base the two
-      // agree everywhere, the margin on every other side included.
+      // Only what lay below the base is gone, and the two corners that cut makes, rounded: the plate lies within the unclipped
+      // plate cut at the base, and lacks no more than those corners, at most r²·(1 − π/4) of the outline each across the
+      // thickness, more where the base meets the side at a sharper angle.
       const candidate = buildSectionPlate(kernel, track, { ...geometry, clippedAtBase: false });
       const above = track(candidate.trimByPlane([0, 0, 1], 0));
-      expect(Math.abs(above.volume() - plateSolid.volume())).toBeLessThan(FLOAT32_CONTACT_MM3);
-      expect(volumeOf(track, above.subtract(plateSolid))).toBeLessThan(FLOAT32_CONTACT_MM3);
+      expect(volumeOf(track, plateSolid.subtract(above))).toBeLessThan(FLOAT32_CONTACT_MM3);
+      if (geometry.clippedAtBase) {
+        const radius = geometry.baseCornerRadius as number;
+        expect(radius).toBeGreaterThan(0);
+        const corners = 2 * radius ** 2 * (1 - Math.PI / 4) * withPlate.thicknessMm;
+        const removed = volumeOf(track, above.subtract(plateSolid));
+        expect(removed).toBeGreaterThan(corners / 4);
+        expect(removed).toBeLessThan(8 * corners);
+      } else {
+        expect(volumeOf(track, above.subtract(plateSolid))).toBeLessThan(FLOAT32_CONTACT_MM3);
+      }
       // The plate still holds all of the cone between its faces.
       const whole = manifoldOf(track, (generateModel(kernel, { shape, scale: SCALE }).solids[0] as Solid).mesh);
       const { normal, offset } = (model.section as ModelSection).plane;

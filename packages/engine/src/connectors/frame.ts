@@ -218,11 +218,37 @@ export interface BallPlateSection extends Omit<BallHorizontalSection, 'type'>, P
   readonly interfaces: { readonly lower: BallHorizontalSection; readonly upper: BallHorizontalSection };
 }
 
+/** The cuts of a cylinder, which say where a dovetail's entrance lies. */
+export type CylinderCutType = 'parallel-to-bases' | 'vertical' | 'oblique';
+
+/**
+ * A cylinder's cut read off the faces of its polygonal solid, with the frame and the plane of the cut it was read off, rather
+ * than from the formulas of `cylinderSection` and `verticalCylinderSection`: what the middle plane and both faces of a section
+ * plate need, as the solid between them may reach a base or the axis, which no single formula of the plane covers.
+ */
+export interface CylinderFaceSection extends FacetedSection {
+  readonly type: 'cylinder-face';
+  readonly baseType: CylinderCutType;
+}
+
+/**
+ * Any cut of a cylinder with a section plate, as a cone's (see `ConePlateSection`): frame, contour and faces of the middle plane,
+ * the interfaces read off the solid at the plate's two faces, each with n from the plate into its part and the middle frame's u.
+ */
+export interface CylinderPlateSection extends FacetedSection, PlateFields {
+  readonly type: 'cylinder-plate';
+  readonly baseType: CylinderCutType;
+  readonly interfaces: { readonly lower: CylinderFaceSection; readonly upper: CylinderFaceSection };
+}
+
 /** A cut with a section plate, of any solid that offers one. */
-export type PlateSection = ConePlateSection | BallPlateSection;
+export type PlateSection = ConePlateSection | BallPlateSection | CylinderPlateSection;
 
 export const isPlateSection = (section: SolidSection): section is PlateSection =>
-  section.type === 'cone-plate' || section.type === 'ball-plate';
+  section.type === 'cone-plate' || section.type === 'ball-plate' || section.type === 'cylinder-plate';
+
+/** The cut a section was read off: a plate's or a plate face's own cut, or the section's type. */
+export const cutTypeOf = (section: SolidSection): string => ('baseType' in section ? section.baseType : section.type);
 
 /** How far each part's face lies from the cut's plane: half a plate's thickness, or nothing without one. */
 export const faceGapOf = (section: SolidSection): number => (isPlateSection(section) ? section.halfThickness : 0);
@@ -236,7 +262,9 @@ export type SolidSection =
   | ConeVerticalSection
   | ConeObliqueSection
   | ConePlateSection
-  | BallPlateSection;
+  | BallPlateSection
+  | CylinderFaceSection
+  | CylinderPlateSection;
 
 /** Whether the section was read off the actual solid's faces. */
 export const isFaceted = (section: SolidSection): section is SolidSection & FacetedSection => 'faces' in section;
@@ -654,13 +682,18 @@ function coneCut(shape: ConeShape, scale: PhysicalScale, cut: PlaneCut): ConeCut
 }
 
 /**
- * The plate thicknesses that leave each part of a cone at least one minimum wall beyond its face, measured along the cut's
+ * The plate thicknesses that leave each part of the solid at least one minimum wall beyond its face, measured along the cut's
  * normal from how far the part reaches from the middle plane, within the schema's window: min > max when none does. An
  * application restriction like the cut's own limits, which excludes slivers; it does not make every part printable. For a
  * cut parallel to the base each part's reach is its height.
  */
 export function plateThicknessRange(shape: PlatedShape, scale: PhysicalScale, cut: PlaneCut): FrameExtent {
-  const reach = shape.kind === 'ball' ? ballReach(scale, cut) : coneCut(shape, scale, cut).reach;
+  const reach =
+    shape.kind === 'ball'
+      ? ballReach(scale, cut)
+      : shape.kind === 'cone'
+        ? coneCut(shape, scale, cut).reach
+        : cylinderFaceSection(shape, scale, cut).reach;
   const room = 2 * (Math.min(reach.negative, reach.positive) - CONNECTOR_MIN_WALL_MM);
   return { min: SECTION_PLATE_THICKNESS_LIMITS.min, max: Math.min(SECTION_PLATE_THICKNESS_LIMITS.max, room) };
 }
@@ -670,7 +703,86 @@ export const conePlateThicknessRange = (shape: ConeShape, scale: PhysicalScale, 
   plateThicknessRange(shape, scale, cut);
 
 /** The solids that offer a section plate. */
-export type PlatedShape = ConeShape | BallShape;
+export type PlatedShape = ConeShape | BallShape | CylinderShape;
+
+/** A cylinder's own section for a plane without a plate. */
+function cylinderCut(
+  shape: CylinderShape,
+  scale: PhysicalScale,
+  cut: PlaneCut,
+): ParallelCylinderSection | VerticalCylinderSection | ObliqueCylinderSection {
+  if (typeof cut === 'number') return cylinderSection(shape, scale, cut);
+  if ('offsetPercent' in cut) return verticalCylinderSection(shape, scale, cut.offsetPercent);
+  if ('positionPercent' in cut) return obliqueCylinderSection(shape, scale, cut);
+  throw new GeometryError('A cylinder has no apex to cut through.');
+}
+
+/**
+ * The cylinder's cut read off its polygonal solid, in the frame and on the plane of its own cut; see `CylinderFaceSection`. The
+ * span stays the cut's own, which a dovetail's length and a pair's spacing are given in percent of, so that a plate changes
+ * neither.
+ */
+export function cylinderFaceSection(shape: CylinderShape, scale: PhysicalScale, cut: PlaneCut): CylinderFaceSection {
+  const base = cylinderCut(shape, scale, cut);
+  const dimensions = roundDimensionsMm(shape, scale);
+  const { n, u, v } = base.frame;
+  const offset = base.type === 'parallel-to-bases' ? dot(n, base.frame.origin) : base.plane.offset;
+  return {
+    ...facetedSection(cylinderPolyhedron(dimensions), { n, u, v }, offset, dimensions.radius),
+    type: 'cylinder-face',
+    baseType: base.type,
+    span: base.span,
+  };
+}
+
+/** A cylinder's cut with a section plate; see `CylinderPlateSection`. The thickness must leave both parts, as checked first. */
+export function cylinderPlateSection(shape: CylinderShape, scale: PhysicalScale, cut: PlateCut): CylinderPlateSection {
+  if (!isPlateThicknessFeasible(shape, scale, cut)) {
+    throw new GeometryError(`A plate ${cut.plate.thicknessMm} mm thick leaves a part of the cylinder too thin.`);
+  }
+  const dimensions = roundDimensionsMm(shape, scale);
+  const centre = cylinderFaceSection(shape, scale, planeOfPlateCut(cut));
+  return {
+    ...centre,
+    ...facetedPlate(cylinderPolyhedron(dimensions), centre, cut, dimensions.radius),
+    type: 'cylinder-plate',
+    baseType: centre.baseType,
+  };
+}
+
+/**
+ * What a section plate adds to a cut read off a convex polyhedron: the interfaces, each the cut's own section read off the
+ * plate's face, its identity kept; the slab, from both faces' contours and the solid's corners between them, which hold every
+ * extreme point of the solid there; and the plane the solid stands on, its lowest corner's.
+ */
+function facetedPlate<S extends FacetedSection>(
+  polyhedron: Polyhedron,
+  centre: S,
+  cut: PlateCut,
+  radius: number,
+): PlateFields & { readonly interfaces: { readonly lower: S; readonly upper: S } } {
+  const { n, u, v } = centre.frame;
+  // + 0 turns −0 into 0, as for a normal written out.
+  const flipped: Vec3 = [-n[0] + 0, -n[1] + 0, -n[2] + 0];
+  const middle = centre.plane.offset;
+  const halfThickness = cut.plate.thicknessMm / 2;
+  // n·x = −(m − T/2) is the plane n·x = m − T/2 with its normal into part 1 or the lower part.
+  const interfaces = {
+    lower: {
+      ...centre,
+      ...facetedSection(polyhedron, { n: flipped, u, v: cross(u, flipped) }, -(middle - halfThickness), radius),
+    },
+    upper: { ...centre, ...facetedSection(polyhedron, { n, u, v }, middle + halfThickness, radius) },
+  };
+  const between = polyhedron.vertices.filter((vertex) => Math.abs(dot(n, vertex) - middle) <= halfThickness);
+  return {
+    halfThickness,
+    margin: cut.plate.marginMm,
+    interfaces,
+    slab: slabExtent([...interfaces.lower.contour, ...interfaces.upper.contour, ...between], centre.frame),
+    standingLevel: Math.min(...polyhedron.vertices.map((vertex) => vertex[2])),
+  };
+}
 
 /** How far each part of a ball reaches from a horizontal plane: to the polyhedron's poles, which lie on the sphere. */
 function ballReach(scale: PhysicalScale, cut: PlaneCut): { readonly negative: number; readonly positive: number } {
@@ -695,40 +807,20 @@ export function conePlateSection(shape: ConeShape, scale: PhysicalScale, cut: Pl
     throw new GeometryError(`A plate ${cut.plate.thicknessMm} mm thick leaves a part of the cone too thin.`);
   }
   const dimensions = roundDimensionsMm(shape, scale);
-  const polyhedron = conePolyhedron(dimensions);
   const centre = coneCut(shape, scale, planeOfPlateCut(cut));
-  const { n, u, v } = centre.frame;
-  // + 0 turns −0 into 0, as for a normal written out.
-  const flipped: Vec3 = [-n[0] + 0, -n[1] + 0, -n[2] + 0];
-  const middle = centre.plane.offset;
-  const halfThickness = cut.plate.thicknessMm / 2;
-  // Each interface is its cut read off the plate's face: its identity, its geometry from that face. n·x = −(m − T/2) is the
-  // plane n·x = m − T/2 with its normal into part 1 or the lower part.
-  const interfaces = {
-    lower: {
-      ...centre,
-      ...facetedSection(polyhedron, { n: flipped, u, v: cross(u, flipped) }, -(middle - halfThickness), dimensions.radius),
-    },
-    upper: { ...centre, ...facetedSection(polyhedron, { n, u, v }, middle + halfThickness, dimensions.radius) },
-  };
-  const between = polyhedron.vertices.filter((vertex) => Math.abs(dot(n, vertex) - middle) <= halfThickness);
   return {
     ...centre,
+    ...facetedPlate(conePolyhedron(dimensions), centre, cut, dimensions.radius),
     type: 'cone-plate',
     baseType: centre.type,
-    halfThickness,
-    margin: cut.plate.marginMm,
-    interfaces,
-    slab: slabExtent([...interfaces.lower.contour, ...interfaces.upper.contour, ...between], centre.frame),
-    standingLevel: Math.min(...polyhedron.vertices.map((vertex) => vertex[2])),
   };
 }
 
-/** The cut with a section plate of a solid that offers one; see `ConePlateSection` and `BallPlateSection`. */
+/** The cut with a section plate of a solid that offers one; see `ConePlateSection`, `BallPlateSection` and `CylinderPlateSection`. */
 export function plateSection(shape: SectionedShape, scale: PhysicalScale, cut: PlateCut): PlateSection {
   if (shape.kind === 'cone') return conePlateSection(shape, scale, cut);
   if (shape.kind === 'ball') return ballPlateSection(scale, cut);
-  throw new GeometryError('Only a cone and a ball offer a section plate so far.');
+  return cylinderPlateSection(shape, scale, cut);
 }
 
 /**
@@ -1014,10 +1106,7 @@ export function solidCut(shape: SectionedShape, scale: PhysicalScale, cut: Solid
     if (typeof cut === 'number') return coneSection(shape, scale, cut);
     return 'offsetPercent' in cut ? coneVerticalSection(shape, scale, cut.offsetPercent) : coneObliqueSection(shape, scale, cut);
   }
-  if (typeof cut === 'number') return cylinderSection(shape, scale, cut);
-  if ('offsetPercent' in cut) return verticalCylinderSection(shape, scale, cut.offsetPercent);
-  if ('positionPercent' in cut) return obliqueCylinderSection(shape, scale, cut);
-  throw new GeometryError('A cylinder has no apex to cut through.');
+  return cylinderCut(shape, scale, cut);
 }
 
 /**

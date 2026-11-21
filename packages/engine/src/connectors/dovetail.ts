@@ -13,7 +13,9 @@ import {
   type ConeObliqueSection,
   type ConeParallelSection,
   type ConeVerticalSection,
+  type CylinderFaceSection,
   connectorVolumeTolerance,
+  cutTypeOf,
   type FacetedSection,
   facesOfPart,
   framePoint,
@@ -269,20 +271,24 @@ function wallsOf(
     case 'cone-vertical':
     case 'cone-oblique':
       return coneWalls(section, dimensions, groove, towardsStop);
+    case 'cylinder-face':
+      return coneWalls(section, dimensions, groove, towardsStop);
     case 'cone-plate':
       return (['upper', 'lower'] as const).flatMap((part) => plateInterfaceWalls(section.interfaces[part], part, dimensions));
     case 'ball-plate':
+      return (['upper', 'lower'] as const).flatMap((part) => plateInterfaceWalls(section.interfaces[part], part, dimensions));
+    case 'cylinder-plate':
       return (['upper', 'lower'] as const).flatMap((part) => plateInterfaceWalls(section.interfaces[part], part, dimensions));
   }
 }
 
 /**
- * The walls of one part's groove beside a section plate: those of the cone's cut at the plate's face, in the interface's own
- * frame, towards that interface's stop. The tongue's root lies in the plate, which is solid across its whole
- * thickness, so no part keeps material under it.
+ * The walls of one part's groove beside a section plate: those of the solid's cut at the plate's face, in the interface's own
+ * frame, towards that interface's stop; a cylinder's are read off its faces as a cone's are, since the face may meet a base. The
+ * tongue's root lies in the plate, which is solid across its whole thickness, so no part keeps material under it.
  */
 function plateInterfaceWalls(
-  section: ConeParallelSection | ConeVerticalSection | ConeObliqueSection | BallHorizontalSection,
+  section: ConeParallelSection | ConeVerticalSection | ConeObliqueSection | BallHorizontalSection | CylinderFaceSection,
   part: 'lower' | 'upper',
   dimensions: DovetailDimensions,
 ): DovetailIssue[] {
@@ -391,6 +397,7 @@ function obliqueWalls(
 }
 
 /**
+ * Read off the faces, for a cone and for a cylinder's cut beside a section plate, which may meet a base or reach past the axis.
  * The cone narrows above the cut, or upwards along a vertical one, so the expanded groove can run out of material although
  * the tongue's footprint fits in the section. The engaged groove is a convex prism along u, so that its corners at the
  * closed end and at the seated tongue's end towards the entrance bound it: at its top they measure the material behind
@@ -403,7 +410,7 @@ function obliqueWalls(
  * and the first three each meet the last at the closed end's corners, which these walls keep inside the part.
  */
 function coneWalls(
-  section: ConeParallelSection | ConeVerticalSection | ConeObliqueSection,
+  section: ConeParallelSection | ConeVerticalSection | ConeObliqueSection | CylinderFaceSection,
   { height, length, clearance }: DovetailDimensions,
   groove: ReturnType<typeof grooveExtent>,
   towardsStop: 1 | -1,
@@ -511,7 +518,7 @@ export function dovetailDimensions(
 
 /** Whether the cut is horizontal, so that its slide axis has no upper and lower end; its two sides are then named by u. */
 export const isHorizontalCut = (section: SolidSection): boolean => {
-  const type = isPlateSection(section) ? section.baseType : section.type;
+  const type = cutTypeOf(section);
   return type === 'parallel-to-bases' || type === 'cone-parallel' || type === 'ball-horizontal';
 };
 

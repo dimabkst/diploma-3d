@@ -23,6 +23,7 @@ import {
   coneApexChord,
   coneObliqueSection,
   coneVerticalSection,
+  connectorVolumeTolerance,
   cutOfSection,
   isApexChordUsable,
   isPlateCut,
@@ -193,6 +194,7 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
       const below = splitByPlane(track, above.negative, { normal: plane.normal, offset: plane.offset - half });
       parts = { lower: below.negative, upper: above.positive };
       plate = buildSectionPlate(kernel, track, plateGeometry);
+      assertFillsSlab(track, solid, plate, plane, half, spec.scale.longestDimensionMm);
     }
     let dowels: readonly Manifold[] = [];
     const longest = spec.scale.longestDimensionMm;
@@ -316,6 +318,20 @@ function assertStanding(plate: Manifold, solid: Manifold, geometry: SectionPlate
   }
 }
 
+/**
+ * The plate, before any connector, holds all of the solid between its faces, so that the assembly is the whole solid: its
+ * outline's margin and the rounding of the corners the standing plane makes only shape what lies outside it.
+ */
+function assertFillsSlab(track: Track, solid: Manifold, plate: Manifold, plane: Plane, half: number, longest: number): void {
+  const n = plane.normal;
+  const below = track(solid.trimByPlane([n[0], n[1], n[2]], plane.offset - half));
+  const slab = track(below.trimByPlane([-n[0], -n[1], -n[2]], -(plane.offset + half)));
+  const missing = track(slab.subtract(plate)).volume();
+  if (missing > connectorVolumeTolerance(longest)) {
+    throw new GeometryError(`The section plate leaves ${missing} mm³ of the solid between its faces empty.`);
+  }
+}
+
 function assertConnected(solid: Manifold): void {
   const pieces = solid.decompose();
   const count = pieces.length;
@@ -324,14 +340,14 @@ function assertConnected(solid: Manifold): void {
 }
 
 /**
- * A section plate's geometry, refused before anything is built where it does not apply: only a cone's cuts and a ball's
- * horizontal one offer one so far, not with a twist connector, and its thickness, along the plane's normal, must leave both
+ * A section plate's geometry, refused before anything is built where it does not apply: a cylinder's and a cone's cuts and a
+ * ball's horizontal one offer one, not with a twist connector, and its thickness, along the plane's normal, must leave both
  * parts. The plane itself was checked before, by the cut's own limits.
  */
 function planPlate({ shape, scale, section }: ModelSpec): SectionPlateGeometry | undefined {
   if (section === undefined || !('plate' in section) || section.plate === undefined) return undefined;
-  if (shape.kind !== 'cone' && shape.kind !== 'ball') {
-    throw new InvalidModelSpecError(['section.plate: only a cone and a ball offer a section plate so far.']);
+  if (shape.kind !== 'cylinder' && shape.kind !== 'cone' && shape.kind !== 'ball') {
+    throw new InvalidModelSpecError(['section.plate: only a cylinder, a cone and a ball offer a section plate.']);
   }
   if (section.connector?.type === 'twist') {
     throw new InvalidModelSpecError(['section.plate: a twist connector cannot join the parts through a section plate.']);

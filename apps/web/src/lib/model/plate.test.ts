@@ -19,6 +19,7 @@ import {
   resetShapeParameters,
   resolveModelRequest,
   roundConnectorIssueMessage,
+  TWIST_WITH_PLATE_MESSAGE,
 } from './parameters.ts';
 
 const kernel = await loadGeometryKernel();
@@ -421,5 +422,218 @@ describe('the section plate of a ball', () => {
     });
     expect(artifacts.model.solids.map((solid) => solid.part)).toEqual(['lower', 'upper', 'plate']);
     expect(artifacts.printFile.fileName).toBe('ball-horizontal-section-plate.3mf');
+  });
+});
+
+describe('the section plate of a cylinder', () => {
+  const cylinderChoices = (overrides: Partial<ParameterChoices> = {}): ParameterChoices => ({
+    ...initialParameterChoices(),
+    cylinderSection: 'parallel-to-bases',
+    ...overrides,
+  });
+  const cylinderRequest = (overrides: Partial<ParameterTexts> = {}, chosen: Partial<ParameterChoices> = {}) =>
+    resolveModelRequest('cylinder', texts(overrides), cylinderChoices(chosen), { connectorEdits: {} });
+  const cylinderGroup = (title: string, overrides: Partial<ParameterTexts> = {}, chosen: Partial<ParameterChoices> = {}) => {
+    const { values, sectionRanges, connectorStatus, plateClipped } = cylinderRequest(overrides, chosen);
+    const panel = shapePanel('cylinder', cylinderChoices(chosen), { values, sectionRanges, connectorStatus, plateClipped });
+    const found = panel.type === 'parameters' ? panel.sections.find((group) => group.title === title) : undefined;
+    if (found === undefined) throw new Error(`No ${title}`);
+    return found;
+  };
+  const enabledConnectors = (group: ReturnType<typeof cylinderGroup>) =>
+    (group.fields[0] as unknown as { options: { value: string; disabled?: boolean }[] }).options
+      .filter((option) => !option.disabled)
+      .map((option) => option.value);
+  const cuts = [
+    ['parallel', { cylinderSection: 'parallel-to-bases' }, { type: 'parallel-to-bases', positionPercent: 50 }],
+    ['vertical', { cylinderSection: 'vertical' }, { type: 'vertical', offsetPercent: 0 }],
+    ['oblique', { cylinderSection: 'oblique' }, { type: 'oblique', positionPercent: 50, inclinationDeg: 45, directionDeg: 0 }],
+  ] as const;
+
+  it.each(cuts)('a %s cut: off at first, the plain cut as it was, the same switch and fields once chosen', (_, chosen, plain) => {
+    expect(initialParameterChoices().cylinderPlate).toBe(false);
+    expect(initialParameterTexts()).toMatchObject({ cylinderPlateThicknessMm: '1,6', cylinderPlateMarginMm: '10' });
+    expect(cylinderRequest({}, chosen).spec?.section).toEqual(plain);
+    // Its drafts block nothing while it is off.
+    expect(cylinderRequest({ cylinderPlateThicknessMm: 'abc' }, chosen).spec?.section).toEqual(plain);
+    const plated = cylinderRequest({}, { ...chosen, cylinderPlate: true, cylinderConnector: 'dowel' });
+    expect(plated.errors).toEqual({});
+    expect(plated.spec?.section).toMatchObject({
+      ...plain,
+      plate: { thicknessMm: 1.6, marginMm: 10 },
+      connector: { type: 'dowel' },
+    });
+    const group = cylinderGroup('Переріз', {}, { ...chosen, cylinderPlate: true });
+    expect(
+      group.fields
+        .map((field) => field.key)
+        .filter((key) => !key.endsWith('-clipped'))
+        .slice(-4),
+    ).toEqual(['cylinderPartsSeparated', 'cylinderPlate', 'cylinderPlateThicknessMm', 'cylinderPlateMarginMm']);
+    expect(group.status).toEqual({ text: 'з пластиною', highlighted: true });
+    expect(group.help?.text).toContain('товщина вимірюється перпендикулярно до площини');
+    expect(group.help?.text).toContain('Якщо шар пластини містить вісь циліндра');
+    // Every non-rotating connector stays offered through the plate.
+    const connector = cylinderGroup('Кріплення', {}, { ...chosen, cylinderPlate: true });
+    expect(enabledConnectors(connector)).toEqual(['none', 'dovetail', 'plug', 'dowel']);
+  });
+
+  it('keeps the twist connector for a right cylinder’s parallel cut without a plate, and refuses it through one', () => {
+    const plain = cylinderGroup('Кріплення');
+    expect(enabledConnectors(plain)).toEqual(['none', 'dovetail', 'plug', 'dowel', 'twist']);
+    expect(cylinderRequest({}, { cylinderConnector: 'twist' }).spec?.section).toMatchObject({ connector: { type: 'twist' } });
+    // Without a plate the other cuts never offered it.
+    expect(enabledConnectors(cylinderGroup('Кріплення', {}, { cylinderSection: 'vertical' }))).not.toContain('twist');
+    const plated = cylinderGroup('Кріплення', {}, { cylinderPlate: true });
+    expect(plated.fields).toContainEqual(
+      expect.objectContaining({ text: 'Поворотне з’єднання не працює із січною пластиною; його налаштування збережено.' }),
+    );
+    // Turning the plate on with it chosen falls back to none, said so, and its settings stay as they were.
+    const state: ParameterState = {
+      texts: texts({ cylinderTwistSizeMm: '20', cylinderTwistClearanceMm: '0,6' }),
+      choices: cylinderChoices({ cylinderPlate: true, cylinderConnector: 'twist' }),
+    };
+    const fallen = plateConnectorFallback('cylinder', state);
+    expect(fallen?.choices.cylinderConnector).toBe('none');
+    expect(fallen?.texts).toEqual(state.texts);
+    expect(plateConnectorFallback('cylinder', { ...state, choices: cylinderChoices({ cylinderConnector: 'twist' }) })).toBe(
+      undefined,
+    );
+    // Asked for anyway, it is left out of the model, which is then not for download.
+    const refused = cylinderRequest({}, { cylinderPlate: true, cylinderConnector: 'twist' });
+    expect(refused.connectorStatus?.unavailable).toBe(TWIST_WITH_PLATE_MESSAGE);
+    expect(refused.spec?.section).toEqual({
+      type: 'parallel-to-bases',
+      positionPercent: 50,
+      plate: { thicknessMm: 1.6, marginMm: 10 },
+    });
+    expect(refused.key).toMatch(/:connector-unavailable$/);
+    // Off again, the twist connector is back with what was stored.
+    const back = resolveModelRequest('cylinder', state.texts, cylinderChoices({ cylinderConnector: 'twist' }));
+    expect(back.spec?.section).toMatchObject({ connector: { type: 'twist', sizeMm: 20, holeClearanceMm: 0.6 } });
+  });
+
+  it('the fields of plugs and dowels say how much of them crosses this solid’s plate', () => {
+    const plug = cylinderGroup(
+      'Кріплення',
+      { cylinderPlateThicknessMm: '2,4' },
+      { cylinderPlate: true, cylinderConnector: 'plug' },
+    );
+    expect(sectionNumberFields(plug).map((field) => field.label)).toContain('Заглиблення виступу, мм');
+    const notes = plug.fields.flatMap((field) => (field.type === 'note' ? [field.text] : []));
+    expect(
+      notes.some((text) => text.startsWith('Над нижньою частиною виступ має') && text.includes('2,4 мм крізь пластину')),
+    ).toBe(true);
+    expect(plug.help?.text).toContain('верхня перевернута на верхню');
+    const dowel = cylinderGroup(
+      'Кріплення',
+      { cylinderPlateThicknessMm: '2,4' },
+      { cylinderSection: 'vertical', cylinderPlate: true, cylinderConnector: 'dowel' },
+    );
+    expect(sectionNumberFields(dowel).map((field) => field.label)).toContain('Довжина штифта в частинах, мм');
+    const dowelNotes = dowel.fields.flatMap((field) => (field.type === 'note' ? [field.text] : []));
+    expect(dowelNotes.some((text) => text.startsWith('Повна довжина штифта — ') && text.includes('2,4 мм крізь пластину'))).toBe(
+      true,
+    );
+    const dovetail = cylinderGroup(
+      'Кріплення',
+      {},
+      { cylinderSection: 'oblique', cylinderPlate: true, cylinderConnector: 'dovetail' },
+    );
+    expect(dovetail.help?.text).toContain('Виступи друкуються на обох гранях січної пластини, пази — у частинах 1 і 2.');
+  });
+
+  it('narrows the thickness to what both parts keep along the normal, and is unavailable where none fits', () => {
+    const tight = cylinderRequest(
+      { printSizeMm: '20', cylinderSectionOffsetPercent: '70', cylinderPlateThicknessMm: '4' },
+      { cylinderSection: 'vertical', cylinderPlate: true },
+    );
+    expect(tight.sectionRanges?.cylinderPlateThicknessMm?.max).toBeLessThan(4);
+    expect(tight.errors.cylinderPlateThicknessMm).toMatch(/^За цього перерізу допустимо від 1,2 мм до /);
+    expect(tight.spec).toBeUndefined();
+    const none = cylinderGroup(
+      'Переріз',
+      { printSizeMm: '10', cylinderSectionOffsetPercent: '70' },
+      { cylinderSection: 'vertical' },
+    );
+    expect(none.fields.find((field) => field.key === 'cylinderPlate')).toMatchObject({ disabled: true });
+    expect(none.fields).toContainEqual(expect.objectContaining({ text: PLATE_UNAVAILABLE_ELSEWHERE_MESSAGE }));
+  });
+
+  it('says where the base cuts it off, never on a cut parallel to the bases', () => {
+    const vertical = cylinderGroup('Переріз', {}, { cylinderSection: 'vertical', cylinderPlate: true });
+    expect(vertical.fields.at(-1)).toMatchObject({ type: 'note', text: PLATE_CLIPPED_NOTE });
+    expect(
+      cylinderRequest({ cylinderSectionPercent: '10', cylinderPlateMarginMm: '30' }, { cylinderPlate: true }).plateClipped,
+    ).toBe(false);
+  });
+
+  it('reset turns it off with its defaults and keeps the print size', () => {
+    const state: ParameterState = {
+      texts: texts({ printSizeMm: '120', cylinderPlateThicknessMm: '3', cylinderPlateMarginMm: '20' }),
+      choices: cylinderChoices({ cylinderPlate: true }),
+    };
+    expect(canResetShapeParameters('cylinder', state)).toBe(true);
+    const reset = resetShapeParameters('cylinder', state);
+    expect(reset.choices.cylinderPlate).toBe(false);
+    expect(reset.texts).toMatchObject({ printSizeMm: '120', cylinderPlateThicknessMm: '1,6', cylinderPlateMarginMm: '10' });
+  });
+
+  it('records the cylinder’s cut with its plate in the download, with the dowels alone', async () => {
+    const result = cylinderRequest(
+      { cylinderObliquePositionPercent: '30', cylinderPlateThicknessMm: '2' },
+      { cylinderSection: 'oblique', cylinderPlate: true, cylinderConnector: 'dowel' },
+    );
+    if (result.spec === undefined) throw new Error('expected a model');
+    const artifacts = await buildModelArtifacts(kernel, result.spec, result.settingsInput);
+    const json = JSON.parse(readThreeMfPart(artifacts.printFile.bytes, MODEL_SETTINGS_PATH) as string);
+    expect(json.sourceModel.section).toEqual({
+      type: 'oblique',
+      positionPercent: 30,
+      inclinationDeg: 45,
+      directionDeg: 0,
+      plate: { thicknessMm: 2, marginMm: 10 },
+    });
+    expect(artifacts.model.solids.map((solid) => solid.part)).toEqual(['part-1', 'part-2', 'plate', 'dowel']);
+    expect(artifacts.printFile.fileName).toBe('cylinder-oblique-section-plate.3mf');
+    expect(json.sourceModel.connector.dimensions.dowelLengthMm).toBeCloseTo(
+      2 * json.sourceModel.connector.dimensions.engagementMm + 2,
+      9,
+    );
+    expect(artifacts.pinsFile).toBeDefined();
+  });
+
+  it('names the part and the plate in what it explains', () => {
+    expect(
+      roundConnectorIssueMessage(
+        { code: 'hole-bottom-thin', part: 'upper', valueMm: 1, minimumMm: 1.2 },
+        'plug',
+        1,
+        'parallel-to-bases',
+        'circle',
+        true,
+      ),
+    ).toBe(
+      'Під дном отвору у верхній частині лишається 1 мм, потрібно щонайменше 1,2 мм. Зменште заглиблення виступу або опустіть переріз, або зменште товщину пластини.',
+    );
+    expect(dovetailIssueMessage({ code: 'groove-wall-thin', part: 'lower', valueMm: 1, minimumMm: 1.2 }, 'vertical')).toBe(
+      'Стінка біля паза у частині 1 — 1 мм, потрібно щонайменше 1,2 мм. Зменште висоту чи довжину виступу, товщину пластини або зменште зміщення від осі.',
+    );
+  });
+});
+
+describe('the plug through a ball’s plate', () => {
+  it('names the ball’s own plate thickness in its height', () => {
+    const chosen: ParameterChoices = {
+      ...initialParameterChoices(),
+      ballSection: 'horizontal',
+      ballPlate: true,
+      ballConnector: 'plug',
+    };
+    const result = resolveModelRequest('ball', texts({ ballPlateThicknessMm: '2,2' }), chosen, { connectorEdits: {} });
+    const panel = shapePanel('ball', chosen, { values: result.values, sectionRanges: result.sectionRanges });
+    const group = panel.type === 'parameters' ? panel.sections.find((part) => part.title === 'Кріплення') : undefined;
+    const notes = group?.fields.flatMap((field) => (field.type === 'note' ? [field.text] : [])) ?? [];
+    expect(notes.some((text) => text.includes('2,2 мм крізь пластину'))).toBe(true);
   });
 });

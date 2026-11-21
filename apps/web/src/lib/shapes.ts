@@ -657,6 +657,11 @@ const BALL_PLATE_HELP =
   'Якщо шар пластини містить центр кулі, куля найширша саме всередині пластини: контур пластини охоплює весь екватор, хоча ' +
   'обидві грані менші за нього.';
 
+const CYLINDER_PLATE_HELP =
+  'Якщо шар пластини містить вісь циліндра, циліндр найширший саме всередині пластини, і контур охоплює цю ширину. Похилий ' +
+  'переріз може зачіпати основи, тож грані пластини не завжди є повними еліпсами. Поворотне з’єднання з пластиною ' +
+  'недоступне.';
+
 const withPlateHelp = (help: Help, throughApex = false, extra?: string): Help => ({
   ...help,
   text: [help.text, CONE_PLATE_HELP, ...(throughApex ? [APEX_PLATE_HELP] : []), ...(extra === undefined ? [] : [extra])].join(
@@ -897,6 +902,11 @@ const CONE_PLATE_PRINT_NOTE =
   'виступами на обох гранях вона стоїть на ребрі, виступами вздовж висоти друку: додайте кайму (brim) і перевірте в ' +
   'слайсері, чи потрібні підтримки.';
 
+const CYLINDER_PLATE_PRINT_NOTE =
+  'У файлі нижня частина стоїть на нижній основі, а верхня перевернута на верхню, тож отвори чи пази обох частин ' +
+  'відкриваються догори. Пластина з отворами або без кріплення лежить пласко. З виступами на обох гранях вона стоїть на ' +
+  'ребрі, виступами вздовж висоти друку: додайте кайму (brim) і перевірте в слайсері, чи потрібні підтримки.';
+
 const EXPLODED_PLATE_NOTE = 'Розсунутий перегляд лише показує деталі окремо вздовж нормалі до пластини; це не напрям складання.';
 
 const BALL_PLATE_PRINT_NOTE =
@@ -1055,7 +1065,7 @@ function connectorSection(
   const offersTwist = twistAvailable(kind, choices, values);
   // Through a section plate the pins also cross its thickness, which their fields leave out.
   const plated = plateChosen(kind, choices);
-  const plateThickness = plated ? values.conePlateThicknessMm : undefined;
+  const plateThickness = plated && keys.plate !== undefined ? values[keys.plate.thickness] : undefined;
   const selector: ChoiceField = {
     type: 'choice',
     key: keys.connector,
@@ -1304,7 +1314,9 @@ function connectorSection(
       ? [
           note(
             'twist-unsupported',
-            'Поворотне з’єднання поки доступне лише для прямого циліндра з перерізом, паралельним основам.',
+            plated && kind === 'cylinder'
+              ? 'Поворотне з’єднання не працює із січною пластиною; його налаштування збережено.'
+              : 'Поворотне з’єднання поки доступне лише для прямого циліндра з перерізом, паралельним основам.',
           ),
         ]
       : [];
@@ -1315,7 +1327,14 @@ function connectorSection(
       : [];
   const helpOf = (type: Exclude<ConnectorChoice, 'none'>): Help => {
     if (plated && type !== 'twist') {
-      const note = kind === 'ball' ? BALL_PLATE_PRINT_NOTE : numbered ? NUMBERED_PLATE_PRINT_NOTE : CONE_PLATE_PRINT_NOTE;
+      const note =
+        kind === 'ball'
+          ? BALL_PLATE_PRINT_NOTE
+          : numbered
+            ? NUMBERED_PLATE_PRINT_NOTE
+            : kind === 'cylinder'
+              ? CYLINDER_PLATE_PRINT_NOTE
+              : CONE_PLATE_PRINT_NOTE;
       return type === 'dovetail'
         ? plateDovetailHelp(numbered, entrance, note)
         : type === 'plug'
@@ -1577,7 +1596,10 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
   const withPlate = chosen !== 'none' && plateOn;
   return section(`${kind}-section`, 'Переріз', [selector, ...details[chosen]], {
     initiallyOpen: false,
-    help: withPlate && shownHelp !== undefined ? withPlateHelp(shownHelp, throughApex && chosen === 'oblique') : shownHelp,
+    help:
+      withPlate && shownHelp !== undefined
+        ? withPlateHelp(shownHelp, throughApex && chosen === 'oblique', kind === 'cylinder' ? CYLINDER_PLATE_HELP : undefined)
+        : shownHelp,
     status: {
       text: chosen === 'none' ? 'немає' : withPlate ? 'з пластиною' : namesOf(chosen).toLowerCase(),
       highlighted: chosen !== 'none',

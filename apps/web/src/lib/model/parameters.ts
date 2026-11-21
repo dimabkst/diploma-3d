@@ -192,6 +192,8 @@ export type ParameterKey =
   | 'cylinderTwistSizeMm'
   | 'cylinderTwistClearanceMm'
   | 'cylinderTwistAxialMm'
+  | 'cylinderPlateThicknessMm'
+  | 'cylinderPlateMarginMm'
   | 'coneHeightRatio'
   | 'coneOffsetRatio'
   | 'coneInclinationDeg'
@@ -253,6 +255,8 @@ export type ParameterChoices = {
   cylinderRoundProfile: ConnectorProfile;
   /** Whether the preview moves the parts of the section apart; it changes neither the geometry nor the print file. */
   cylinderPartsSeparated: boolean;
+  /** Whether the cut removes a section plate, printed as a third object between the parts. */
+  cylinderPlate: boolean;
   coneSection: SectionChoice;
   coneConnector: ConnectorChoice;
   coneDovetailEntrance: DovetailEntrance;
@@ -274,7 +278,13 @@ export type ParameterChoices = {
 };
 
 /** The switches among the choices. */
-export type ToggleKey = 'cylinderPartsSeparated' | 'conePartsSeparated' | 'conePlate' | 'ballPartsSeparated' | 'ballPlate';
+export type ToggleKey =
+  | 'cylinderPartsSeparated'
+  | 'cylinderPlate'
+  | 'conePartsSeparated'
+  | 'conePlate'
+  | 'ballPartsSeparated'
+  | 'ballPlate';
 
 /** The choices picked from options. */
 export type ChoiceKey = Exclude<keyof ParameterChoices, ToggleKey | 'coneApexStarted'>;
@@ -412,6 +422,8 @@ export const initialParameterTexts = (): ParameterTexts => ({
   cylinderTwistSizeMm: formatDecimal(TWIST_PLACEHOLDER_SIZE_MM),
   cylinderTwistClearanceMm: formatDecimal(DEFAULT_TWIST.holeClearanceMm),
   cylinderTwistAxialMm: formatDecimal(DEFAULT_TWIST.axialClearanceMm),
+  cylinderPlateThicknessMm: formatDecimal(DEFAULT_SECTION_PLATE.thicknessMm),
+  cylinderPlateMarginMm: formatDecimal(DEFAULT_SECTION_PLATE.marginMm),
   coneSectionPercent: formatDecimal(DEFAULT_SECTION_POSITION_PERCENT),
   conePlateThicknessMm: formatDecimal(DEFAULT_SECTION_PLATE.thicknessMm),
   conePlateMarginMm: formatDecimal(DEFAULT_SECTION_PLATE.marginMm),
@@ -456,6 +468,7 @@ export const initialParameterChoices = (): ParameterChoices => ({
   cylinderRoundCount: DEFAULT_ROUND_CONNECTOR.count,
   cylinderRoundProfile: DEFAULT_CONNECTOR_PROFILE,
   cylinderPartsSeparated: true,
+  cylinderPlate: false,
   coneSection: 'none',
   coneConnector: 'none',
   coneDovetailEntrance: 'standard',
@@ -650,6 +663,8 @@ const validators: Readonly<Record<IndependentKey, (text: string, exact?: number)
     validateNumber(text, inclusiveRange(TWIST_CLEARANCE_LIMITS), TWIST_CLEARANCE_LIMITS, '0,5', ' мм', exact),
   cylinderTwistAxialMm: (text, exact) =>
     validateNumber(text, inclusiveRange(TWIST_AXIAL_CLEARANCE_LIMITS), TWIST_AXIAL_CLEARANCE_LIMITS, '0,2', ' мм', exact),
+  cylinderPlateThicknessMm: validatePlateThickness,
+  cylinderPlateMarginMm: validatePlateMargin,
   coneSectionPercent: validateSectionPosition,
   conePlateThicknessMm: validatePlateThickness,
   conePlateMarginMm: validatePlateMargin,
@@ -840,7 +855,7 @@ export function resolveModelRequest(
   }
   const sectionRanges = checked?.ranges;
   const connectorStatus = twistElsewhere(kind, choices, resolved.shape)
-    ? { context: '', corrections: [], unavailable: TWIST_UNSUPPORTED_MESSAGE }
+    ? { context: '', corrections: [], unavailable: twistElsewhereMessage(kind, choices) }
     : checked?.resolved?.status;
   Object.assign(values, checked?.resolved?.values);
   if (Object.keys(errors).length > 0) {
@@ -887,9 +902,16 @@ export const TWIST_UNSUPPORTED_MESSAGE =
   'Поворотне з’єднання поки доступне лише для прямого циліндра з перерізом, паралельним основам. Завантаження вимкнено: змініть ' +
   'тіло чи переріз або оберіть «Без кріплення».';
 
-/** Whether the solid and the cut are those the twist connector works for; the solid's own values count once they are valid. */
-function twistFits(kind: ShapeKind, type: SectionType | undefined, shape: ShapeInput | undefined): boolean {
-  if (kind !== 'cylinder' || type !== 'parallel-to-bases') return false;
+/** Why the twist connector is not offered beside a section plate, which it cannot join the parts through. */
+export const TWIST_WITH_PLATE_MESSAGE =
+  'Поворотне з’єднання не працює із січною пластиною. Завантаження вимкнено: вимкніть пластину або оберіть інше кріплення.';
+
+/**
+ * Whether the solid and the cut are those the twist connector works for, without a section plate; the solid's own values count
+ * once they are valid.
+ */
+function twistFits(kind: ShapeKind, choices: ParameterChoices, shape: ShapeInput | undefined): boolean {
+  if (kind !== 'cylinder' || activeSection(kind, choices) !== 'parallel-to-bases' || plateChosen(kind, choices)) return false;
   return shape?.kind !== 'cylinder' || twistSupported(shape as SectionedShape, 0);
 }
 
@@ -897,7 +919,7 @@ function twistFits(kind: ShapeKind, type: SectionType | undefined, shape: ShapeI
 export const twistAvailable = (kind: ShapeKind, choices: ParameterChoices, values: ParameterValues): boolean =>
   twistFits(
     kind,
-    activeSection(kind, choices),
+    choices,
     kind !== 'cylinder' || values.cylinderOffsetRatio === undefined
       ? undefined
       : { kind: 'cylinder', heightRatio: values.cylinderHeightRatio ?? 1, offsetRatio: values.cylinderOffsetRatio },
@@ -905,7 +927,11 @@ export const twistAvailable = (kind: ShapeKind, choices: ParameterChoices, value
 
 /** A twist connector chosen where it does not work: the model is then the plain cut, not offered for download. */
 const twistElsewhere = (kind: ShapeKind, choices: ParameterChoices, shape: ShapeInput | undefined): boolean =>
-  activeConnector(kind, choices) === 'twist' && !twistFits(kind, activeSection(kind, choices), shape);
+  activeConnector(kind, choices) === 'twist' && !twistFits(kind, choices, shape);
+
+/** Why a twist connector chosen where it does not work is left out. */
+export const twistElsewhereMessage = (kind: ShapeKind, choices: ParameterChoices): string =>
+  plateChosen(kind, choices) ? TWIST_WITH_PLATE_MESSAGE : TWIST_UNSUPPORTED_MESSAGE;
 
 /** How a displaced figure's inclination was entered, with the angles themselves when they were. */
 function inclinationInputOf(
@@ -1088,13 +1114,7 @@ function resolveRound(
     status: {
       context,
       corrections: outcome.adjusted
-        ? correctionsOf(
-            connector,
-            actual,
-            longestDimensionMm,
-            outcome.issues,
-            section.type === 'parallel-to-bases' && section.plate !== undefined,
-          )
+        ? correctionsOf(connector, actual, longestDimensionMm, outcome.issues, 'plate' in section && section.plate !== undefined)
         : [],
     },
     values: {
@@ -1258,11 +1278,11 @@ const withoutPlate = (section: Section): Section => {
 };
 
 /**
- * A cone's section plate on any of its cuts, and the connector's checks, which already read the plate: each part's face lies
- * half of it from the plane, along the plane's normal. The thicknesses that leave both parts their thickness are a range of
- * every valid cone cut, also while the plate is off, so that the switch says when none fits. Nothing is moved to make the
+ * A section plate on any cut of a solid that offers one, and the connector's checks, which already read the plate: each part's
+ * face lies half of it from the plane, along the plane's normal. The thicknesses that leave both parts their thickness are a
+ * range of every valid cut, also while the plate is off, so that the switch says when none fits. Nothing is moved to make the
  * plate fit, and it is never left out silently: a thickness beyond the range, or a cut where none fits, is the thickness
- * field's error. Other solids go straight to the connector's checks.
+ * field's error.
  */
 function connectorChecks(
   keys: SectionKeys,
@@ -1272,9 +1292,7 @@ function connectorChecks(
   edits: ConnectorEdits | undefined,
 ): SectionCheck | undefined {
   const plate = plateKeysOf(keys);
-  if (plate === undefined || (shape.kind !== 'cone' && shape.kind !== 'ball')) {
-    return jointChecks(keys, shape, longestDimensionMm, section, edits);
-  }
+  if (plate === undefined) return jointChecks(keys, shape, longestDimensionMm, section, edits);
   const plane = cutOfSection(withoutPlate(section));
   const range = plateThicknessRange(shape, { longestDimensionMm }, plane as Exclude<typeof plane, { plate: unknown }>);
   const fits = range.min <= range.max + CONSTRAINT_ROUNDOFF_MM;
@@ -1413,13 +1431,10 @@ function jointChecks(
   const feasibility = cachedFeasibility(shape, longestDimensionMm, section);
   if (feasibility === undefined) return undefined;
   const { dovetail, round } = keys;
+  const plated = 'plate' in section && section.plate !== undefined;
   // Beside a plate on another cut the parts keep their numbers, which the cut's own words give.
   const wording: CutWording =
-    shape.kind === 'cone' && section.type === 'parallel-to-bases'
-      ? section.plate === undefined
-        ? 'cone'
-        : 'cone-plate'
-      : section.type;
+    shape.kind === 'cone' && section.type === 'parallel-to-bases' ? (plated ? 'cone-plate' : 'cone') : section.type;
   const fields: [ParameterKey, string][] =
     connector.type === 'twist'
       ? [
@@ -1450,7 +1465,14 @@ function jointChecks(
       ? dovetailIssueMessage(issue as DovetailIssue, wording)
       : connector.type === 'twist'
         ? twistIssueMessage(issue as TwistIssue)
-        : roundConnectorIssueMessage(issue as RoundConnectorIssue, connector.type, connector.count, wording, connector.profile);
+        : roundConnectorIssueMessage(
+            issue as RoundConnectorIssue,
+            connector.type,
+            connector.count,
+            wording,
+            connector.profile,
+            plated,
+          );
   const parameters = feasibility.parameters as Readonly<Record<string, ParameterFeasibility<AnyIssue>>>;
   const errors: ParameterErrors = {};
   const ranges: SectionRanges = {};
@@ -1519,12 +1541,14 @@ export function roundConnectorIssueMessage(
   count: 1 | 2 = 1,
   cut: CutWording = 'parallel-to-bases',
   profile: ConnectorProfile = 'circle',
+  plated: boolean = cut === 'cone-plate',
 ): string {
   const shortfall = `${millimetres(issue.valueMm)}, потрібно щонайменше ${millimetres(issue.minimumMm)}`;
   const circular = profile === 'circle';
   const pin = type === 'plug' ? 'виступу' : 'штифта';
   const diameter = `${circular ? 'діаметр' : 'розмір'} ${pin}`;
-  const plated = cut === 'cone-plate';
+  // A cone's cut parallel to its base, beside a plate, narrows above it; any plate moves the parts' faces away from the cut.
+  const conePlated = cut === 'cone-plate';
   const length = plated
     ? type === 'plug'
       ? 'заглиблення виступу'
@@ -1533,7 +1557,7 @@ export function roundConnectorIssueMessage(
       ? 'висоту виступу'
       : 'довжину штифта';
   // Beside a plate each part's face lies half its thickness away from the cut, where the cone is narrower above.
-  const thinnerPlate = plated ? ' або зменште товщину пластини' : '';
+  const thinnerPlate = conePlated ? ' або зменште товщину пластини' : '';
   switch (issue.code) {
     case 'pin-too-thin':
       return circular
@@ -1553,7 +1577,7 @@ export function roundConnectorIssueMessage(
       return (
         `Стінка біля отвору ${partInMessage(issue.part, cut)} — ${shortfall}. ` +
         `Зменште ${diameter}${count === 2 ? ' або відстань від центра до осей' : ''}` +
-        `${cut === 'cone' || plated ? ' чи опустіть переріз' : cut === 'horizontal' ? ` чи ${BALL_REPAIR}` : ''}` +
+        `${cut === 'cone' || conePlated ? ' чи опустіть переріз' : cut === 'horizontal' ? ` чи ${BALL_REPAIR}` : ''}` +
         `${issue.part === 'upper' ? thinnerPlate : ''}.`
       );
     case 'holes-too-close':
@@ -1565,22 +1589,23 @@ export function roundConnectorIssueMessage(
           `Зменште ${length} чи ${diameter} або ${BALL_REPAIR}.`
         );
       }
-      if (cut === 'cone' || plated) {
+      if (cut === 'cone' || conePlated) {
         return issue.part === 'upper'
           ? `Біля дна отвору ${partInMessage(issue.part, cut)} конус звужується, і стінка лишається ${shortfall}. ` +
-              `Зменште ${length} чи ${diameter}${plated ? ',' : ' або'} опустіть переріз${thinnerPlate}.`
+              `Зменште ${length} чи ${diameter}${conePlated ? ',' : ' або'} опустіть переріз${thinnerPlate}.`
           : `Під дном отвору ${partInMessage(issue.part, cut)} лишається ${shortfall}. Зменште ${length}` +
-              `${plated ? ',' : ' або'} підніміть переріз${thinnerPlate}.`;
+              `${conePlated ? ',' : ' або'} підніміть переріз${thinnerPlate}.`;
       }
       return (
         `Під дном отвору ${partInMessage(issue.part, cut)} лишається ${shortfall}. ` +
         {
-          vertical: `Зменште ${length}, ${diameter} або зміщення від осі.`,
-          oblique: `Зменште ${length} чи ${diameter} або ${changePlane(cut)}.`,
-          'parallel-to-bases': `Зменште ${length} або ${issue.part === 'upper' ? 'опустіть' : 'підніміть'} переріз.`,
-          cone: `Зменште ${length} або ${issue.part === 'upper' ? 'опустіть' : 'підніміть'} переріз.`,
-          horizontal: `Зменште ${length} або ${BALL_REPAIR}.`,
-        }[wordingOf(cut)]
+          vertical: `Зменште ${length}, ${diameter} або зміщення від осі`,
+          oblique: `Зменште ${length} чи ${diameter} або ${changePlane(cut)}`,
+          'parallel-to-bases': `Зменште ${length} або ${issue.part === 'upper' ? 'опустіть' : 'підніміть'} переріз`,
+          cone: `Зменште ${length} або ${issue.part === 'upper' ? 'опустіть' : 'підніміть'} переріз`,
+          horizontal: `Зменште ${length} або ${BALL_REPAIR}`,
+        }[wordingOf(cut)] +
+        `${plated && !conePlated ? ', або зменште товщину пластини' : ''}.`
       );
     case 'base-thin':
       return {
@@ -1589,7 +1614,7 @@ export function roundConnectorIssueMessage(
         'parallel-to-bases': `Під виступом лишається ${shortfall} нижньої частини. Підніміть переріз або збільште найбільший габарит.`,
         cone:
           `Під виступом лишається ${shortfall} нижньої частини. Підніміть переріз` +
-          `${plated ? ', зменште товщину пластини' : ''} або збільште найбільший габарит.`,
+          `${conePlated ? ', зменште товщину пластини' : ''} або збільште найбільший габарит.`,
         horizontal: `Під виступом лишається ${shortfall} нижньої частини. Зменште ${diameter} або ${BALL_REPAIR}.`,
       }[wordingOf(cut)];
   }
@@ -1627,7 +1652,7 @@ const millimetres = (value: number) => `${formatDecimal(Math.max(0, Math.floor(v
 
 /**
  * A groove's problem beside a section plate, which concerns one part: the plate carries both tongues, and each part's face
- * lies half the plate's thickness from the cut, so a thinner plate helps where the cone narrows above it.
+ * lies half the plate's thickness from the cut, so a thinner plate leaves each part more material behind its groove.
  */
 function plateDovetailIssueMessage(
   issue: DovetailIssue & { readonly part: 'lower' | 'upper' },
@@ -1647,10 +1672,9 @@ function plateDovetailIssueMessage(
       issue.code as 'groove-wall-thin'
     ];
     const verb = issue.code === 'groove-wall-thin' ? '—' : 'лишається';
-    return (
-      `${what ?? 'Паз'} ${where} ${verb} ${shortfall}. Зменште висоту чи довжину виступу, товщину пластини або ` +
-      `${changePlane(cut)}.`
-    );
+    const plane =
+      cut === 'parallel-to-bases' ? 'пересуньте переріз' : cut === 'vertical' ? 'зменште зміщення від осі' : changePlane(cut);
+    return `${what ?? 'Паз'} ${where} ${verb} ${shortfall}. Зменште висоту чи довжину виступу, товщину пластини або ${plane}.`;
   }
   const towards = issue.part === 'upper' ? ', опустіть переріз або зменште товщину пластини' : ' або підніміть переріз';
   switch (issue.code) {
@@ -1736,9 +1760,9 @@ type SectionKeys = {
   readonly twist?: typeof TWIST_KEYS;
   /** The section plate of a solid that offers one, on any of its cuts: the switch, the thickness and the margin. */
   readonly plate?: {
-    readonly toggle: 'conePlate' | 'ballPlate';
-    readonly thickness: 'conePlateThicknessMm' | 'ballPlateThicknessMm';
-    readonly margin: 'conePlateMarginMm' | 'ballPlateMarginMm';
+    readonly toggle: 'cylinderPlate' | 'conePlate' | 'ballPlate';
+    readonly thickness: 'cylinderPlateThicknessMm' | 'conePlateThicknessMm' | 'ballPlateThicknessMm';
+    readonly margin: 'cylinderPlateMarginMm' | 'conePlateMarginMm' | 'ballPlateMarginMm';
   };
 };
 
@@ -1838,6 +1862,7 @@ export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys | Plana
       direction: 'cylinderObliqueDirectionDeg',
     },
     separated: 'cylinderPartsSeparated',
+    plate: { toggle: 'cylinderPlate', thickness: 'cylinderPlateThicknessMm', margin: 'cylinderPlateMarginMm' },
     connector: 'cylinderConnector',
     dovetailEntrance: 'cylinderDovetailEntrance',
     twist: TWIST_KEYS,
@@ -1969,7 +1994,7 @@ function resolveSection(
   const connectorType = activeConnector(kind, choices);
   const count = choices[keys.round.count];
   // A twist connector where it does not work reads no fields of its own, whose hidden drafts then block nothing.
-  const inert = connectorType === 'twist' && !twistFits(kind, type, shape);
+  const inert = connectorType === 'twist' && !twistFits(kind, choices, shape);
   const fields = (inert ? [] : activeConnectorKeys(keys, connectorType, count)) as IndependentKey[];
   // A plane parallel to the bases has a position along the height, a vertical one a distance from the axis, an oblique
   // one a point on the axis and two angles, a plane through an apex those angles alone.
@@ -2282,6 +2307,8 @@ export const shapeParameterKeys: Readonly<
       'cylinderObliquePositionPercent',
       'cylinderObliqueInclinationDeg',
       'cylinderObliqueDirectionDeg',
+      'cylinderPlateThicknessMm',
+      'cylinderPlateMarginMm',
       'cylinderDovetailSize',
       'cylinderDovetailLengthPercent',
       'cylinderDovetailClearanceMm',
@@ -2296,6 +2323,7 @@ export const shapeParameterKeys: Readonly<
     choices: [
       'cylinderSection',
       'cylinderPartsSeparated',
+      'cylinderPlate',
       'cylinderConnector',
       'cylinderDovetailEntrance',
       'cylinderRoundCount',

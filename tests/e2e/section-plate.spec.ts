@@ -125,3 +125,36 @@ test('a ball’s horizontal cut takes a plate with plugs, and downloads both par
   expect(dimensions.plugHeightMm).toBeCloseTo(dimensions.engagementMm + 2.4, 9);
   expect(errors).toEqual([]);
 });
+
+test('a cylinder’s vertical cut takes a plate with dowels, which turns the twist connector off, and downloads parts, plate and dowels', async ({
+  page,
+}) => {
+  const errors = collectErrors(page);
+  await page.goto('/');
+  await shapeSelect(page).selectOption({ label: 'Циліндр' });
+  await openSection(page, 'Переріз');
+  await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно основам' });
+  // A twist connector chosen before the plate gives way to none, said so.
+  await entry(page, 'Тип кріплення').selectOption({ label: 'Поворотне з’єднання' });
+  await page.getByRole('checkbox', { name: 'Січна пластина' }).check();
+  await expect(entry(page, 'Тип кріплення')).toHaveValue('none');
+  await expect(page.getByText('Поворотне з’єднання не працює із січною пластиною, тому обрано «Без кріплення».')).toBeVisible();
+  await expect(entry(page, 'Тип кріплення').locator('option[value="twist"]')).toBeDisabled();
+  await entry(page, 'Тип перерізу').selectOption({ label: 'Вертикальний' });
+  await expect(page.getByRole('checkbox', { name: 'Січна пластина' })).toBeChecked();
+  await entry(page, 'Товщина пластини, мм').fill('2');
+  await expect(page.getByText('Знизу пластина обрізається по рівню основи фігури.')).toBeVisible();
+  await entry(page, 'Тип кріплення').selectOption({ label: 'Знімні штифти' });
+  await expect(previewViewport(page)).toHaveAttribute('data-preview-status', 'loaded', { timeout: 30_000 });
+  await expect(partsButton(page)).toBeEnabled({ timeout: 30_000 });
+  const parts = await download(page, partsButton(page));
+  expect(parts.fileName).toBe('cylinder-vertical-section-plate.3mf');
+  expect(parts.objects).toEqual(['cylinder-part-1', 'cylinder-part-2', 'cylinder-section-plate', 'cylinder-dowel-1']);
+  expect(parts.json.sourceModel.section).toEqual({ type: 'vertical', offsetPercent: 0, plate: { thicknessMm: 2, marginMm: 10 } });
+  const dimensions = parts.json.sourceModel.connector.dimensions;
+  expect(dimensions.dowelLengthMm).toBeCloseTo(2 * dimensions.engagementMm + 2, 9);
+  const pins = await download(page, page.getByRole('button', { name: 'Завантажити лише штифти', exact: true }));
+  expect(pins.objects).toEqual(['cylinder-dowel-1']);
+  expect(pins.json.exportedParts.pins[0].lengthMm).toBe(dimensions.dowelLengthMm);
+  expect(errors).toEqual([]);
+});
