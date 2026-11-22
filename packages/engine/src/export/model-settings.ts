@@ -1,6 +1,7 @@
 import type { Connector, PhysicalScale, Shape } from '@diploma-3d/schema';
 import enginePackage from '../../package.json' with { type: 'json' };
 import type { DovetailPlan } from '../connectors/dovetail.ts';
+import type { MagnetPlan } from '../connectors/magnet.ts';
 import { dowelLength, plugHeight, type RoundConnectorPlan } from '../connectors/round.ts';
 import { type TwistPlan, twistTrialDimensions } from '../connectors/twist.ts';
 import { GeometryError } from '../errors.ts';
@@ -190,13 +191,45 @@ const twistConnector = ({ layout }: TwistPlan) => ({
   },
 });
 
+const magnetConnector = (plan: MagnetPlan) => ({
+  conventions: {
+    holeDiameterMm:
+      'magnet diameter plus the diameter allowance, added to the whole diameter; the pocket polygon’s flats lie on it',
+    holeDepthMm: 'magnet thickness plus the depth allowance, from the mating face to the pocket’s bottom',
+    pairs: 'per mating interface: each pair is one pocket in each part on one shared axis along the cut’s normal, 2 magnets',
+    minimumEdgeGapMm: 'from each opening’s outer edge, entry chamfer included, to the edge of the mating faces',
+    ...(plan.faceGap > 0
+      ? { placement: 'the pockets lie in the two parts on either side of the section plate, which stays whole between them' }
+      : {}),
+  },
+  dimensions: {
+    holeDiameterMm: plan.holeDiameter,
+    holeDepthMm: plan.holeDepth,
+    entryChamferMm: plan.chamfer,
+    sideMaterialMm: plan.wall,
+    bottomMaterialMm: plan.bottomWall,
+    spacingMm: plan.spacing,
+    minimumEdgeGapMm: plan.edgeGap,
+    pocketPolygonSides: plan.segments,
+    magnetsTotal: 2 * plan.sites.length,
+    axis: plan.frame.n,
+    pairs: plan.sites.map((site) => ({ centreMm: site.centre, alongUMm: site.along, alongVMm: site.across })),
+  },
+});
+
 /** The connector's settings as generated, after any automatic correction, with its physical dimensions. */
 function connectorSettings(model: GeneratedModel) {
   const settings: Connector | undefined = model.spec.section?.connector;
   const plan = model.section?.connector;
   if (settings === undefined || plan === undefined) return undefined;
   const resolved =
-    plan.type === 'dovetail' ? dovetailConnector(plan) : plan.type === 'twist' ? twistConnector(plan) : roundConnector(plan);
+    plan.type === 'dovetail'
+      ? dovetailConnector(plan)
+      : plan.type === 'twist'
+        ? twistConnector(plan)
+        : plan.type === 'magnet'
+          ? magnetConnector(plan)
+          : roundConnector(plan);
   return { settings, ...resolved };
 }
 
@@ -219,7 +252,7 @@ function plateDimensions(model: GeneratedModel) {
 /** What a file of pins or a trial holds apart from the model whose settings it records: the parts actually exported. */
 function exportedParts(model: GeneratedModel, kind: ExportKind) {
   const plan = model.section?.connector;
-  if (kind === 'pins' && plan !== undefined && plan.type !== 'dovetail' && plan.type !== 'twist') {
+  if (kind === 'pins' && (plan?.type === 'plug' || plan?.type === 'dowel')) {
     return { pins: plan.sites.map((site) => ({ nominalSizeMm: site.pinDiameter, lengthMm: dowelLength(plan) })) };
   }
   if (kind === 'connector-trial' && plan?.type === 'twist') {

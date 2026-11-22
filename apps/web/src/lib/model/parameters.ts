@@ -14,6 +14,8 @@ import {
   hasFeasibleValues,
   type Interval,
   isApexChordUsable,
+  type MagnetIssue,
+  type MagnetPlan,
   type ModelSettingsInput,
   normalizeRoundConnector,
   normalizeTwist,
@@ -22,6 +24,7 @@ import {
   type ParameterBounds,
   type ParameterFeasibility,
   type PlateCut,
+  planMagnets,
   plateSection,
   plateThicknessRange,
   ROUND_CONNECTOR_PROPORTIONS,
@@ -54,6 +57,7 @@ import {
   DEFAULT_DOVETAIL,
   DEFAULT_DOWEL_CLEARANCES_MM,
   DEFAULT_LONGEST_DIMENSION_MM,
+  DEFAULT_MAGNET,
   DEFAULT_OBLIQUE_SECTION,
   DEFAULT_PARALLELOGRAM_BASE,
   DEFAULT_PLUG_CLEARANCE_MM,
@@ -71,11 +75,14 @@ import {
   dovetailConnectorSchema,
   isWithinMinimumInclination,
   longestDimensionSchema,
+  MAGNET_LIMITS,
   MAX_LONGEST_DIMENSION_MM,
+  type MagnetConnector,
   MIN_INCLINATION_DEG,
   MIN_LONGEST_DIMENSION_MM,
   type ModelSpec,
   type ModelSpecInput,
+  magnetPocketMm,
   modelSpecSchema,
   OBLIQUE_DIRECTION_LIMITS,
   OBLIQUE_INCLINATION_LIMITS,
@@ -226,7 +233,39 @@ export type ParameterKey =
   | 'ballRoundDepth'
   | 'ballPlugClearanceMm'
   | 'ballDowelLowerClearanceMm'
-  | 'ballDowelUpperClearanceMm';
+  | 'ballDowelUpperClearanceMm'
+  | MagnetKey;
+
+/** The solids whose cuts offer magnet pockets, each with its own settings, as every connector has. */
+type MagnetSolid = 'cylinder' | 'cone' | 'ball';
+
+/** The magnet pockets' fields, and the setting of the specification each one sets. */
+const MAGNET_FIELDS = {
+  Count: 'count',
+  DiameterMm: 'magnetDiameterMm',
+  ThicknessMm: 'magnetThicknessMm',
+  DiameterAllowanceMm: 'diameterAllowanceMm',
+  DepthAllowanceMm: 'depthAllowanceMm',
+} as const satisfies Record<string, keyof typeof MAGNET_LIMITS>;
+
+type MagnetField = keyof typeof MAGNET_FIELDS;
+
+/** A solid's magnet setting, all of them physical millimetres but the count. */
+export type MagnetKey = `${MagnetSolid}Magnet${MagnetField}`;
+
+export type MagnetKeys = { readonly [field in MagnetField]: `${MagnetSolid}Magnet${field}` };
+
+const magnetKeysOf = (solid: MagnetSolid): MagnetKeys =>
+  Object.fromEntries(Object.keys(MAGNET_FIELDS).map((field) => [field, `${solid}Magnet${field}`])) as unknown as MagnetKeys;
+
+/** Each field's texts at the defaults, for one solid. */
+const magnetTexts = (solid: MagnetSolid) =>
+  Object.fromEntries(
+    (Object.entries(MAGNET_FIELDS) as [MagnetField, keyof typeof MAGNET_LIMITS][]).map(([field, setting]) => [
+      `${solid}Magnet${field}`,
+      formatDecimal(DEFAULT_MAGNET[setting]),
+    ]),
+  ) as Record<MagnetKey, string>;
 
 /** Raw field text, kept separately from parsed values so that empty and partially typed input stays editable. */
 export type ParameterTexts = Record<ParameterKey, string>;
@@ -454,6 +493,9 @@ export const initialParameterTexts = (): ParameterTexts => ({
   ballPlugClearanceMm: formatDecimal(DEFAULT_PLUG_CLEARANCE_MM),
   ballDowelLowerClearanceMm: formatDecimal(DEFAULT_DOWEL_CLEARANCES_MM.lower),
   ballDowelUpperClearanceMm: formatDecimal(DEFAULT_DOWEL_CLEARANCES_MM.upper),
+  ...magnetTexts('cylinder'),
+  ...magnetTexts('cone'),
+  ...magnetTexts('ball'),
 });
 
 export const initialParameterChoices = (): ParameterChoices => ({
@@ -607,6 +649,30 @@ const validatePlateThickness = (text: string, exact?: number): Validation =>
 const validatePlateMargin = (text: string, exact?: number): Validation =>
   validateNumber(text, inclusiveRange(SECTION_PLATE_MARGIN_LIMITS), SECTION_PLATE_MARGIN_LIMITS, '10', ' мм', exact);
 
+/**
+ * A magnet setting within its window, in printed millimetres that the model's size never changes; the count a whole number of
+ * pairs. The solid and the cut decide what actually fits, see `magnetChecks`.
+ */
+export function validateMagnetField(field: MagnetField, text: string, exact?: number): Validation {
+  const limits = MAGNET_LIMITS[MAGNET_FIELDS[field]];
+  const read = readNumber(text, formatDecimal(DEFAULT_MAGNET[MAGNET_FIELDS[field]]), exact);
+  if ('error' in read) return read;
+  if (field === 'Count' && !Number.isInteger(read.value)) {
+    return { error: `Введіть ціле число пар від ${limits.min} до ${limits.max}.` };
+  }
+  return read.value >= limits.min && read.value <= limits.max
+    ? read
+    : { error: rangeMessage(limits, field === 'Count' ? '' : ' мм') };
+}
+
+const magnetValidators = (solid: MagnetSolid) =>
+  Object.fromEntries(
+    (Object.keys(MAGNET_FIELDS) as MagnetField[]).map((field) => [
+      `${solid}Magnet${field}`,
+      (text: string, exact?: number) => validateMagnetField(field, text, exact),
+    ]),
+  ) as Record<MagnetKey, (text: string, exact?: number) => Validation>;
+
 /** Every field validated on its own; inclinations depend on the height and direction and are checked with them. */
 type IndependentKey = Exclude<ParameterKey, InclinationKey>;
 
@@ -695,6 +761,9 @@ const validators: Readonly<Record<IndependentKey, (text: string, exact?: number)
   ballPlugClearanceMm: validateDiametralClearance,
   ballDowelLowerClearanceMm: validateDiametralClearance,
   ballDowelUpperClearanceMm: validateDiametralClearance,
+  ...magnetValidators('cylinder'),
+  ...magnetValidators('cone'),
+  ...magnetValidators('ball'),
 };
 
 /** The exact value behind a field's text while the field still shows that value's formatted text. */
@@ -961,7 +1030,7 @@ const feasibilityCache = new Map<
 
 function cachedFeasibility(shape: SectionedShape, longestDimensionMm: number, section: Section) {
   const { connector } = section;
-  if (connector === undefined) return undefined;
+  if (connector === undefined || connector.type === 'magnet') return undefined;
   const cut = cutOfSection(section);
   const key = JSON.stringify([shape, longestDimensionMm, cut, connector]);
   const cached = feasibilityCache.get(key);
@@ -1094,7 +1163,9 @@ function resolveRound(
   edits: ConnectorEdits | undefined,
 ): RoundResolution | undefined {
   const { connector } = section;
-  if (edits === undefined || connector === undefined || connector.type === 'dovetail') return undefined;
+  if (edits === undefined || connector === undefined || connector.type === 'dovetail' || connector.type === 'magnet') {
+    return undefined;
+  }
   if (connector.type === 'twist') return resolveTwist(shape, longestDimensionMm, section, connector, edits);
   const { type, count, profile } = connector;
   const context = JSON.stringify([shape, longestDimensionMm, cutOfSection(section), type, profile, count]);
@@ -1322,6 +1393,115 @@ function connectorChecks(
   return { ...withRanges(jointChecks(keys, shape, longestDimensionMm, section, edits)), plateClipped: geometry.clippedAtBase };
 }
 
+/** The magnet connector from its fields, as the specification takes it. */
+function magnetConnectorOf(keys: MagnetKeys, read: (key: ParameterKey) => number): MagnetConnector {
+  return {
+    type: 'magnet',
+    ...(Object.fromEntries(
+      (Object.entries(MAGNET_FIELDS) as [MagnetField, string][]).map(([field, setting]) => [setting, read(keys[field])]),
+    ) as Omit<MagnetConnector, 'type'>),
+  };
+}
+
+const magnetPlanCache = new Map<string, MagnetPlan>();
+
+function cachedMagnetPlan(shape: SectionedShape, longestDimensionMm: number, section: Section, connector: MagnetConnector) {
+  const cut = cutOfSection(section);
+  const key = JSON.stringify([shape, longestDimensionMm, cut, connector]);
+  const cached = magnetPlanCache.get(key);
+  if (cached !== undefined) return cached;
+  const plan = planMagnets(shape, { longestDimensionMm }, cut, connector);
+  if (magnetPlanCache.size >= FEASIBILITY_CACHE_SIZE) magnetPlanCache.delete(magnetPlanCache.keys().next().value as string);
+  magnetPlanCache.set(key, plan);
+  return plan;
+}
+
+/**
+ * The magnet pockets placed by the engine on this cut. Where they do not fit, nothing is changed to make them fit: the settings
+ * stay as entered, the model is the plain cut, which is not for download, and the reason is said with the ways on.
+ */
+function magnetChecks(shape: SectionedShape, longestDimensionMm: number, section: Section, connector: MagnetConnector) {
+  const plan = cachedMagnetPlan(shape, longestDimensionMm, section, connector);
+  if (plan.issues.length === 0) return { errors: {}, ranges: {} };
+  const { connector: _none, ...plain } = section;
+  const unavailable = magnetIssuesMessage(plan.issues, section.type, connector);
+  return {
+    errors: {},
+    ranges: {},
+    resolved: { status: { context: '', corrections: [], unavailable }, values: {}, section: plain as Section },
+  };
+}
+
+/** The part as the magnet messages name it: below or above a horizontal cut, by its number beside any other. */
+const magnetPart = (part: 'lower' | 'upper', cut: SectionType) =>
+  cut === 'parallel-to-bases' || cut === 'horizontal'
+    ? part === 'lower'
+      ? 'нижня частина'
+      : 'верхня частина'
+    : part === 'lower'
+      ? 'частина 1'
+      : 'частина 2';
+
+/** What keeps the requested magnets from fitting, the part it concerns where known, and what to change; in Ukrainian. */
+export function magnetIssuesMessage(issues: readonly MagnetIssue[], cut: SectionType, connector: MagnetConnector): string {
+  const ending = ' Налаштування збережено; доки магніти не вміщуються, завантаження вимкнено.';
+  const first = issues[0] as MagnetIssue;
+  const partsOf = (code: MagnetIssue['code']) =>
+    issues.flatMap((issue) => (issue.code === code && 'part' in issue ? [magnetPart(issue.part, cut)] : []));
+  switch (first.code) {
+    case 'too-shallow': {
+      const parts = partsOf('too-shallow');
+      return (
+        `Магніти задовгі для цього перерізу: ${parts.join(' і ')} ${parts.length > 1 ? 'мають' : 'має'} вздовж осі гнізда лише ` +
+        `${millimetres(first.valueMm)}, а гнізду разом із дном потрібно ${formatMillimetres(first.minimumMm)} мм. ` +
+        `Візьміть тонші магніти, збільште модель чи змініть положення перерізу.${ending}`
+      );
+    }
+    case 'face-too-small':
+      return (
+        `Переріз замалий для отвору ⌀${formatMillimetres(magnetPocketMm(connector).diameter)} мм. Зменште діаметр магнітів, ` +
+        `збільште модель чи змініть положення перерізу.${ending}`
+      );
+    case 'wall-thin':
+      return (
+        `${capitalised(partsOf('wall-thin').join(' і '))}: навколо гнізда лишається замало матеріалу, бо поверхня фігури ` +
+        `надто близько. Візьміть менші чи тонші магніти, збільште модель чи змініть положення перерізу.${ending}`
+      );
+    case 'no-arrangement':
+      return (
+        `Для вибраних магнітів недостатньо місця: вдалося розмістити лише ${first.placed} з ${connector.count} пар. ` +
+        `Зменште їх кількість або розмір, збільште модель чи змініть положення перерізу.${ending}`
+      );
+  }
+}
+
+const capitalised = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+
+/** The fit allowances as they start; "Відновити стандартні значення" returns these two alone. */
+export function resetMagnetAllowances(kind: ShapeKind, state: ParameterState): ParameterState {
+  const keys = sectionKeys[kind]?.magnet;
+  if (keys === undefined) return state;
+  const initial = initialParameterTexts();
+  const texts = {
+    ...state.texts,
+    [keys.DiameterAllowanceMm]: initial[keys.DiameterAllowanceMm],
+    [keys.DepthAllowanceMm]: initial[keys.DepthAllowanceMm],
+  };
+  if (state.exact === undefined) return { ...state, texts };
+  const exact = { ...state.exact };
+  delete exact[keys.DiameterAllowanceMm];
+  delete exact[keys.DepthAllowanceMm];
+  return { ...state, texts, exact };
+}
+
+/** Whether the fit allowances differ from how they start. */
+export function magnetAllowancesChanged(kind: ShapeKind, texts: ParameterTexts): boolean {
+  const keys = sectionKeys[kind]?.magnet;
+  if (keys === undefined) return false;
+  const initial = initialParameterTexts();
+  return [keys.DiameterAllowanceMm, keys.DepthAllowanceMm].some((key) => texts[key] !== initial[key]);
+}
+
 /** The steps of the plate's fields: its thickness by 0,2 mm, its margin by 1 mm. */
 export const PLATE_THICKNESS_INCREMENT_MM = 0.2;
 export const PLATE_MARGIN_INCREMENT_MM = 1;
@@ -1423,11 +1603,12 @@ function jointChecks(
   stated: Section,
   edits: ConnectorEdits | undefined,
 ): SectionCheck | undefined {
+  if (stated.connector?.type === 'magnet') return magnetChecks(shape, longestDimensionMm, stated, stated.connector);
   const resolved = resolveRound(keys, shape, longestDimensionMm, stated, edits);
   if (resolved?.status.unavailable !== undefined) return { errors: {}, ranges: {}, resolved };
   const section = resolved?.section ?? stated;
   const { connector } = section;
-  if (connector === undefined) return undefined;
+  if (connector === undefined || connector.type === 'magnet') return undefined;
   const feasibility = cachedFeasibility(shape, longestDimensionMm, section);
   if (feasibility === undefined) return undefined;
   const { dovetail, round } = keys;
@@ -1758,6 +1939,7 @@ type SectionKeys = {
     readonly dowelUpperClearance: 'cylinderDowelUpperClearanceMm' | 'coneDowelUpperClearanceMm' | 'ballDowelUpperClearanceMm';
   };
   readonly twist?: typeof TWIST_KEYS;
+  readonly magnet: MagnetKeys;
   /** The section plate of a solid that offers one, on any of its cuts: the switch, the thickness and the margin. */
   readonly plate?: {
     readonly toggle: 'cylinderPlate' | 'conePlate' | 'ballPlate';
@@ -1834,6 +2016,7 @@ export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys | Plana
     offset: 'ballSectionOffsetPercent',
     separated: 'ballPartsSeparated',
     plate: { toggle: 'ballPlate', thickness: 'ballPlateThicknessMm', margin: 'ballPlateMarginMm' },
+    magnet: magnetKeysOf('ball'),
     connector: 'ballConnector',
     dovetailEntrance: 'ballDovetailEntrance',
     dovetail: {
@@ -1866,6 +2049,7 @@ export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys | Plana
     connector: 'cylinderConnector',
     dovetailEntrance: 'cylinderDovetailEntrance',
     twist: TWIST_KEYS,
+    magnet: magnetKeysOf('cylinder'),
     dovetail: {
       size: 'cylinderDovetailSize',
       length: 'cylinderDovetailLengthPercent',
@@ -1893,6 +2077,7 @@ export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys | Plana
     },
     separated: 'conePartsSeparated',
     plate: { toggle: 'conePlate', thickness: 'conePlateThicknessMm', margin: 'conePlateMarginMm' },
+    magnet: magnetKeysOf('cone'),
     connector: 'coneConnector',
     dovetailEntrance: 'coneDovetailEntrance',
     dovetail: {
@@ -1914,7 +2099,8 @@ export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys | Plana
 };
 
 /** Every connector field of the section. */
-const connectorTextKeys = ({ dovetail, round, twist }: SectionKeys): ParameterKey[] => [
+const connectorTextKeys = ({ dovetail, round, twist, magnet }: SectionKeys): ParameterKey[] => [
+  ...Object.values(magnet),
   ...Object.values(dovetail),
   round.spacing,
   round.diameter,
@@ -1938,6 +2124,8 @@ export function activeConnectorKeys(keys: SectionKeys, connector: ConnectorType 
       return Object.values(keys.dovetail);
     case 'twist':
       return [...(keys.twist ?? [])];
+    case 'magnet':
+      return Object.values(keys.magnet);
     case 'plug':
     case 'dowel':
       return [
@@ -2050,24 +2238,26 @@ function resolveSection(
           holeClearanceMm: read('cylinderTwistClearanceMm'),
           axialClearanceMm: read('cylinderTwistAxialMm'),
         }
-      : connectorType === 'dovetail'
-        ? {
-            type: connectorType,
-            sizeFactor: read(dovetail.size),
-            lengthPercent: read(dovetail.length),
-            clearanceMm: read(dovetail.clearance),
-            entrance: choices[keys.dovetailEntrance],
-          }
-        : connectorType === 'plug'
-          ? { type: connectorType, ...shared, holeClearanceMm: read(round.plugClearance) }
-          : connectorType === 'dowel'
-            ? {
-                type: connectorType,
-                ...shared,
-                lowerClearanceMm: read(round.dowelLowerClearance),
-                upperClearanceMm: read(round.dowelUpperClearance),
-              }
-            : undefined;
+      : connectorType === 'magnet'
+        ? magnetConnectorOf(keys.magnet, read)
+        : connectorType === 'dovetail'
+          ? {
+              type: connectorType,
+              sizeFactor: read(dovetail.size),
+              lengthPercent: read(dovetail.length),
+              clearanceMm: read(dovetail.clearance),
+              entrance: choices[keys.dovetailEntrance],
+            }
+          : connectorType === 'plug'
+            ? { type: connectorType, ...shared, holeClearanceMm: read(round.plugClearance) }
+            : connectorType === 'dowel'
+              ? {
+                  type: connectorType,
+                  ...shared,
+                  lowerClearanceMm: read(round.dowelLowerClearance),
+                  upperClearanceMm: read(round.dowelUpperClearance),
+                }
+              : undefined;
   const joining = {
     ...(plate === undefined ? {} : { plate: { thicknessMm: read(plate.thickness), marginMm: read(plate.margin) } }),
     ...(connector === undefined ? {} : { connector }),
@@ -2319,6 +2509,7 @@ export const shapeParameterKeys: Readonly<
       'cylinderDowelLowerClearanceMm',
       'cylinderDowelUpperClearanceMm',
       ...TWIST_KEYS,
+      ...Object.values(magnetKeysOf('cylinder')),
     ],
     choices: [
       'cylinderSection',
@@ -2353,6 +2544,7 @@ export const shapeParameterKeys: Readonly<
       'conePlugClearanceMm',
       'coneDowelLowerClearanceMm',
       'coneDowelUpperClearanceMm',
+      ...Object.values(magnetKeysOf('cone')),
     ],
     choices: [
       'coneSection',
@@ -2380,6 +2572,7 @@ export const shapeParameterKeys: Readonly<
       'ballPlugClearanceMm',
       'ballDowelLowerClearanceMm',
       'ballDowelUpperClearanceMm',
+      ...Object.values(magnetKeysOf('ball')),
     ],
     choices: [
       'ballSection',

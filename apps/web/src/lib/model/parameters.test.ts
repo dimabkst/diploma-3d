@@ -256,6 +256,21 @@ describe('resolveModelRequest', () => {
       cylinderTwistAxialMm: '0,2',
       cylinderPlateThicknessMm: '1,6',
       cylinderPlateMarginMm: '10',
+      cylinderMagnetCount: '3',
+      cylinderMagnetDiameterMm: '6',
+      cylinderMagnetThicknessMm: '2',
+      cylinderMagnetDiameterAllowanceMm: '0,2',
+      cylinderMagnetDepthAllowanceMm: '0,1',
+      coneMagnetCount: '3',
+      coneMagnetDiameterMm: '6',
+      coneMagnetThicknessMm: '2',
+      coneMagnetDiameterAllowanceMm: '0,2',
+      coneMagnetDepthAllowanceMm: '0,1',
+      ballMagnetCount: '3',
+      ballMagnetDiameterMm: '6',
+      ballMagnetThicknessMm: '2',
+      ballMagnetDiameterAllowanceMm: '0,2',
+      ballMagnetDepthAllowanceMm: '0,1',
     });
     expect(initialParameterChoices()).toEqual({
       prismBaseType: 'regular',
@@ -1462,6 +1477,7 @@ describe('a dovetail joining the cylinder’s parts', () => {
           { value: 'plug', label: 'Виступ і отвір' },
           { value: 'dowel', label: 'Знімні штифти' },
           { value: 'twist', label: 'Поворотне з’єднання' },
+          { value: 'magnet', label: 'Магнітні гнізда' },
         ],
       },
     ]);
@@ -1917,6 +1933,7 @@ describe('a vertical section of the cylinder', () => {
         { value: 'plug' },
         { value: 'dowel' },
         { value: 'twist', disabled: true },
+        { value: 'magnet' },
       ],
     });
   });

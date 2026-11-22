@@ -101,7 +101,7 @@ export async function buildModelArtifacts(
     const trialFile = twistTrialFile(kernel, connector, (holders, title) => threeMf(holders, title, 'connector-trial'));
     return { model, previewGlb, separatedPreviewGlb, printFile, trialFile };
   }
-  if (pins.length === 0 || connector === undefined || connector.type === 'dovetail') {
+  if (pins.length === 0 || (connector?.type !== 'plug' && connector?.type !== 'dowel')) {
     return { model, previewGlb, separatedPreviewGlb, printFile };
   }
   const pinsName = pinsFileName(connector);

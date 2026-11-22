@@ -165,16 +165,68 @@ export const twistConnectorSchema = z.strictObject({
 
 export type TwistConnector = z.infer<typeof twistConnectorSchema>;
 
+// The magnet pockets' windows, in physical millimetres that never follow the model's size: policies for the interface and for
+// print trials, not geometric limits. The solid and the cut decide what actually fits, which the engine checks.
+export const MAGNET_LIMITS = {
+  count: { min: 1, max: 12 },
+  magnetDiameterMm: { min: 1, max: 30 },
+  magnetThicknessMm: { min: 0.5, max: 20 },
+  diameterAllowanceMm: { min: 0, max: 1 },
+  depthAllowanceMm: { min: 0, max: 1 },
+} as const;
+
+// Editable starting points for common 6 × 2 mm disc magnets, not a certified printer setting nor a holding force.
+export const DEFAULT_MAGNET = {
+  count: 3,
+  magnetDiameterMm: 6,
+  magnetThicknessMm: 2,
+  diameterAllowanceMm: 0.2,
+  depthAllowanceMm: 0.1,
+} as const;
+
+/**
+ * Settings that earlier magnet pockets had and the placement now decides itself: the edge distance, the material around,
+ * beneath and between the pockets, and the entry chamfer. A connector that still names one is refused rather than read, so
+ * that none of them can override the automatic placement unseen.
+ */
+export const LEGACY_MAGNET_FIELDS = ['edgeClearanceMm', 'wallMm', 'spacingMm', 'chamferMm'] as const;
+
+const magnetMillimetres = (limits: { readonly min: number; readonly max: number }) => z.number().min(limits.min).max(limits.max);
+
+/**
+ * Cylindrical blind pockets for disc magnets: `count` pairs per mating interface, each pair one shared axis along the cut's normal
+ * with a pocket opening on either mating face, of diameter d + Δd and depth t + Δt. Every value is in printed millimetres; the
+ * engine places the pockets and decides their material and chamfer.
+ */
+export const magnetConnectorSchema = z.strictObject({
+  type: z.literal('magnet'),
+  count: z.number().int().min(MAGNET_LIMITS.count.min).max(MAGNET_LIMITS.count.max),
+  magnetDiameterMm: magnetMillimetres(MAGNET_LIMITS.magnetDiameterMm),
+  magnetThicknessMm: magnetMillimetres(MAGNET_LIMITS.magnetThicknessMm),
+  /** Added to the whole diameter, not to the radius. */
+  diameterAllowanceMm: magnetMillimetres(MAGNET_LIMITS.diameterAllowanceMm),
+  depthAllowanceMm: magnetMillimetres(MAGNET_LIMITS.depthAllowanceMm),
+});
+
+export type MagnetConnector = z.infer<typeof magnetConnectorSchema>;
+
+/** A pocket's diameter d + Δd and depth t + Δt, from the magnet and its allowances. */
+export const magnetPocketMm = (magnet: Omit<MagnetConnector, 'type' | 'count'> | MagnetConnector) => ({
+  diameter: magnet.magnetDiameterMm + magnet.diameterAllowanceMm,
+  depth: magnet.magnetThicknessMm + magnet.depthAllowanceMm,
+});
+
 export const connectorSchema = z.discriminatedUnion('type', [
   dovetailConnectorSchema,
   plugConnectorSchema,
   dowelConnectorSchema,
   twistConnectorSchema,
+  magnetConnectorSchema,
 ]);
 
 export type Connector = z.infer<typeof connectorSchema>;
 
-export const CONNECTOR_TYPES = ['dovetail', 'plug', 'dowel', 'twist'] as const;
+export const CONNECTOR_TYPES = ['dovetail', 'plug', 'dowel', 'twist', 'magnet'] as const;
 
 export type ConnectorType = (typeof CONNECTOR_TYPES)[number];
 

@@ -39,6 +39,7 @@ import {
   verticalCylinderSection,
   verticalOffsetLimitMm,
 } from './connectors/frame.ts';
+import { buildMagnetPockets, type MagnetPlan, planMagnets, verifyMagnetPockets } from './connectors/magnet.ts';
 import { buildRoundConnectors, planRoundConnectors, type RoundConnectorPlan, verifyRoundConnectors } from './connectors/round.ts';
 import { buildTwist, planTwist, type TwistPlan, verifyTwist } from './connectors/twist.ts';
 import { ConnectorUnsuitableError, GeometryError, InfeasibleGeometryError, InvalidModelSpecError } from './errors.ts';
@@ -98,7 +99,7 @@ export interface Solid {
  */
 export type SectionPart = 'lower' | 'upper' | 'part-1' | 'part-2' | 'plate' | 'dowel';
 
-export type ConnectorPlan = DovetailPlan | RoundConnectorPlan | TwistPlan;
+export type ConnectorPlan = DovetailPlan | RoundConnectorPlan | TwistPlan | MagnetPlan;
 
 export interface ModelSection {
   readonly type: SectionType;
@@ -217,6 +218,11 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
     } else if (connector?.type === 'dovetail') {
       const joined = buildDovetail(kernel, track, parts, connector);
       verifyDovetail(kernel, track, { whole: solid, upper: parts.upper }, joined, connector, longest);
+      parts = { lower: checked(joined.lower), upper: checked(joined.upper) };
+    } else if (connector?.type === 'magnet') {
+      // Pockets in both parts; a section plate between them stays whole, and the magnets attract through it.
+      const joined = buildMagnetPockets(kernel, track, parts, connector);
+      verifyMagnetPockets(kernel, track, solid, joined, connector, longest);
       parts = { lower: checked(joined.lower), upper: checked(joined.upper) };
     } else if (connector?.type === 'twist') {
       const joined = buildTwist(kernel, track, parts, connector);
@@ -430,7 +436,9 @@ function planConnector({ shape, scale, section }: ModelSpec): ConnectorPlan | un
       ? planDovetail(shape, scale, cut, connector)
       : connector.type === 'twist'
         ? planTwist(shape, scale, cut, connector)
-        : planRoundConnectors(shape, scale, cut, connector);
+        : connector.type === 'magnet'
+          ? planMagnets(shape, scale, cut, connector)
+          : planRoundConnectors(shape, scale, cut, connector);
   if (plan.issues.length > 0) throw new ConnectorUnsuitableError(plan.issues);
   return plan;
 }

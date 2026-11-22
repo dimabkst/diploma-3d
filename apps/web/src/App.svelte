@@ -20,12 +20,14 @@ import {
   commitConnectorEdit,
   initialParameterChoices,
   initialParameterTexts,
+  magnetAllowancesChanged,
   type ParameterExact,
   type ParameterState,
   PLATE_TWIST_NOTICE,
   partsSeparated,
   plateChosen,
   plateConnectorFallback,
+  resetMagnetAllowances,
   resetShapeParameters,
   resolveModelRequest,
   type SectionRanges,
@@ -151,6 +153,7 @@ const panel = $derived(
         sectionRanges,
         connectorStatus: request?.connectorStatus,
         connectorNotice: plateNotice,
+        magnetAllowancesChanged: selectedKind !== undefined && magnetAllowancesChanged(selectedKind, parameterTexts),
         plateClipped: request?.plateClipped,
       }),
 );
@@ -215,6 +218,10 @@ function runPanelAction(action: PanelAction) {
   }
   if (action === 'download-trial') {
     if (trialFile !== undefined) saveFile(trialFile.bytes, trialFile.fileName, THREE_MF_MEDIA_TYPE);
+    return;
+  }
+  if (action === 'reset-magnet-allowances') {
+    if (selectedKind !== undefined) applyState(resetMagnetAllowances(selectedKind, parameterState));
     return;
   }
   const key = selectedKind === undefined ? undefined : sectionKeys[selectedKind]?.connector;

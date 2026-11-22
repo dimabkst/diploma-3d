@@ -160,6 +160,7 @@ describe('connectors through the plate', () => {
       'dovetail',
       'plug',
       'dowel',
+      'magnet',
     ]);
     const state: ParameterState = { texts: texts(), choices: choices({ conePlate: true, coneConnector: 'twist' }) };
     expect(plateConnectorFallback('cone', state)?.choices.coneConnector).toBe('none');
@@ -475,12 +476,12 @@ describe('the section plate of a cylinder', () => {
     expect(group.help?.text).toContain('Якщо шар пластини містить вісь циліндра');
     // Every non-rotating connector stays offered through the plate.
     const connector = cylinderGroup('Кріплення', {}, { ...chosen, cylinderPlate: true });
-    expect(enabledConnectors(connector)).toEqual(['none', 'dovetail', 'plug', 'dowel']);
+    expect(enabledConnectors(connector)).toEqual(['none', 'dovetail', 'plug', 'dowel', 'magnet']);
   });
 
   it('keeps the twist connector for a right cylinder’s parallel cut without a plate, and refuses it through one', () => {
     const plain = cylinderGroup('Кріплення');
-    expect(enabledConnectors(plain)).toEqual(['none', 'dovetail', 'plug', 'dowel', 'twist']);
+    expect(enabledConnectors(plain)).toEqual(['none', 'dovetail', 'plug', 'dowel', 'twist', 'magnet']);
     expect(cylinderRequest({}, { cylinderConnector: 'twist' }).spec?.section).toMatchObject({ connector: { type: 'twist' } });
     // Without a plate the other cuts never offered it.
     expect(enabledConnectors(cylinderGroup('Кріплення', {}, { cylinderSection: 'vertical' }))).not.toContain('twist');

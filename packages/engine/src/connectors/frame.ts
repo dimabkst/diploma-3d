@@ -675,6 +675,14 @@ export function coneSection(shape: ConeShape, scale: PhysicalScale, positionPerc
   };
 }
 
+/**
+ * A cut of a cylinder or a cone without a plate, read off the faces of the polygonal solid as built, whatever the cut: what
+ * connectors placed anywhere on the section, rather than along its u alone, measure their walls against.
+ */
+export function facetedCut(shape: RoundShape, scale: PhysicalScale, cut: PlaneCut): FacetedSection {
+  return shape.kind === 'cone' ? coneCut(shape, scale, cut) : cylinderFaceSection(shape, scale, cut);
+}
+
 /** The cone's own section for a plane without a plate. */
 function coneCut(shape: ConeShape, scale: PhysicalScale, cut: PlaneCut): ConeCutSection {
   if (typeof cut === 'number') return coneSection(shape, scale, cut);

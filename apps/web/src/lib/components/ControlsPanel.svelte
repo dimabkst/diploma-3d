@@ -14,6 +14,8 @@ import {
 } from '../model/parameters.ts';
 import type { TiltMode, TiltSolid } from '../model/tilt.ts';
 import {
+  type ActionField,
+  type NoteField,
   type NumericField,
   type PanelAction,
   type ParameterSection as Section,
@@ -26,6 +28,7 @@ import {
 import Button from './Button.svelte';
 import Checkbox from './Checkbox.svelte';
 import Field from './Field.svelte';
+import FieldDisclosure from './FieldDisclosure.svelte';
 import HelpToggle from './HelpToggle.svelte';
 import NumberField from './NumberField.svelte';
 import ParameterSection from './ParameterSection.svelte';
@@ -68,6 +71,9 @@ let {
 // Per group, across shapes: a group keeps its open state and its fields keep their values while collapsed.
 let openSections = $state<Record<string, boolean>>({});
 
+// The same for the collapsed further fields within a group, which start closed.
+let openDisclosures = $state<Record<string, boolean>>({});
+
 /**
  * What is being typed into a field shown in millimetres, while it differs from how the stored value is shown, such as
  * "2,0" for 2 mm or a partial "2,". The stored text holds the converted value, so the model follows every keystroke;
@@ -93,6 +99,10 @@ export async function focusField(key: ParameterKey): Promise<void> {
   const sections = panel.type === 'parameters' ? panel.sections : [];
   const owner = sections.find((section) => sectionNumberFields(section).some((field) => field.key === key));
   if (owner !== undefined) openSections[owner.key] = true;
+  const disclosure = owner?.fields.find(
+    (field) => field.type === 'disclosure' && field.fields.some((inner) => inner.type === 'number' && inner.key === key),
+  );
+  if (disclosure !== undefined) openDisclosures[disclosure.key] = true;
   await tick();
   document.getElementById(key)?.focus();
 }
@@ -167,6 +177,30 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
   {/if}
 {/snippet}
 
+{#snippet noteView(field: NoteField)}
+  <p
+    class={['group-status', field.tone === 'alert' && 'alert']}
+    id={field.key}
+    role={field.tone === 'alert' ? 'alert' : field.tone === 'status' ? 'status' : undefined}
+  >
+    {field.text}
+  </p>
+{/snippet}
+
+{#snippet actionView(field: ActionField)}
+  <div class="group-actions">
+    <Button
+      variant="secondary"
+      disabled={field.disabled === true ||
+        (field.action === 'download-pins' && !pinsReady) ||
+        (field.action === 'download-trial' && !trialReady)}
+      onclick={() => onaction(field.action)}
+    >
+      {field.label}
+    </Button>
+  </div>
+{/snippet}
+
 <aside class="controls-panel" aria-label="Налаштування моделі">
   <div class="controls-scroll">
   <!-- Stays in view while the form scrolls, so the reset is one click away at any field. -->
@@ -206,23 +240,26 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
                 <Select id={field.key} bind:value={choices[field.key]} options={field.options} />
               </Field>
             {:else if field.type === 'note'}
-              <p
-                class={['group-status', field.tone === 'alert' && 'alert']}
-                id={field.key}
-                role={field.tone === 'alert' ? 'alert' : field.tone === 'status' ? 'status' : undefined}
-              >
-                {field.text}
-              </p>
+              {@render noteView(field)}
             {:else if field.type === 'action'}
-              <div class="group-actions">
-                <Button
-                  variant="secondary"
-                  disabled={(field.action === 'download-pins' && !pinsReady) || (field.action === 'download-trial' && !trialReady)}
-                  onclick={() => onaction(field.action)}
-                >
-                  {field.label}
-                </Button>
-              </div>
+              {@render actionView(field)}
+            {:else if field.type === 'disclosure'}
+              {@const disclosureKey = field.key}
+              <FieldDisclosure
+                id={`${field.key}-fields`}
+                label={field.label}
+                bind:open={() => openDisclosures[disclosureKey] ?? false, (open) => (openDisclosures[disclosureKey] = open)}
+              >
+                {#each field.fields as inner (inner.key)}
+                  {#if inner.type === 'note'}
+                    {@render noteView(inner)}
+                  {:else if inner.type === 'action'}
+                    {@render actionView(inner)}
+                  {:else}
+                    {@render numberField(inner)}
+                  {/if}
+                {/each}
+              </FieldDisclosure>
             {:else if field.type === 'toggle'}
               <Checkbox
                 id={field.key}

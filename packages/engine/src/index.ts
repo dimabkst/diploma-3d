@@ -75,6 +75,7 @@ export {
   cylinderPlateSection,
   cylinderSection,
   type FrameExtent,
+  facetedCut,
   frameMatrix,
   framePoint,
   isApexChordUsable,
@@ -111,6 +112,20 @@ export {
   verticalOffsetLimitMm,
   verticalOffsetLimitPercent,
 } from './connectors/frame.ts';
+export {
+  buildMagnetPockets,
+  type FramePoint as MagnetFramePoint,
+  MAGNET_PLACEMENT_POLICY,
+  type MagnetIssue,
+  type MagnetParts,
+  type MagnetPlan,
+  type MagnetSite,
+  magnetChamferMm,
+  magnetPocketGeometry,
+  planMagnets,
+  preferredMagnetCentres,
+  verifyMagnetPockets,
+} from './connectors/magnet.ts';
 export { profileMinWidth, profileReach, profileRing, profileSupport } from './connectors/profile.ts';
 export {
   buildRoundConnectors,

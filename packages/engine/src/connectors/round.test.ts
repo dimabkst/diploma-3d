@@ -53,7 +53,7 @@ const VOLUME_TOLERANCE = 1e-3;
 function joined(model: GeneratedModel) {
   const plan = model.section?.connector;
   const [lower, upper, ...dowels] = model.solids;
-  if (lower === undefined || upper === undefined || plan === undefined || plan.type === 'dovetail' || plan.type === 'twist') {
+  if (lower === undefined || upper === undefined || plan === undefined || (plan.type !== 'plug' && plan.type !== 'dowel')) {
     throw new Error('Expected parts joined by plugs or dowels');
   }
   return { lower, upper, dowels, plan };

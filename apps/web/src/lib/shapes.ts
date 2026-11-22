@@ -16,6 +16,7 @@ import {
   DOVETAIL_CLEARANCE_LIMITS,
   type DovetailEntrance,
   defaultModelSpecs,
+  MAGNET_LIMITS,
   MAX_LONGEST_DIMENSION_MM,
   MIN_LONGEST_DIMENSION_MM,
   OBLIQUE_DIRECTION_LIMITS,
@@ -192,11 +193,32 @@ export type ActionField = {
   readonly key: string;
   readonly label: string;
   readonly action: PanelAction;
+  /** Nothing to do now, such as a reset of values that are already the defaults. */
+  readonly disabled?: boolean;
 };
 
-export type PanelAction = 'download-pins' | 'download-trial' | 'choose-no-connector';
+export type PanelAction = 'download-pins' | 'download-trial' | 'choose-no-connector' | 'reset-magnet-allowances';
 
-export type ParameterField = NumericField | ChoiceField | ToggleField | NoteField | ActionField | TiltGroup | TrapezoidGroup;
+/**
+ * Further fields within a group, collapsed at first, such as the magnets' fit allowances. Opening or closing it changes no value
+ * and no geometry; its fields count as the group's own for errors and focus.
+ */
+export type DisclosureGroup = {
+  readonly type: 'disclosure';
+  readonly key: string;
+  readonly label: string;
+  readonly fields: readonly (NumericField | NoteField | ActionField)[];
+};
+
+export type ParameterField =
+  | NumericField
+  | ChoiceField
+  | ToggleField
+  | NoteField
+  | ActionField
+  | TiltGroup
+  | TrapezoidGroup
+  | DisclosureGroup;
 
 /** A collapsible group of the sidebar, such as "Основа" or "Нахил". */
 export type ParameterSection = {
@@ -416,6 +438,8 @@ export type PanelContext = {
   readonly sectionRanges?: SectionRanges | undefined;
   /** Whether the solid's lower base cuts the chosen section plate off. */
   readonly plateClipped?: boolean | undefined;
+  /** Whether the magnets' fit allowances differ from their defaults, which their reset then restores. */
+  readonly magnetAllowancesChanged?: boolean | undefined;
   /** A connector replaced by the page, such as on turning a section plate on, said once among the connector's fields. */
   readonly connectorNotice?: string | undefined;
 };
@@ -729,7 +753,28 @@ const connectorNames: Readonly<Record<ConnectorChoice, string>> = {
   plug: 'Виступ і отвір',
   dowel: 'Знімні штифти',
   twist: 'Поворотне з’єднання',
+  magnet: 'Магнітні гнізда',
 };
+
+/** How magnet pockets work, with the practical notes their fit depends on. */
+const magnetHelp = (plated: boolean): Help => ({
+  label: 'Як працюють магнітні гнізда?',
+  text:
+    'Кожна пара — два глухі гнізда на одній осі, по одному в кожній частині, тож N пар потребують 2N магнітів. Розміри ' +
+    'магнітів — справжні міліметри друку: вони не змінюються разом із розміром моделі.\n\n' +
+    'Гнізда розміщуються автоматично: подалі від краю перерізу й рівномірно навколо його середини. Усе гніздо разом із 2 мм ' +
+    'матеріалу навколо й під дном має вміститися в обидві частини, а не лише його отвір. Невелика фаска на вході ' +
+    'полегшує вставлення магніту.' +
+    (plated
+      ? '\n\nЗ січною пластиною гнізда є лише у двох частинах, а пластина лишається суцільною між ними: магніти тягнуть ' +
+        'одне одного крізь неї, тож тонша пластина тримає краще.'
+      : '') +
+    '\n\nЦе стартові значення для пробного друку. Перевірка геометрії не гарантує сили притягання чи надійності: це ' +
+    'залежить від магнітів, відстані між ними, матеріалу, налаштувань слайсера й клею.\n\n' +
+    'Спершу надрукуйте маленький пробний зразок гнізда. Перевірте полярність кожної пари, перш ніж закріпити магніти. У ' +
+    'гнізда із зазором вклейте магніти відповідним клеєм; магніт має сидіти врівень із гранню або трохи глибше. У ' +
+    'слайсері перегляньте стінки й нижні шари навколо гнізд.',
+});
 
 const CONNECTOR_PROFILE_NAMES: Readonly<Record<ConnectorProfile, string>> = {
   circle: 'Круг',
@@ -1070,7 +1115,7 @@ function connectorSection(
     type: 'choice',
     key: keys.connector,
     label: 'Тип кріплення',
-    options: (['none', 'dovetail', 'plug', 'dowel', 'twist'] as const).map((value) => ({
+    options: (['none', 'dovetail', 'plug', 'dowel', 'twist', 'magnet'] as const).map((value) => ({
       value,
       label: connectorNames[value],
       ...(value === 'twist' && !offersTwist ? { disabled: true } : {}),
@@ -1186,8 +1231,65 @@ function connectorSection(
     ],
   };
   const plugLength = shown(round.depth);
+  const magnetKeys = keys.magnet;
+  const magnetMm = (key: ParameterKey, label: string, limits: { min: number; max: number }, increment: number): NumericField => ({
+    type: 'number',
+    key,
+    label,
+    suffix: '',
+    range: { ...limits, increment },
+  });
+  const sumOf = (first: ParameterKey, second: ParameterKey) =>
+    values[first] === undefined || values[second] === undefined
+      ? undefined
+      : (values[first] as number) + (values[second] as number);
+  const pocketDiameter = sumOf(magnetKeys.DiameterMm, magnetKeys.DiameterAllowanceMm);
+  const pocketDepth = sumOf(magnetKeys.ThicknessMm, magnetKeys.DepthAllowanceMm);
+  const hundredths = (value: number | undefined) => (value === undefined ? '—' : value.toFixed(2).replace('.', ','));
   const fields: Record<ConnectorChoice, ParameterField[]> = {
     none: [],
+    magnet: [
+      ...(unavailable === undefined
+        ? []
+        : [
+            { ...note('connector-unavailable', unavailable), tone: 'alert' as const },
+            {
+              type: 'action',
+              key: `${kind}-choose-no-connector`,
+              label: 'Обрати «Без кріплення»',
+              action: 'choose-no-connector',
+            } as const,
+          ]),
+      {
+        type: 'number',
+        key: magnetKeys.Count,
+        label: 'Кількість пар магнітів',
+        suffix: '',
+        range: { ...MAGNET_LIMITS.count, increment: 1 },
+      },
+      note('magnet-pairs', 'Одна пара — два магніти, по одному в кожній частині.'),
+      magnetMm(magnetKeys.DiameterMm, 'Діаметр магніту, мм', MAGNET_LIMITS.magnetDiameterMm, 0.1),
+      magnetMm(magnetKeys.ThicknessMm, 'Товщина магніту, мм', MAGNET_LIMITS.magnetThicknessMm, 0.1),
+      {
+        type: 'disclosure',
+        key: `${kind}-magnet-fit`,
+        label: 'Додаткові налаштування',
+        fields: [
+          magnetMm(magnetKeys.DiameterAllowanceMm, 'Запас за діаметром, мм', MAGNET_LIMITS.diameterAllowanceMm, 0.05),
+          note('magnet-diameter-allowance', 'Додається до повного діаметра магніту.'),
+          magnetMm(magnetKeys.DepthAllowanceMm, 'Запас за глибиною, мм', MAGNET_LIMITS.depthAllowanceMm, 0.05),
+          note('magnet-depth-allowance', 'Додається до товщини магніту.'),
+          note('magnet-hole', `Розмір отвору: Ø${hundredths(pocketDiameter)} × ${hundredths(pocketDepth)} мм`),
+          {
+            type: 'action',
+            key: `${kind}-magnet-fit-reset`,
+            label: 'Відновити стандартні значення',
+            action: 'reset-magnet-allowances',
+            disabled: !context.magnetAllowancesChanged,
+          },
+        ],
+      },
+    ],
     twist:
       twistKeys === undefined || unavailable !== undefined
         ? [
@@ -1282,30 +1384,40 @@ function connectorSection(
     ],
   };
   const helps: Record<SectionType, Record<Exclude<ConnectorChoice, 'none'>, Help>> = {
-    'parallel-to-bases': { dovetail: dovetailHelp, plug: plugHelp, dowel: dowelHelp, twist: twistHelp },
+    'parallel-to-bases': {
+      dovetail: dovetailHelp,
+      plug: plugHelp,
+      dowel: dowelHelp,
+      twist: twistHelp,
+      magnet: magnetHelp(false),
+    },
     vertical: {
       dovetail: verticalDovetailHelp(entrance),
       plug: numberedPlugHelp(VERTICAL_PRINT_NOTE),
       dowel: numberedDowelHelp(VERTICAL_PRINT_NOTE),
       twist: twistHelp,
+      magnet: magnetHelp(false),
     },
     oblique: {
       dovetail: obliqueDovetailHelp(entrance),
       plug: numberedPlugHelp(OBLIQUE_PRINT_NOTE),
       dowel: numberedDowelHelp(OBLIQUE_PRINT_NOTE),
       twist: twistHelp,
+      magnet: magnetHelp(false),
     },
     'oblique-apex': {
       dovetail: obliqueDovetailHelp(entrance),
       plug: numberedPlugHelp(OBLIQUE_PRINT_NOTE),
       dowel: numberedDowelHelp(OBLIQUE_PRINT_NOTE),
       twist: twistHelp,
+      magnet: magnetHelp(false),
     },
     horizontal: {
       dovetail: withBallNote(dovetailHelp),
       plug: withBallNote(plugHelp),
       dowel: withBallNote(dowelHelp),
       twist: twistHelp,
+      magnet: magnetHelp(false),
     },
   };
   // A chosen one explains itself; otherwise the disabled option is explained here.
@@ -1326,6 +1438,7 @@ function connectorSection(
       ? [note('connector-print-placement', PROTRUDING_ON_BALL_NOTE)]
       : [];
   const helpOf = (type: Exclude<ConnectorChoice, 'none'>): Help => {
+    if (type === 'magnet') return magnetHelp(plated);
     if (plated && type !== 'twist') {
       const note =
         kind === 'ball'
@@ -1353,7 +1466,7 @@ function connectorSection(
     return (type === 'plug' ? numberedPlugHelp : numberedDowelHelp)(CONE_VERTICAL_NOTE + printNote);
   };
   const withRoundNotes = (type: Exclude<ConnectorChoice, 'none'>, help: Help): Help =>
-    type === 'dovetail' || type === 'twist'
+    type === 'dovetail' || type === 'twist' || type === 'magnet'
       ? help
       : {
           ...help,
@@ -1745,6 +1858,12 @@ export function shapePanel(kind: ShapeKind, choices: ParameterChoices, context: 
 /** The numeric fields of a section in display order, including those inside groups. */
 export function sectionNumberFields(target: ParameterSection): NumericField[] {
   return target.fields.flatMap((field): readonly NumericField[] =>
-    field.type === 'number' ? [field] : field.type === 'tilt' || field.type === 'trapezoid' ? field.fields : [],
+    field.type === 'number'
+      ? [field]
+      : field.type === 'tilt' || field.type === 'trapezoid'
+        ? field.fields
+        : field.type === 'disclosure'
+          ? field.fields.filter((inner): inner is NumericField => inner.type === 'number')
+          : [],
   );
 }
