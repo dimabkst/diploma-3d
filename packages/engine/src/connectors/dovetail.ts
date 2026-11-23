@@ -7,6 +7,7 @@ import type { Track } from '../scope.ts';
 import type { Vec2 } from '../shapes/polygon.ts';
 import { type ConnectorFeasibility, connectorFeasibility } from './bounds.ts';
 import {
+  type AxisParallelCylinderSection,
   type BallHorizontalSection,
   ballPointWall,
   CONNECTOR_MIN_WALL_MM,
@@ -286,6 +287,7 @@ function wallsOf(
     case 'cone-oblique':
       return coneWalls(section, dimensions, groove, towardsStop);
     case 'cylinder-face':
+    case 'axis-parallel':
       return coneWalls(section, dimensions, groove, towardsStop);
     case 'cone-plate':
       return (['upper', 'lower'] as const).flatMap((part) => plateInterfaceWalls(section.interfaces[part], part, dimensions));
@@ -424,7 +426,7 @@ function obliqueWalls(
  * and the first three each meet the last at the closed end's corners, which these walls keep inside the part.
  */
 function coneWalls(
-  section: ConeParallelSection | ConeVerticalSection | ConeObliqueSection | CylinderFaceSection,
+  section: ConeParallelSection | ConeVerticalSection | ConeObliqueSection | CylinderFaceSection | AxisParallelCylinderSection,
   { height, length, clearance }: DovetailDimensions,
   groove: ReturnType<typeof grooveExtent>,
   towardsStop: 1 | -1,

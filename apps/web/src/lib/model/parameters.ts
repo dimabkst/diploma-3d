@@ -1,6 +1,8 @@
 import {
   apexChordCrossesBase,
   atSecondPlane,
+  axialApexAngles,
+  axisParallelOffsetLimitPercent,
   ballOffsetLimitPercent,
   ballRadiusMm,
   ballSliceMinimumMm,
@@ -57,6 +59,7 @@ import {
   type ConeShape,
   type ConnectorProfile,
   type ConnectorType,
+  type CylinderShape,
   DEFAULT_CONNECTOR_PROFILE,
   DEFAULT_DOVETAIL,
   DEFAULT_DOWEL_CLEARANCES_MM,
@@ -191,6 +194,8 @@ export type ParameterKey =
   | 'cylinderObliquePositionPercent'
   | 'cylinderObliqueInclinationDeg'
   | 'cylinderObliqueDirectionDeg'
+  | 'cylinderAxisOffsetPercent'
+  | 'cylinderAxisDirectionDeg'
   | 'cylinderDovetailSize'
   | 'cylinderDovetailLengthPercent'
   | 'cylinderDovetailClearanceMm'
@@ -312,6 +317,8 @@ export type ParameterChoices = {
   coneObliqueThrough: ObliqueThrough;
   /** Whether a plane through the apex has its first valid angle yet, which depends on the cone when it is first chosen. */
   coneApexStarted: boolean;
+  /** Whether a plane through the apex is held to the cone's axis, its angle following from the cone and the direction. */
+  coneApexAxial: boolean;
   ballSection: SectionChoice;
   ballConnector: ConnectorChoice;
   ballDovetailEntrance: DovetailEntrance;
@@ -329,6 +336,7 @@ export type ToggleKey =
   | 'cylinderPlate'
   | 'conePartsSeparated'
   | 'conePlate'
+  | 'coneApexAxial'
   | 'ballPartsSeparated'
   | 'ballPlate';
 
@@ -456,6 +464,8 @@ export const initialParameterTexts = (): ParameterTexts => ({
   cylinderObliquePositionPercent: formatDecimal(DEFAULT_OBLIQUE_SECTION.positionPercent),
   cylinderObliqueInclinationDeg: formatDecimal(DEFAULT_OBLIQUE_SECTION.inclinationDeg),
   cylinderObliqueDirectionDeg: formatDecimal(DEFAULT_OBLIQUE_SECTION.directionDeg),
+  cylinderAxisOffsetPercent: formatDecimal(DEFAULT_SECTION_OFFSET_PERCENT),
+  cylinderAxisDirectionDeg: formatDecimal(AXIS_PARALLEL_DEFAULT_DIRECTION_DEG),
   cylinderDovetailSize: formatDecimal(DEFAULT_DOVETAIL.sizeFactor),
   cylinderDovetailLengthPercent: formatDecimal(DEFAULT_DOVETAIL.lengthPercent),
   cylinderDovetailClearanceMm: formatDecimal(DEFAULT_DOVETAIL.clearanceMm),
@@ -528,6 +538,7 @@ export const initialParameterChoices = (): ParameterChoices => ({
   conePlate: false,
   coneObliqueThrough: 'axis',
   coneApexStarted: false,
+  coneApexAxial: false,
   ballSection: 'none',
   ballConnector: 'none',
   ballDovetailEntrance: 'standard',
@@ -724,6 +735,8 @@ const validators: Readonly<Record<IndependentKey, (text: string, exact?: number)
   cylinderObliquePositionPercent: validateSectionPosition,
   cylinderObliqueInclinationDeg: validateObliqueInclination,
   cylinderObliqueDirectionDeg: validateObliqueDirection,
+  cylinderAxisOffsetPercent: validateSectionOffset,
+  cylinderAxisDirectionDeg: validateObliqueDirection,
   cylinderDovetailSize: validateConnectorDimension,
   cylinderDovetailLengthPercent: validateConnectorDimension,
   cylinderDovetailClearanceMm: validateDovetailClearance,
@@ -1369,6 +1382,8 @@ function sectionChecks(
       ranges: {},
     };
   }
+  if (section.type === 'axis-parallel')
+    return axisParallelChecks(keys, solid as CylinderShape, longestDimensionMm, section, edits);
   return offsetChecks(
     keys,
     solid,
@@ -1378,6 +1393,48 @@ function sectionChecks(
     roundDimensionsMm(solid, scale).radius,
     edits,
   );
+}
+
+/** The direction a new plane parallel to the axis moves along: +Y, across the lean, as a vertical cut's. */
+const AXIS_PARALLEL_DEFAULT_DIRECTION_DEG = 90;
+
+/**
+ * A plane parallel to a cylinder's axis: its base-plane line within the distance from the axis that leaves both parts usable
+ * along the plane's normal, from the engine's limit for its direction, then the connector's checks. Nothing is moved.
+ */
+function axisParallelChecks(
+  keys: SectionKeys,
+  shape: CylinderShape,
+  longestDimensionMm: number,
+  section: Extract<Section, { type: 'axis-parallel' }>,
+  edits: ConnectorEdits | undefined,
+): SectionCheck {
+  const offsetKey = planarKeysOf(keys).axisParallel?.offset ?? keys.offset;
+  const limit = axisParallelOffsetLimitPercent(shape, { longestDimensionMm }, section.directionDeg);
+  const ranges: SectionRanges = { [offsetKey]: { min: -limit, max: limit } };
+  if (Math.abs(section.offsetPercent) > limit + CONSTRAINT_ROUNDOFF_MM) {
+    const shown = percentRange({ min: -limit, max: limit }, 1);
+    return {
+      errors: {
+        [offsetKey]:
+          `За цього напряму допустимо від ${formatDecimal(shown.min)} % до ${formatDecimal(shown.max)} %: ` +
+          'обидві частини мають лишатися придатними до друку.',
+      },
+      ranges,
+    };
+  }
+  const connector = connectorChecks(keys, shape, longestDimensionMm, section, edits);
+  return connector === undefined ? { errors: {}, ranges } : { ...connector, ranges: { ...ranges, ...connector.ranges } };
+}
+
+/** The state with the plane parallel to the axis moved onto the axis, an axial section; its direction stays. */
+export function axialAxisParallel(kind: ShapeKind, state: ParameterState): ParameterState {
+  const keys = sectionKeys[kind];
+  const axis = keys === undefined || !('position' in keys) ? undefined : (keys as PlanarSectionKeys).axisParallel;
+  if (axis === undefined) return state;
+  const exact = { ...state.exact };
+  delete exact[axis.offset];
+  return { ...state, texts: { ...state.texts, [axis.offset]: '0' }, exact };
 }
 
 /** Said where the solid's lower base cuts a section plate's margin off; its margin stays as given elsewhere. */
@@ -1878,6 +1935,7 @@ function jointChecks(
       horizontal: keys.offset,
       oblique: planar?.oblique.inclination ?? keys.offset,
       'oblique-apex': coneApexKeys.inclination,
+      'axis-parallel': planar?.axisParallel?.offset ?? keys.offset,
     };
     errors[cutField[section.type]] = feasibility.unattributed.map(explain).join(' ');
   }
@@ -1909,12 +1967,14 @@ export type CutWording = SectionType | 'cone' | 'cone-plate';
 const BALL_REPAIR = 'наблизьте переріз до центра кулі';
 
 /** A plane through the apex reads like any oblique one, but for the position it does not have; a plate's cut like a cone's. */
-const wordingOf = (cut: CutWording): Exclude<CutWording, 'oblique-apex' | 'cone-plate'> =>
-  cut === 'oblique-apex' ? 'oblique' : cut === 'cone-plate' ? 'cone' : cut;
+const wordingOf = (cut: CutWording): Exclude<CutWording, 'oblique-apex' | 'cone-plate' | 'axis-parallel'> =>
+  cut === 'oblique-apex' ? 'oblique' : cut === 'cone-plate' ? 'cone' : cut === 'axis-parallel' ? 'vertical' : cut;
 
 /** A part as the messages name it: by its place in a parallel cut, by its number in the others, where it has no place. */
 function partInMessage(part: 'lower' | 'upper', cut: CutWording): string {
-  if (cut === 'vertical' || cut === 'oblique' || cut === 'oblique-apex') return part === 'lower' ? 'у частині 1' : 'у частині 2';
+  if (cut === 'vertical' || cut === 'oblique' || cut === 'oblique-apex' || cut === 'axis-parallel') {
+    return part === 'lower' ? 'у частині 1' : 'у частині 2';
+  }
   return part === 'lower' ? 'у нижній частині' : 'у верхній частині';
 }
 
@@ -2169,6 +2229,8 @@ type SectionKeys = {
 /** The further fields of the solids with an axis: a plane parallel to their base and a plane through a point on the axis. */
 export type PlanarSectionKeys = SectionKeys & {
   readonly position: 'cylinderSectionPercent' | 'coneSectionPercent';
+  /** A plane parallel to an oblique cylinder's axis: the base-plane line's offset and the direction it moves along. */
+  readonly axisParallel?: { readonly offset: 'cylinderAxisOffsetPercent'; readonly direction: 'cylinderAxisDirectionDeg' };
   readonly oblique: {
     readonly position: 'cylinderObliquePositionPercent' | 'coneObliquePositionPercent';
     readonly inclination: 'cylinderObliqueInclinationDeg' | 'coneObliqueInclinationDeg';
@@ -2263,6 +2325,7 @@ export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys | Plana
       inclination: 'cylinderObliqueInclinationDeg',
       direction: 'cylinderObliqueDirectionDeg',
     },
+    axisParallel: { offset: 'cylinderAxisOffsetPercent', direction: 'cylinderAxisDirectionDeg' },
     separated: 'cylinderPartsSeparated',
     plate: { toggle: 'cylinderPlate', thickness: 'cylinderPlateThicknessMm', margin: 'cylinderPlateMarginMm' },
     connector: 'cylinderConnector',
@@ -2414,7 +2477,10 @@ function resolveSection(
     vertical: [keys.offset, ...plateFields],
     horizontal: [keys.offset, ...(secondCut === undefined ? [] : [secondCut.offset]), ...plateFields],
     oblique: planar === undefined ? [] : [...Object.values(planar.oblique), ...plateFields],
-    'oblique-apex': [...Object.values(coneApexKeys), ...plateFields],
+    'oblique-apex': choices.coneApexAxial
+      ? [coneApexKeys.direction, ...plateFields]
+      : [...Object.values(coneApexKeys), ...plateFields],
+    'axis-parallel': planar?.axisParallel === undefined ? [] : [...Object.values(planar.axisParallel), ...plateFields],
   };
   const cutKeys = cutFields[type];
   const { values, errors } = validateFields([...cutKeys, ...fields], texts, exact);
@@ -2506,13 +2572,25 @@ function resolveSection(
           ...joining,
         };
       }
-      case 'oblique-apex':
+      case 'oblique-apex': {
+        const directionDeg = read(coneApexKeys.direction) % OBLIQUE_DIRECTION_LIMITS.max;
+        // An axial plane takes its angle from the cone as it is now, so that it holds the axis whatever the cone becomes.
+        if (choices.coneApexAxial && shape?.kind === 'cone') {
+          return { type, ...axialApexAngles(shape as ConeShape, directionDeg), axial: true, ...joining };
+        }
+        return { type, inclinationDeg: read(coneApexKeys.inclination), directionDeg, ...joining };
+      }
+      case 'axis-parallel': {
+        const keys = planarKeysOf(sectionKeys[kind] as SectionKeys).axisParallel as NonNullable<
+          PlanarSectionKeys['axisParallel']
+        >;
         return {
           type,
-          inclinationDeg: read(coneApexKeys.inclination),
-          directionDeg: read(coneApexKeys.direction) % OBLIQUE_DIRECTION_LIMITS.max,
+          offsetPercent: read(keys.offset),
+          directionDeg: read(keys.direction) % OBLIQUE_DIRECTION_LIMITS.max,
           ...joining,
         };
+      }
     }
   };
   return { values, errors, section: sectionOf() };
@@ -2723,6 +2801,8 @@ export const shapeParameterKeys: Readonly<
       'cylinderObliquePositionPercent',
       'cylinderObliqueInclinationDeg',
       'cylinderObliqueDirectionDeg',
+      'cylinderAxisOffsetPercent',
+      'cylinderAxisDirectionDeg',
       'cylinderPlateThicknessMm',
       'cylinderPlateMarginMm',
       'cylinderDovetailSize',
@@ -2776,6 +2856,7 @@ export const shapeParameterKeys: Readonly<
       'coneSection',
       'coneObliqueThrough',
       'coneApexStarted',
+      'coneApexAxial',
       'conePartsSeparated',
       'conePlate',
       'coneConnector',
@@ -2912,7 +2993,13 @@ function inactiveSectionKeys(kind: ShapeKind, choices: ParameterChoices): (keyof
     vertical: [keys.offset, ...plateFields],
     horizontal: [keys.offset, ...secondFields, ...plateFields],
     oblique: [...obliqueFields, 'coneObliqueThrough', ...plateFields],
-    'oblique-apex': [...apexFields, 'coneObliqueThrough', ...plateFields],
+    'oblique-apex': [
+      ...(choices.coneApexAxial ? [coneApexKeys.direction] : apexFields),
+      'coneObliqueThrough',
+      'coneApexAxial',
+      ...plateFields,
+    ],
+    'axis-parallel': [...(planar?.axisParallel === undefined ? [] : Object.values(planar.axisParallel)), ...plateFields],
   };
   const active = new Set<string>(section === undefined ? [] : cutFields[section]);
   const allPlateFields = [

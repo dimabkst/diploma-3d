@@ -747,7 +747,7 @@ describe('plane sections', () => {
 
   it('offers parallel sections for the cylinder and the cone, and a plane through an apex for the cone alone', () => {
     expect(SECTIONS_BY_SHAPE).toEqual({
-      cylinder: ['parallel-to-bases', 'vertical', 'oblique'],
+      cylinder: ['parallel-to-bases', 'vertical', 'oblique', 'axis-parallel'],
       cone: ['parallel-to-bases', 'vertical', 'oblique', 'oblique-apex'],
       ball: ['horizontal'],
     });

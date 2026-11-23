@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const SECTION_TYPES = ['parallel-to-bases', 'vertical', 'oblique', 'oblique-apex', 'horizontal'] as const;
+export const SECTION_TYPES = ['parallel-to-bases', 'vertical', 'oblique', 'oblique-apex', 'horizontal', 'axis-parallel'] as const;
 
 export type SectionType = (typeof SECTION_TYPES)[number];
 
@@ -311,6 +311,11 @@ export const apexSectionSchema = z.strictObject({
   type: z.literal('oblique-apex'),
   inclinationDeg: z.number().gt(0).max(APEX_INCLINATION_MAX_DEG),
   directionDeg: z.number().min(OBLIQUE_DIRECTION_LIMITS.min).max(OBLIQUE_DIRECTION_LIMITS.max),
+  /**
+   * The axial section: the plane also holds the base's centre, whatever the cone. The angle then follows from the cone and the
+   * direction, and the engine derives it anew from the cone it builds; a stored angle only records what was derived.
+   */
+  axial: z.boolean().optional(),
   /** A section plate on this plane; only a cone offers one so far, which the engine checks. */
   plate: sectionPlateSchema.optional(),
   /** Joins the parts; without one, both cut faces stay flat. */
@@ -318,6 +323,24 @@ export const apexSectionSchema = z.strictObject({
 });
 
 export type ApexSection = z.infer<typeof apexSectionSchema>;
+
+/**
+ * A cylinder's plane parallel to its axis a = C1 − C0, oblique or not: the line of the base plane through the point at
+ * offsetPercent of the radius from the base's centre along the horizontal direction directionDeg, measured from +X towards +Y,
+ * perpendicular to it, swept along a. Its normal is u × a for the line's direction u, so n·a = 0 whatever the lean, and at
+ * offset zero it holds the whole axis, an axial section. For a right cylinder it is a vertical plane.
+ */
+export const axisParallelSectionSchema = z.strictObject({
+  type: z.literal('axis-parallel'),
+  offsetPercent: sectionOffsetSchema.default(DEFAULT_SECTION_OFFSET_PERCENT),
+  directionDeg: z.number().min(OBLIQUE_DIRECTION_LIMITS.min).max(OBLIQUE_DIRECTION_LIMITS.max).default(90),
+  /** A section plate on this plane, centred on it. */
+  plate: sectionPlateSchema.optional(),
+  /** Joins the parts; without one, both cut faces stay flat. */
+  connector: connectorSchema.optional(),
+});
+
+export type AxisParallelSection = z.infer<typeof axisParallelSectionSchema>;
 
 /** A horizontal plane through a ball, at a signed distance from its centre in percent of the radius, positive upwards. */
 /**
@@ -349,6 +372,7 @@ export const sectionSchema = z.discriminatedUnion('type', [
   obliqueSectionSchema,
   apexSectionSchema,
   horizontalSectionSchema,
+  axisParallelSectionSchema,
 ]);
 
 export type Section = z.infer<typeof sectionSchema>;

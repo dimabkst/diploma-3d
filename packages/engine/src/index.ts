@@ -45,8 +45,13 @@ export {
 export {
   type ApexChord,
   type ApexCut,
+  type AxisParallelCut,
+  type AxisParallelCylinderSection,
   apexChordCrossesBase,
   atSecondPlane,
+  axialApexAngles,
+  axisParallelCylinderSection,
+  axisParallelOffsetLimitPercent,
   type BallHorizontalSection,
   type BallPlateSection,
   ballOffsetLimitPercent,

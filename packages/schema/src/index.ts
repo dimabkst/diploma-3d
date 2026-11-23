@@ -77,7 +77,9 @@ export {
 export {
   APEX_INCLINATION_MAX_DEG,
   type ApexSection,
+  type AxisParallelSection,
   apexSectionSchema,
+  axisParallelSectionSchema,
   BALL_OFFSET_LIMITS,
   CONNECTOR_PROFILES,
   CONNECTOR_TYPES,

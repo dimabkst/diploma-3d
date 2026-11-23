@@ -121,6 +121,18 @@ export interface ObliqueCylinderSection extends FacetedSection {
 }
 
 /**
+ * A cylinder's plane parallel to its axis a = C1 − C0, read off the polygonal solid: the base-plane line at `offset` from the
+ * base's centre along the horizontal direction w, swept along a, so that n·a = 0 for every lean. Part A lies on the negative
+ * side of n, which points along w; u is a's direction, uphill, so that the plane's own section of an oblique cylinder is the
+ * parallelogram of the base chord and a, not a rectangle.
+ */
+export interface AxisParallelCylinderSection extends FacetedSection {
+  readonly type: 'axis-parallel';
+  /** The base-plane line's signed distance from the base's centre along w, in millimetres. */
+  readonly offset: number;
+}
+
+/**
  * A cone's cut parallel to its base: the frustum lies below the plane, the smaller cone with the apex above it. The upper
  * part narrows and, in an oblique cone, leans over the section, so nothing above the cut can be read off its radius.
  */
@@ -224,7 +236,7 @@ export interface BallPlateSection extends Omit<BallHorizontalSection, 'type'>, P
 }
 
 /** The cuts of a cylinder, which say where a dovetail's entrance lies. */
-export type CylinderCutType = 'parallel-to-bases' | 'vertical' | 'oblique';
+export type CylinderCutType = 'parallel-to-bases' | 'vertical' | 'oblique' | 'axis-parallel';
 
 /**
  * A cylinder's cut read off the faces of its polygonal solid, with the frame and the plane of the cut it was read off, rather
@@ -263,6 +275,7 @@ export type SolidSection =
   | ParallelCylinderSection
   | VerticalCylinderSection
   | ObliqueCylinderSection
+  | AxisParallelCylinderSection
   | ConeParallelSection
   | ConeVerticalSection
   | ConeObliqueSection
@@ -281,6 +294,12 @@ export interface OffsetCut {
   readonly otherOffsetPercent?: number;
 }
 
+/** A cylinder's plane parallel to its axis: the base-plane line's offset in percent of the radius, and the direction it moves along. */
+export interface AxisParallelCut {
+  readonly offsetPercent: number;
+  readonly offsetDirectionDeg: number;
+}
+
 /** An oblique cut: the point on the axis, the angle to the base plane, and the horizontal direction it rises along. */
 export interface ObliqueCut {
   readonly positionPercent: number;
@@ -295,13 +314,13 @@ export interface ApexCut {
 }
 
 /** A plane without a plate: parallel to the base at this percentage of the height, or another plane. */
-export type PlaneCut = number | OffsetCut | ObliqueCut | ApexCut;
+export type PlaneCut = number | OffsetCut | ObliqueCut | ApexCut | AxisParallelCut;
 
 /**
  * A cut that removes a section plate centred on its plane: the plane's own fields, a parallel cut's position among them, and
  * the plate's.
  */
-export type PlateCut = (OffsetCut | ObliqueCut | ApexCut | { readonly positionPercent: number }) & {
+export type PlateCut = (OffsetCut | ObliqueCut | ApexCut | AxisParallelCut | { readonly positionPercent: number }) & {
   readonly plate: { readonly thicknessMm: number; readonly marginMm: number };
 };
 
@@ -313,7 +332,7 @@ export const isPlateCut = (cut: SolidCut): cut is PlateCut => typeof cut !== 'nu
 /** The plane a plate lies on, as it is given without one. */
 export function planeOfPlateCut(cut: PlateCut): PlaneCut {
   const { plate: _plate, ...plane } = cut;
-  if ('offsetPercent' in plane || 'inclinationDeg' in plane) return plane as OffsetCut | ObliqueCut | ApexCut;
+  if ('offsetPercent' in plane || 'inclinationDeg' in plane) return plane as OffsetCut | ObliqueCut | ApexCut | AxisParallelCut;
   return plane.positionPercent;
 }
 
@@ -666,6 +685,66 @@ export function obliqueCylinderSection(shape: CylinderShape, scale: PhysicalScal
 }
 
 /**
+ * The axes of a cylinder's plane parallel to its axis a = (d, 0, H), C0 at the origin: w = (cos ψ, sin ψ, 0) the direction the
+ * base-plane line moves along, l = (−sin ψ, cos ψ, 0) the line's own direction and n = l × a normalised, so that n·a = 0 and
+ * n·w = H/|l × a| > 0; u = a/|a| and v = u × n. `toward` is n·w: how far the plane moves along n per millimetre of the line's offset.
+ */
+function axisParallelAxes({ height, offset: d }: { height: number; offset: number }, directionDeg: number) {
+  const [cos, sin] = cosSinDeg(directionDeg % 360);
+  const along: Vec3 = [-sin, cos, 0];
+  const axis: Vec3 = [d, 0, height];
+  const n = normalised(cross(along, axis));
+  const u = normalised(axis);
+  return { n, u, v: cross(u, n), toward: dot(n, [cos, sin, 0]), w: [cos, sin, 0] as Vec3 };
+}
+
+/** A cylinder's plane parallel to its axis, as built; see `AxisParallelCylinderSection`. */
+export function axisParallelCylinderSection(
+  shape: CylinderShape,
+  scale: PhysicalScale,
+  cut: AxisParallelCut,
+): AxisParallelCylinderSection {
+  const dimensions = roundDimensionsMm(shape, scale);
+  const { n, u, v, toward } = axisParallelAxes(dimensions, cut.offsetDirectionDeg);
+  const offset = sectionOffsetMm(cut.offsetPercent, dimensions.radius);
+  return {
+    ...facetedSection(cylinderPolyhedron(dimensions), { n, u, v }, offset * toward, dimensions.radius),
+    type: 'axis-parallel',
+    offset,
+  };
+}
+
+/**
+ * How far a plane parallel to the axis may move its base-plane line from the base's centre along this direction, in percent of
+ * the radius: the rule of a vertical cut, measured along the plane's normal, where each part reaches (n·w) times as far as the
+ * line moves. Every horizontal section is the base polygon moved along the axis's lean, so the parts reach as far along n as the
+ * base polygon reaches along w; the polygon is centrally symmetric, so the range is ±this. Zero for a solid too small.
+ */
+export function axisParallelOffsetLimitPercent(shape: CylinderShape, scale: PhysicalScale, directionDeg: number): number {
+  const dimensions = roundDimensionsMm(shape, scale);
+  const { toward, w } = axisParallelAxes(dimensions, directionDeg);
+  const reach = Math.max(...basePolygon(dimensions.radius).map(([x, y]) => x * w[0] + y * w[1]));
+  const thinnest = Math.max((SECTION_POSITION_LIMITS.min / 100) * 2 * reach, CONNECTOR_MIN_WALL_MM / toward);
+  return Math.max(0, sectionOffsetPercent(reach - thinnest, dimensions.radius));
+}
+
+/**
+ * A plane through a cone's apex A that also holds the base's centre C, rising along the direction φ, or along φ + 180°, which is
+ * the same plane: with n = (−sin α cos φ, −sin α sin φ, cos α) and A − C = (d, 0, H), n·(A − C) = 0 gives tan α = H/(d cos φ).
+ * Its angle stays within (0°, 90°] by turning the direction over where d cos φ < 0; a right cone's is 90°, a vertical plane. The
+ * cone's ratios suffice, whatever its size. The plane is an ordinary plane through the apex with these angles.
+ */
+export function axialApexAngles(shape: ConeShape, directionDeg: number): { inclinationDeg: number; directionDeg: number } {
+  const [cos] = cosSinDeg(directionDeg % 360);
+  const along = shape.offsetRatio * cos;
+  return {
+    inclinationDeg: (Math.atan2(shape.heightRatio, Math.abs(along)) * 180) / Math.PI,
+    // A direction across the lean leaves d cos φ at roundoff: the plane is vertical either way, and keeps its direction.
+    directionDeg: along < -AXIS_IN_PLANE_RELATIVE ? (directionDeg + 180) % 360 : directionDeg % 360,
+  };
+}
+
+/**
  * A cone's cut at z = t·H, with the frame of a cylinder's parallel cut: u is perpendicular to the lean, +Y for every cone,
  * and a dovetail's standard entrance lies at −u. The section is the base polygon scaled by 1 − t about the apex, centred on
  * C0 + t·(A − C0), which the tests compare with its contour; the walls come from the faces alone.
@@ -693,6 +772,7 @@ export function facetedCut(shape: RoundShape, scale: PhysicalScale, cut: PlaneCu
 /** The cone's own section for a plane without a plate. */
 function coneCut(shape: ConeShape, scale: PhysicalScale, cut: PlaneCut): ConeCutSection {
   if (typeof cut === 'number') return coneSection(shape, scale, cut);
+  if ('offsetDirectionDeg' in cut) throw new GeometryError('A cone offers no plane parallel to its axis but the vertical one.');
   return 'offsetPercent' in cut ? coneVerticalSection(shape, scale, cut.offsetPercent) : coneObliqueSection(shape, scale, cut);
 }
 
@@ -725,8 +805,9 @@ function cylinderCut(
   shape: CylinderShape,
   scale: PhysicalScale,
   cut: PlaneCut,
-): ParallelCylinderSection | VerticalCylinderSection | ObliqueCylinderSection {
+): ParallelCylinderSection | VerticalCylinderSection | ObliqueCylinderSection | AxisParallelCylinderSection {
   if (typeof cut === 'number') return cylinderSection(shape, scale, cut);
+  if ('offsetDirectionDeg' in cut) return axisParallelCylinderSection(shape, scale, cut);
   if ('offsetPercent' in cut) return verticalCylinderSection(shape, scale, cut.offsetPercent);
   if ('positionPercent' in cut) return obliqueCylinderSection(shape, scale, cut);
   throw new GeometryError('A cylinder has no apex to cut through.');
@@ -1133,6 +1214,8 @@ const planeCutOf = (section: Section): PlaneCut => {
       };
     case 'oblique-apex':
       return { inclinationDeg: section.inclinationDeg, directionDeg: section.directionDeg };
+    case 'axis-parallel':
+      return { offsetPercent: section.offsetPercent, offsetDirectionDeg: section.directionDeg };
     case 'parallel-to-bases':
       return section.positionPercent;
   }
@@ -1145,13 +1228,12 @@ export type SectionedShape = RoundShape | BallShape;
 export function solidCut(shape: SectionedShape, scale: PhysicalScale, cut: SolidCut): SolidSection {
   if (isPlateCut(cut)) return plateSection(shape, scale, cut);
   if (shape.kind === 'ball') {
-    if (typeof cut === 'number' || !('offsetPercent' in cut)) throw new GeometryError('A ball offers only a horizontal cut.');
+    if (typeof cut === 'number' || !('offsetPercent' in cut) || 'offsetDirectionDeg' in cut) {
+      throw new GeometryError('A ball offers only a horizontal cut.');
+    }
     return ballSection(scale, cut.offsetPercent, cut.otherOffsetPercent);
   }
-  if (shape.kind === 'cone') {
-    if (typeof cut === 'number') return coneSection(shape, scale, cut);
-    return 'offsetPercent' in cut ? coneVerticalSection(shape, scale, cut.offsetPercent) : coneObliqueSection(shape, scale, cut);
-  }
+  if (shape.kind === 'cone') return coneCut(shape, scale, cut);
   return cylinderCut(shape, scale, cut);
 }
 

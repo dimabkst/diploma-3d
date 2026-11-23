@@ -1,4 +1,5 @@
 import {
+  axialApexAngles,
   DOVETAIL_PROPORTIONS,
   obliquePlaneContainsAxis,
   ROUND_CONNECTOR_PROPORTIONS,
@@ -204,7 +205,8 @@ export type PanelAction =
   | 'choose-no-connector'
   | 'reset-magnet-allowances'
   | 'add-second-cut'
-  | 'remove-second-cut';
+  | 'remove-second-cut'
+  | 'axial-section';
 
 /**
  * Further fields within a group, collapsed at first, such as the magnets' fit allowances. Opening or closing it changes no value
@@ -624,6 +626,7 @@ const sectionNames: Readonly<Record<SectionChoice, string>> = {
   vertical: 'Вертикальний',
   oblique: 'Похилий',
   horizontal: 'Горизонтальний',
+  'axis-parallel': 'Паралельно осі',
 };
 
 const parallelSectionHelp: Help = {
@@ -645,6 +648,20 @@ const verticalSectionHelp: Help = {
     'Частини 1 і 2 лежать по різні боки площини й експортуються окремими об’єктами в одному масштабі; розсування ' +
     'змінює лише перегляд. У файлі вони стоять на залишках своїх основ. Межі зміщення відсувають площину від бічної ' +
     'поверхні, але не гарантують, що тонку частину вдасться надрукувати.',
+};
+
+const axisParallelSectionHelp: Help = {
+  label: 'Як задано переріз?',
+  text:
+    'Площина паралельна осі циліндра — відрізку між центрами основ — навіть у похилого циліндра, тож вона не обов’язково ' +
+    'вертикальна. Її слід на нижній основі — пряма, зміщена від центра основи на задану частку радіуса r у напрямку ' +
+    '«Напрям зміщення» (0° — уздовж осі X, 90° — уздовж осі Y); уздовж осі ця пряма й витягується в площину.\n\n' +
+    '0% — осьовий переріз: площина проходить через центри обох основ. Кнопка «Осьовий переріз» ставить зміщення 0%, ' +
+    'напрям лишається. Переріз прямого циліндра — прямокутник, похилого — паралелограм; зі зміщенням змінюється його ' +
+    'ширина, а не нахил.\n\n' +
+    'Частини 1 і 2 лежать по різні боки площини й експортуються окремими об’єктами в одному масштабі. Межі зміщення ' +
+    'залежать від напрямку й відсувають площину від бічної поверхні, але не гарантують, що тонку частину вдасться ' +
+    'надрукувати.',
 };
 
 const obliqueSectionHelp: Help = {
@@ -1425,6 +1442,13 @@ function connectorSection(
       twist: twistHelp,
       magnet: magnetHelp(false),
     },
+    'axis-parallel': {
+      dovetail: verticalDovetailHelp(entrance),
+      plug: numberedPlugHelp(VERTICAL_PRINT_NOTE),
+      dowel: numberedDowelHelp(VERTICAL_PRINT_NOTE),
+      twist: twistHelp,
+      magnet: magnetHelp(false),
+    },
     horizontal: {
       dovetail: withBallNote(dovetailHelp),
       plug: withBallNote(plugHelp),
@@ -1662,6 +1686,19 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
   const keys = sectionKeys[kind] as PlanarSectionKeys | undefined;
   if (keys === undefined) throw new Error(`No section fields for ${kind}.`);
   const chosen = choices[keys.choice];
+  const values = context.values ?? {};
+  const leaning = kind === 'cylinder' && values.cylinderOffsetRatio !== undefined && values.cylinderOffsetRatio !== 0;
+  const axisKeys = keys.axisParallel;
+  const axisInterval = axisKeys === undefined ? undefined : context.sectionRanges?.[axisKeys.offset];
+  const axial = chosen === 'axis-parallel' && axisKeys !== undefined && values[axisKeys.offset] === 0;
+  const apexAxial = kind === 'cone' && choices.coneApexAxial;
+  const coneShape =
+    kind === 'cone' && values.coneHeightRatio !== undefined && values.coneOffsetRatio !== undefined
+      ? ({ kind: 'cone', heightRatio: values.coneHeightRatio, offsetRatio: values.coneOffsetRatio } as const)
+      : undefined;
+  const apexDirection = values[coneApexKeys.direction];
+  const axialAngle =
+    coneShape === undefined || apexDirection === undefined ? undefined : axialApexAngles(coneShape, apexDirection).inclinationDeg;
   // A cone has one base to be parallel to.
   const namesOf = (choice: SectionChoice) =>
     kind === 'cone' && choice === 'parallel-to-bases' ? 'Паралельно основі' : sectionNames[choice];
@@ -1669,7 +1706,10 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
     type: 'choice',
     key: keys.choice,
     label: 'Тип перерізу',
-    options: (['none', 'parallel-to-bases', 'vertical', 'oblique'] as const).map((value) => ({ value, label: namesOf(value) })),
+    options: (['none', 'parallel-to-bases', 'vertical', 'oblique', 'axis-parallel'] as const)
+      // A right cylinder's planes parallel to its axis are its vertical ones; a cone has no other.
+      .filter((value) => value !== 'axis-parallel' || (kind === 'cylinder' && (leaning || chosen === value)))
+      .map((value) => ({ value, label: namesOf(value) })),
   };
   const { offset, oblique } = keys;
   const interval = context.sectionRanges?.[offset];
@@ -1693,6 +1733,31 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
   const details: Record<SectionChoice, ParameterField[]> = {
     none: [],
     horizontal: [],
+    'axis-parallel':
+      axisKeys === undefined
+        ? []
+        : [
+            {
+              type: 'number',
+              key: axisKeys.offset,
+              label: 'Зміщення від осі',
+              suffix: '% r',
+              range:
+                axisInterval === undefined || axisInterval === null
+                  ? undefined
+                  : percentRange(axisInterval, SECTION_PERCENT_INCREMENT),
+            },
+            { type: 'number', key: axisKeys.direction, label: 'Напрям зміщення', suffix: '°', range: obliqueDirectionRange },
+            {
+              type: 'action',
+              key: `${kind}-axial-section`,
+              label: 'Осьовий переріз',
+              action: 'axial-section',
+              ...(axial ? { disabled: true } : {}),
+            },
+            toggle,
+            ...plateFields,
+          ],
     'parallel-to-bases': [
       {
         type: 'number',
@@ -1718,13 +1783,24 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
     oblique: throughApex
       ? [
           through,
-          {
-            type: 'number',
-            key: coneApexKeys.inclination,
-            label: 'Кут до площини основи',
-            suffix: '°',
-            range: apexAngles === undefined || apexAngles === null ? undefined : planeAngleRange(apexAngles, ANGLE_INCREMENT_DEG),
-          },
+          { type: 'toggle', key: 'coneApexAxial', label: 'Осьовий переріз' },
+          // Held to the axis, the angle follows from the cone and the direction; the own angle waits for the switch to go off.
+          apexAxial
+            ? {
+                type: 'note' as const,
+                key: 'cone-apex-axial-angle',
+                text:
+                  `Площина проходить через вершину й центр основи, кут до площини основи — ` +
+                  `${axialAngle === undefined ? '—' : formatDecimal(Math.round(axialAngle * 10) / 10)}°.`,
+              }
+            : {
+                type: 'number',
+                key: coneApexKeys.inclination,
+                label: 'Кут до площини основи',
+                suffix: '°',
+                range:
+                  apexAngles === undefined || apexAngles === null ? undefined : planeAngleRange(apexAngles, ANGLE_INCREMENT_DEG),
+              },
           { type: 'number', key: coneApexKeys.direction, label: 'Напрям нахилу', suffix: '°', range: obliqueDirectionRange },
           toggle,
           ...plateFields,
@@ -1755,6 +1831,7 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
   const help: Record<SectionChoice, Help | undefined> = {
     none: undefined,
     horizontal: undefined,
+    'axis-parallel': axisParallelSectionHelp,
     'parallel-to-bases': kind === 'cone' ? coneSectionHelp : parallelSectionHelp,
     vertical: kind === 'cone' ? coneVerticalSectionHelp : verticalSectionHelp,
     oblique: kind === 'cone' ? (throughApex ? coneApexSectionHelp : coneObliqueSectionHelp) : obliqueSectionHelp,
@@ -1769,7 +1846,14 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
         ? withPlateHelp(shownHelp, throughApex && chosen === 'oblique', kind === 'cylinder' ? CYLINDER_PLATE_HELP : undefined)
         : shownHelp,
     status: {
-      text: chosen === 'none' ? 'немає' : withPlate ? 'з пластиною' : namesOf(chosen).toLowerCase(),
+      text:
+        chosen === 'none'
+          ? 'немає'
+          : withPlate
+            ? 'з пластиною'
+            : axial || (throughApex && apexAxial && chosen === 'oblique')
+              ? 'осьовий'
+              : namesOf(chosen).toLowerCase(),
       highlighted: chosen !== 'none',
     },
   });

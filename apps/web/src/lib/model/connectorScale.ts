@@ -1,4 +1,6 @@
 import {
+  axisParallelCylinderSection,
+  axisParallelOffsetLimitPercent,
   ballOffsetLimitPercent,
   ballRadiusMm,
   ballSection,
@@ -31,6 +33,8 @@ export type ConnectorScale = {
   readonly apexSpanMm?: number | undefined;
   /** The same of a ball's horizontal cut. */
   readonly horizontalSpanMm?: number | undefined;
+  /** The same of a cylinder's plane parallel to its axis, along the axis. */
+  readonly axisSpanMm?: number | undefined;
 };
 
 /** The fields shown in millimetres as generated: a multiplier or percentage, or a twist connector's millimetres. */
@@ -70,6 +74,7 @@ export function connectorUnits(
     verticalSpanMm,
     apexSpanMm,
     horizontalSpanMm,
+    axisSpanMm,
   }: ConnectorScale,
   roundType: 'plug' | 'dowel',
   sectionType: SectionType = 'parallel-to-bases',
@@ -83,7 +88,9 @@ export function connectorUnits(
           ? (apexSpanMm ?? 2 * r)
           : sectionType === 'horizontal'
             ? (horizontalSpanMm ?? 2 * r)
-            : (parallelSpanMm ?? 2 * r);
+            : sectionType === 'axis-parallel'
+              ? (axisSpanMm ?? heightMm)
+              : (parallelSpanMm ?? 2 * r);
   const size = DOVETAIL_PROPORTIONS.height * m;
   const length = span / 100;
   const diameter = ROUND_CONNECTOR_PROPORTIONS.diameter * m;
@@ -122,6 +129,8 @@ export function cylinderConnectorScale(
     readonly cylinderObliquePositionPercent?: number | undefined;
     readonly cylinderObliqueInclinationDeg?: number | undefined;
     readonly cylinderObliqueDirectionDeg?: number | undefined;
+    readonly cylinderAxisOffsetPercent?: number | undefined;
+    readonly cylinderAxisDirectionDeg?: number | undefined;
   },
   previous?: ConnectorScale,
 ): ConnectorScale | undefined {
@@ -139,7 +148,14 @@ export function cylinderConnectorScale(
     positionPercent === undefined || inclinationDeg === undefined || directionDeg === undefined
       ? previous?.obliqueSpanMm
       : obliqueCylinderSection(shape, scale, { positionPercent, inclinationDeg, directionDeg }).span;
-  return { longestDimensionMm: printSizeMm, radiusMm: radius, heightMm: height, obliqueSpanMm };
+  const { cylinderAxisOffsetPercent: axisOffset, cylinderAxisDirectionDeg: axisDirection } = values;
+  const axisSpanMm =
+    axisOffset === undefined ||
+    axisDirection === undefined ||
+    Math.abs(axisOffset) > axisParallelOffsetLimitPercent(shape, scale, axisDirection)
+      ? previous?.axisSpanMm
+      : axisParallelCylinderSection(shape, scale, { offsetPercent: axisOffset, offsetDirectionDeg: axisDirection }).span;
+  return { longestDimensionMm: printSizeMm, radiusMm: radius, heightMm: height, obliqueSpanMm, axisSpanMm };
 }
 
 /** The span of a vertical cut within its limit; a plane beyond that has no usable section, and keeps the last span. */

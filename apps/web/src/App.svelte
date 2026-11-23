@@ -16,6 +16,7 @@ import {
   activeConnector,
   activeSection,
   addSecondCut,
+  axialAxisParallel,
   type ConnectorEdits,
   canResetShapeParameters,
   commitConnectorEdit,
@@ -229,6 +230,10 @@ function runPanelAction(action: PanelAction) {
         ? addSecondCut(selectedKind, parameterState, request?.values ?? {})
         : removeSecondCut(selectedKind, parameterState),
     );
+    return;
+  }
+  if (action === 'axial-section') {
+    if (selectedKind !== undefined) applyState(axialAxisParallel(selectedKind, parameterState));
     return;
   }
   if (action === 'reset-magnet-allowances') {

@@ -18,6 +18,9 @@ import {
 } from './connectors/dovetail.ts';
 import {
   atSecondPlane,
+  axialApexAngles,
+  axisParallelCylinderSection,
+  axisParallelOffsetLimitPercent,
   ballOffsetLimitPercent,
   ballSection,
   ballSliceMinimumMm,
@@ -155,6 +158,7 @@ const sectionNames: Readonly<Record<SectionType, string>> = {
   oblique: 'oblique-section',
   'oblique-apex': 'apex-section',
   horizontal: 'horizontal-section',
+  'axis-parallel': 'axis-parallel-section',
 };
 
 /** The names of a section's parts in the order of the plane's negative and positive side, and their object names. */
@@ -164,6 +168,7 @@ const partNames: Readonly<Record<SectionType, readonly [SectionPart, SectionPart
   oblique: ['part-1', 'part-2'],
   'oblique-apex': ['part-1', 'part-2'],
   horizontal: ['lower', 'upper'],
+  'axis-parallel': ['part-1', 'part-2'],
 };
 const partObjectName = (name: string, part: SectionPart): string =>
   part === 'lower' || part === 'middle' || part === 'upper' ? `${name}-${part}-part` : `${name}-${part}`;
@@ -179,7 +184,7 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
   if (!parsed.success) {
     throw new InvalidModelSpecError(parsed.error.issues.map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`));
   }
-  const spec = parsed.data;
+  const spec = withConstrainedPlanes(parsed.data);
   const feasibility = checkNumericalFeasibility(spec.shape);
   if (!feasibility.feasible) throw new InfeasibleGeometryError(feasibility.relativeRounding);
 
@@ -483,6 +488,12 @@ function cutPlaneOf({ shape, scale, section }: ModelSpec): Plane {
   if (section?.type === 'vertical' && shape.kind === 'cone')
     return coneVerticalSection(shape, scale, section.offsetPercent).plane;
   if (section?.type === 'oblique' && shape.kind === 'cylinder') return obliqueCylinderSection(shape, scale, section).plane;
+  if (section?.type === 'axis-parallel' && shape.kind === 'cylinder') {
+    return axisParallelCylinderSection(shape, scale, {
+      offsetPercent: section.offsetPercent,
+      offsetDirectionDeg: section.directionDeg,
+    }).plane;
+  }
   if ((section?.type === 'oblique' || section?.type === 'oblique-apex') && shape.kind === 'cone') {
     return coneObliqueSection(shape, scale, section).plane;
   }
@@ -490,8 +501,27 @@ function cutPlaneOf({ shape, scale, section }: ModelSpec): Plane {
   throw new GeometryError('Expected a cut that this solid offers.');
 }
 
+/**
+ * The specification with every constrained plane derived from the solid it is built for: an axial plane through a cone's apex
+ * takes the angle that holds the base's centre, from the cone's own proportions, whatever angle it was stored with.
+ */
+function withConstrainedPlanes(spec: ModelSpec): ModelSpec {
+  const { shape, section } = spec;
+  if (section?.type !== 'oblique-apex' || section.axial !== true || shape.kind !== 'cone') return spec;
+  return { ...spec, section: { ...section, ...axialApexAngles(shape, section.directionDeg) } };
+}
+
 /** A vertical plane within the distance from the axis that leaves both parts usable; see `verticalOffsetLimitMm`. */
 function assertVerticalOffset({ shape, scale, section }: ModelSpec): void {
+  if (section?.type === 'axis-parallel' && shape.kind === 'cylinder') {
+    const limit = axisParallelOffsetLimitPercent(shape, scale, section.directionDeg);
+    if (Math.abs(section.offsetPercent) > limit + CONSTRAINT_ROUNDOFF_MM) {
+      throw new InvalidModelSpecError([
+        `section.offsetPercent: ${section.offsetPercent} % is beyond the ${limit} % that leave two usable parts.`,
+      ]);
+    }
+    return;
+  }
   if (section?.type === 'horizontal') {
     const limit = ballOffsetLimitPercent(scale);
     for (const [field, offset] of [
