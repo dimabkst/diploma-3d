@@ -1,9 +1,12 @@
 import {
   axisParallelCylinderSection,
   axisParallelOffsetLimitPercent,
+  type BoxLikeShape,
   ballOffsetLimitPercent,
   ballRadiusMm,
   ballSection,
+  boxSection,
+  boxVertices,
   coneApexChord,
   coneObliqueSection,
   coneSection,
@@ -17,6 +20,17 @@ import {
 } from '@diploma-3d/engine';
 import type { ConeShape, PhysicalScale, SectionType, ShapeKind } from '@diploma-3d/schema';
 import { formatDecimal, formatSteppedDecimal, parseDecimal, type StepRange } from '../decimal.ts';
+import {
+  BOX_SOLIDS,
+  type BoxSolid,
+  boxKeysOf,
+  boxModeKeys,
+  boxSectionOf,
+  boxShapeOf,
+  isBoxSolid,
+  throughLineChoicesFor,
+} from './box.ts';
+import type { ParameterChoices, ParameterValues } from './parameters.ts';
 
 /** What turns the connector settings into millimetres: the assembled model's longest side M and the solid's size. */
 export type ConnectorScale = {
@@ -35,6 +49,8 @@ export type ConnectorScale = {
   readonly horizontalSpanMm?: number | undefined;
   /** The same of a cylinder's plane parallel to its axis, along the axis. */
   readonly axisSpanMm?: number | undefined;
+  /** The same of a cube's or parallelepiped's current or last valid plane, whatever its mode. */
+  readonly boxSpanMm?: number | undefined;
 };
 
 /** The fields shown in millimetres as generated: a multiplier or percentage, or a twist connector's millimetres. */
@@ -54,7 +70,8 @@ export type ScaledConnectorKey =
   | 'ballDovetailLengthPercent'
   | 'ballRoundDiameter'
   | 'ballRoundDepth'
-  | 'ballRoundSpacingPercent';
+  | 'ballRoundSpacingPercent'
+  | `${BoxSolid}${'DovetailSize' | 'DovetailLengthPercent' | 'RoundDiameter' | 'RoundDepth' | 'RoundSpacingPercent'}`;
 
 /**
  * Millimetres per unit of each stored setting, following the engine's formulas: the dovetail's height h = 0,025·M·k and
@@ -75,6 +92,7 @@ export function connectorUnits(
     apexSpanMm,
     horizontalSpanMm,
     axisSpanMm,
+    boxSpanMm,
   }: ConnectorScale,
   roundType: 'plug' | 'dowel',
   sectionType: SectionType = 'parallel-to-bases',
@@ -90,7 +108,9 @@ export function connectorUnits(
             ? (horizontalSpanMm ?? 2 * r)
             : sectionType === 'axis-parallel'
               ? (axisSpanMm ?? heightMm)
-              : (parallelSpanMm ?? 2 * r);
+              : sectionType === 'parallel-to-bases'
+                ? (parallelSpanMm ?? 2 * r)
+                : (boxSpanMm ?? heightMm);
   const size = DOVETAIL_PROPORTIONS.height * m;
   const length = span / 100;
   const diameter = ROUND_CONNECTOR_PROPORTIONS.diameter * m;
@@ -114,6 +134,18 @@ export function connectorUnits(
     ballRoundDiameter: diameter,
     ballRoundDepth: depth,
     ballRoundSpacingPercent: spacing,
+    ...(Object.fromEntries(
+      BOX_SOLIDS.flatMap((solid) => [
+        [`${solid}DovetailSize`, size],
+        [`${solid}DovetailLengthPercent`, length],
+        [`${solid}RoundDiameter`, diameter],
+        [`${solid}RoundDepth`, depth],
+        [`${solid}RoundSpacingPercent`, spacing],
+      ]),
+    ) as Record<
+      `${BoxSolid}${'DovetailSize' | 'DovetailLengthPercent' | 'RoundDiameter' | 'RoundDepth' | 'RoundSpacingPercent'}`,
+      number
+    >),
   };
 }
 
@@ -241,14 +273,57 @@ export function ballConnectorScale(
   return { longestDimensionMm: printSizeMm, radiusMm, heightMm: 2 * radiusMm, horizontalSpanMm };
 }
 
-/** The scale of the solid's connector settings; undefined for a solid without them, or while a value it needs is invalid. */
+/**
+ * A cube's or parallelepiped's scale: its height, and the actual span of its valid plane, whatever the mode, read off the
+ * solid as the engine builds it; `previous` keeps the last span while the plane is not valid, or without the choices.
+ */
+export function boxConnectorScale(
+  kind: BoxSolid,
+  values: ParameterValues,
+  choices: ParameterChoices | undefined,
+  previous?: ConnectorScale,
+): ConnectorScale | undefined {
+  const shape = boxShapeOf(kind, values);
+  const { printSizeMm } = values;
+  if (shape === undefined || printSizeMm === undefined) return undefined;
+  const scale = { longestDimensionMm: printSizeMm };
+  const solid = shape as BoxLikeShape;
+  const heightMm = boxVertices(solid, scale).A1[2];
+  const keys = boxKeysOf(kind);
+  const type = choices?.[keys.Section];
+  let boxSpanMm = previous?.boxSpanMm;
+  if (choices !== undefined && type !== undefined && type !== 'none' && isBoxCut(type)) {
+    const available = throughLineChoicesFor(shape);
+    const fields = boxModeKeys(keys, type, choices, available);
+    if (fields.every((key) => values[key] !== undefined)) {
+      try {
+        boxSpanMm = boxSection(solid, scale, {
+          box: boxSectionOf(keys, type, choices, (key) => values[key] as number, false, available),
+        }).span;
+      } catch {
+        // A plane that does not cut the solid, or through a point on its line, keeps the last span.
+      }
+    }
+  }
+  return { longestDimensionMm: printSizeMm, radiusMm: printSizeMm / 2, heightMm, boxSpanMm };
+}
+
+const isBoxCut = (type: SectionType): type is 'face-parallel' | 'longitudinal' | 'through-line' | 'inclined' =>
+  type === 'face-parallel' || type === 'longitudinal' || type === 'through-line' || type === 'inclined';
+
+/**
+ * The scale of the solid's connector settings; undefined for a solid without them, or while a value it needs is invalid. A
+ * cube's or parallelepiped's plane depends on the choices of its mode as well.
+ */
 export function connectorScaleOf(
   kind: ShapeKind,
   values: Parameters<typeof cylinderConnectorScale>[0] &
     Parameters<typeof coneConnectorScale>[0] &
     Parameters<typeof ballConnectorScale>[0],
   previous?: ConnectorScale,
+  choices?: ParameterChoices,
 ): ConnectorScale | undefined {
+  if (isBoxSolid(kind)) return boxConnectorScale(kind, values as ParameterValues, choices, previous);
   if (kind === 'cylinder') return cylinderConnectorScale(values, previous);
   if (kind === 'ball') return ballConnectorScale(values, previous);
   return kind === 'cone' ? coneConnectorScale(values, previous) : undefined;

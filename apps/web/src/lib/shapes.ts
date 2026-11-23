@@ -1,5 +1,6 @@
 import {
   axialApexAngles,
+  BOX_PARALLEL_FACES,
   DOVETAIL_PROPORTIONS,
   obliquePlaneContainsAxis,
   ROUND_CONNECTOR_PROPORTIONS,
@@ -11,6 +12,9 @@ import {
 import {
   BASE_ANGLE_LIMITS,
   BASE_SHIFT_LIMITS,
+  BOX_FACE_NAMES,
+  type BoxFace,
+  boxFaceSegmentKind,
   CONNECTOR_PROFILES,
   type ConnectorProfile,
   DIAMETRAL_CLEARANCE_LIMITS,
@@ -39,6 +43,20 @@ import {
 } from '@diploma-3d/schema';
 import { formatDecimal, type StepRange } from './decimal.ts';
 import {
+  allSegments,
+  type BoxSolid,
+  faceName,
+  faceRole,
+  isBoxSolid,
+  segmentKey,
+  segmentLabel,
+  segmentName,
+  segmentOf,
+  throughLineChoicesOf,
+  throughLineSelection,
+  vertexName,
+} from './model/box.ts';
+import {
   type ConnectorScale,
   connectorScaleOf,
   connectorUnits,
@@ -49,11 +67,13 @@ import {
 } from './model/connectorScale.ts';
 import {
   activeSection,
+  boxCutHorizontal,
   type ChoiceKey,
   type ConnectorChoice,
   type ConnectorStatus,
   canSwitchTiltMode,
   coneApexKeys,
+  isDiagonalSection,
   type ParameterChoices,
   type ParameterKey,
   type ParameterValues,
@@ -206,7 +226,10 @@ export type PanelAction =
   | 'reset-magnet-allowances'
   | 'add-second-cut'
   | 'remove-second-cut'
-  | 'axial-section';
+  | 'axial-section'
+  | 'diagonal-section-ac'
+  | 'diagonal-section-bd'
+  | 'line-midpoint';
 
 /**
  * Further fields within a group, collapsed at first, such as the magnets' fit allowances. Opening or closing it changes no value
@@ -216,7 +239,7 @@ export type DisclosureGroup = {
   readonly type: 'disclosure';
   readonly key: string;
   readonly label: string;
-  readonly fields: readonly (NumericField | NoteField | ActionField)[];
+  readonly fields: readonly (NumericField | ChoiceField | NoteField | ActionField)[];
 };
 
 export type ParameterField =
@@ -627,6 +650,10 @@ const sectionNames: Readonly<Record<SectionChoice, string>> = {
   oblique: 'Похилий',
   horizontal: 'Горизонтальний',
   'axis-parallel': 'Паралельно осі',
+  'face-parallel': 'Паралельно грані',
+  longitudinal: 'Поздовжній',
+  'through-line': 'Через ребро або діагональ',
+  inclined: 'Похилий',
 };
 
 const parallelSectionHelp: Help = {
@@ -963,6 +990,29 @@ const numberedDowelHelp = (printNote: string): Help => ({
     BOUNDS_HELP,
 });
 
+const BOX_PRINT_NOTE =
+  'Кожна частина у файлі лежить на плоскій грані, яка її утримує: на залишку основи, на іншій грані або на площині ' +
+  'перерізу. Вісь кріплення перпендикулярна до перерізу, тож виступи, пази й отвори можуть потребувати підтримок або іншої ' +
+  'орієнтації в слайсері.';
+
+/** A box's connector helps: by the parts' place for a horizontal plane, by their numbers for any other. */
+const boxHelps = (horizontal: boolean, entrance: DovetailEntrance): Record<Exclude<ConnectorChoice, 'none'>, Help> =>
+  horizontal
+    ? {
+        dovetail: { ...dovetailHelp, text: `${dovetailHelp.text}\n\n${BOX_PRINT_NOTE}` },
+        plug: { ...plugHelp, text: `${plugHelp.text}\n\n${BOX_PRINT_NOTE}` },
+        dowel: { ...dowelHelp, text: `${dowelHelp.text}\n\n${BOX_PRINT_NOTE}` },
+        twist: twistHelp,
+        magnet: magnetHelp(false),
+      }
+    : {
+        dovetail: obliqueDovetailHelp(entrance),
+        plug: numberedPlugHelp(BOX_PRINT_NOTE),
+        dowel: numberedDowelHelp(BOX_PRINT_NOTE),
+        twist: twistHelp,
+        magnet: magnetHelp(false),
+      };
+
 const CONE_PRINT_NOTE =
   'Верхня частина звужується, тому ближче до вершини кріплення вміщується гірше: повзунки враховують усю глибину отвору ' +
   'чи паза, а не лише переріз. У файлі зрізаний конус стоїть на основі, а менший конус — на площині перерізу, вершиною ' +
@@ -1128,12 +1178,12 @@ const millimetres = (value: number | undefined): string =>
  * is chosen; a connector is optional, so its state is summarised.
  */
 function connectorSection(
-  kind: 'cylinder' | 'cone' | 'ball',
+  kind: 'cylinder' | 'cone' | 'ball' | BoxSolid,
   choices: ParameterChoices,
   context: PanelContext,
 ): ParameterSection[] {
   const keys = sectionKeys[kind];
-  const scale = context.connectorScale ?? connectorScaleOf(kind, context.values ?? {});
+  const scale = context.connectorScale ?? connectorScaleOf(kind, context.values ?? {}, undefined, choices);
   if (keys === undefined || scale === undefined || activeSection(kind, choices) === undefined) return [];
   const chosen = choices[keys.connector];
   const values = context.values ?? {};
@@ -1153,8 +1203,9 @@ function connectorSection(
   };
   const { dovetail, round } = keys;
   const cut = activeSection(kind, choices) as SectionType;
-  // Only a parallel cut has a lower and an upper part wherever it runs; the others number theirs.
-  const numbered = cut !== 'parallel-to-bases' && cut !== 'horizontal';
+  // Only a parallel cut has a lower and an upper part wherever it runs, and a box's horizontal plane; the others number theirs.
+  const boxHorizontal = isBoxSolid(kind) && boxCutHorizontal(kind, choices, context.values ?? {});
+  const numbered = isBoxSolid(kind) ? !boxHorizontal : cut !== 'parallel-to-bases' && cut !== 'horizontal';
   const units = connectorUnits(scale, chosen === 'dowel' ? 'dowel' : 'plug', cut);
   const fittedToSection = chosen === 'plug' || chosen === 'dowel' || chosen === 'twist';
   /** The feasible range that the request computed; the calibration window, or nothing, until it can. */
@@ -1250,7 +1301,7 @@ function connectorSection(
   const twistKeys = keys.twist;
   const entrance = choices[keys.dovetailEntrance];
   // On a horizontal cut the slide has no upper and lower end; the two sides are named by the cut's own frame.
-  const horizontalCut = cut === 'parallel-to-bases' || cut === 'horizontal';
+  const horizontalCut = cut === 'parallel-to-bases' || cut === 'horizontal' || boxHorizontal;
   const entranceField: ChoiceField = {
     type: 'choice',
     key: keys.dovetailEntrance,
@@ -1456,6 +1507,10 @@ function connectorSection(
       twist: twistHelp,
       magnet: magnetHelp(false),
     },
+    'face-parallel': boxHelps(boxHorizontal, entrance),
+    longitudinal: boxHelps(boxHorizontal, entrance),
+    'through-line': boxHelps(boxHorizontal, entrance),
+    inclined: boxHelps(boxHorizontal, entrance),
   };
   // A chosen one explains itself; otherwise the disabled option is explained here.
   const unsupportedNote =
@@ -1514,7 +1569,9 @@ function connectorSection(
       ? [
           note(
             'connector-both-planes',
-            'Кріплення однакове на обох перерізах: між нижньою й середньою та між середньою й верхньою частинами.',
+            numbered
+              ? 'Кріплення однакове на обох перерізах: між частиною 1 і середньою та між середньою й частиною 2.'
+              : 'Кріплення однакове на обох перерізах: між нижньою й середньою та між середньою й верхньою частинами.',
           ),
         ]
       : [];
@@ -1733,6 +1790,10 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
   const details: Record<SectionChoice, ParameterField[]> = {
     none: [],
     horizontal: [],
+    'face-parallel': [],
+    longitudinal: [],
+    'through-line': [],
+    inclined: [],
     'axis-parallel':
       axisKeys === undefined
         ? []
@@ -1831,6 +1892,10 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
   const help: Record<SectionChoice, Help | undefined> = {
     none: undefined,
     horizontal: undefined,
+    'face-parallel': undefined,
+    longitudinal: undefined,
+    'through-line': undefined,
+    inclined: undefined,
     'axis-parallel': axisParallelSectionHelp,
     'parallel-to-bases': kind === 'cone' ? coneSectionHelp : parallelSectionHelp,
     vertical: kind === 'cone' ? coneVerticalSectionHelp : verticalSectionHelp,
@@ -1859,10 +1924,321 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
   });
 }
 
+const BOX_POSITION_TEXT =
+  'Положення — у відсотках ширини фігури вздовж нормалі до площини: 0 % і 100 % — площини через крайні вершини з двох ' +
+  'боків, 50 % — через центр фігури.';
+
+const BOX_PARTS_TEXT =
+  'Частини 1 і 2 лежать по різні боки площини, а горизонтальна площина ділить фігуру на нижню й верхню частини. Вони ' +
+  'експортуються окремими об’єктами в одному масштабі; розсування змінює лише перегляд. Межі відсувають площину від ' +
+  'вершин, ребер і граней, але не гарантують, що тонку частину вдасться надрукувати. Вершини позначено в перегляді.';
+
+const boxSectionHelps: Readonly<Record<'face-parallel' | 'longitudinal' | 'through-line' | 'inclined', Help>> = {
+  'face-parallel': {
+    label: 'Як задано переріз?',
+    text:
+      'Площина паралельна вибраній грані. Положення — відстань від цієї грані у відсотках відстані до протилежної: 0 % — ' +
+      'сама грань, 100 % — протилежна. Переріз дорівнює грані: у куба це квадрат, у паралелепіпеда — паралелограм.\n\n' +
+      BOX_PARTS_TEXT,
+  },
+  longitudinal: {
+    label: 'Як задано переріз?',
+    text:
+      'Площина паралельна бічним ребрам AA₁, BB₁, CC₁, DD₁, тож у похилого паралелепіпеда вона нахилена разом із ними. ' +
+      'Її слід на основі йде під заданим кутом до ребра AB (проти годинникової стрілки, якщо дивитися згори) або паралельно ' +
+      'діагоналі основи. Переріз — паралелограм, у прямої фігури — прямокутник.\n\n' +
+      'Кнопки діагонального перерізу проводять площину через діагональ основи й два бічні ребра. Якщо пересунути площину, ' +
+      'вона лишається паралельною діагоналі, але вже не проходить через неї.\n\n' +
+      `${BOX_POSITION_TEXT}\n\n${BOX_PARTS_TEXT}`,
+  },
+  'through-line': {
+    label: 'Як задано переріз?',
+    text:
+      'Площина проходить через вибране ребро або діагональ грані.\n\n' +
+      '«За кутом»: площина повертається навколо цієї прямої від площини грані всередину фігури. 0° і 180° — сама грань, тож ' +
+      'допустимі кути залежать від фігури; на початку кут стоїть посередині допустимих.\n\n' +
+      '«Через точку ребра»: площина проходить через пряму й точку на іншому ребрі. Положення точки — у відсотках довжини ' +
+      'ребра від першої вершини: 0 % і 100 % — вершини, «Середина ребра» ставить 50 %. Точка не може лежати на самій прямій.' +
+      `\n\n${BOX_PARTS_TEXT}`,
+  },
+  inclined: {
+    label: 'Як задано переріз?',
+    text:
+      'Площину задано кутом до площини основи й напрямом, куди вона піднімається: 0° — уздовж осі X, тобто ребра AB, 90° — ' +
+      'уздовж осі Y. Кут 0° дає горизонтальну площину, 90° — вертикальну. Компас у перегляді показує осі.\n\n' +
+      'Спосіб «Перпендикулярно ребру або діагоналі» проводить площину перпендикулярно до ребра, діагоналі грані чи діагоналі ' +
+      'тіла. Наприклад, у кубі площина, перпендикулярна до діагоналі AC₁, біля вершини A дає трикутний переріз, а посередині — ' +
+      'правильний шестикутник.\n\n' +
+      `${BOX_POSITION_TEXT}\n\n${BOX_PARTS_TEXT}`,
+  },
+};
+
+const BOX_SECOND_CUT_HELP =
+  'Другий переріз паралельний першому й задається відсотком тієї самої ширини фігури, від тієї самої точки відліку, тож ' +
+  'фігура ділиться на три частини. Середня частина має бути не тоншою за десяту частину цієї ширини. Кріплення однакове на ' +
+  'обох перерізах, а для середньої частини враховано обидва.';
+
+const LINE_ANGLE_WINDOW: StepRange = { min: 0, max: 180, increment: ANGLE_INCREMENT_DEG };
+const TRACE_ANGLE_RANGE: StepRange = { min: 0, max: 180, increment: ANGLE_INCREMENT_DEG };
+const BOX_INCLINATION_RANGE: StepRange = { min: 0, max: 90, increment: ANGLE_INCREMENT_DEG };
+const POINT_PERCENT_RANGE: StepRange = { min: 0, max: 100, increment: SECTION_PERCENT_INCREMENT };
+
+const faceOptions = BOX_FACE_NAMES.map((face: BoxFace) => ({ value: face, label: `${faceName(face)} — ${faceRole(face)}` }));
+
+/**
+ * "Переріз" of a cube or parallelepiped: the mode and its own fields, a second parallel plane, and the separation. The plane's
+ * fields keep their meaning whatever the solid becomes: a face, an edge or a diagonal by its letters, positions in percent of
+ * the solid's own extent.
+ */
+function boxPlaneSection(kind: BoxSolid, choices: ParameterChoices, context: PanelContext): ParameterSection {
+  const keys = sectionKeys[kind];
+  const box = keys?.box;
+  const second = keys?.secondCut;
+  if (keys === undefined || box === undefined || second === undefined) throw new Error(`No section fields for ${kind}.`);
+  const chosen = choices[keys.choice];
+  const values = context.values ?? {};
+  const twoPlanes = choices[second.toggle];
+  const rangeOf = (key: ParameterKey, fallback: StepRange, increment = SECTION_PERCENT_INCREMENT): StepRange | undefined => {
+    const interval = context.sectionRanges?.[key];
+    if (interval === undefined) return fallback;
+    return interval === null ? undefined : planeAngleRange(interval, increment);
+  };
+  const percentField = (key: ParameterKey, label: string): NumericField => ({
+    type: 'number',
+    key,
+    label,
+    suffix: '%',
+    range: rangeOf(key, sectionPositionRange),
+  });
+  const note = (key: string, text: string): NoteField => ({ type: 'note', key: `${kind}-${key}`, text });
+  const action = (key: string, label: string, panelAction: PanelAction, disabled = false): ActionField => ({
+    type: 'action',
+    key: `${kind}-${key}`,
+    label,
+    action: panelAction,
+    ...(disabled ? { disabled: true } : {}),
+  });
+  const position = (label: string) =>
+    percentField(
+      box.SectionPercent,
+      twoPlanes ? `Перший переріз: ${label}` : `${label.charAt(0).toUpperCase()}${label.slice(1)}`,
+    );
+  const diagonal = isDiagonalSection(kind, choices, values);
+  // A range not yet known allows everything; null, nothing.
+  const allows = (interval: { readonly min: number; readonly max: number } | null | undefined, value: number) =>
+    interval === undefined || (interval !== null && value >= interval.min && value <= interval.max);
+  // Only the choices that lead to a usable plane of this solid are offered, each list given those before it.
+  const lineSelection = throughLineSelection(box, choices, throughLineChoicesOf(kind, values));
+  const { face, line, pointEdge } = lineSelection;
+  const along = choices[box.NormalAlong];
+  const modeFields: Record<'face-parallel' | 'longitudinal' | 'through-line' | 'inclined', ParameterField[]> = {
+    'face-parallel': [
+      {
+        type: 'choice',
+        key: box.Face,
+        label: 'Паралельно грані',
+        // One face of each pair of opposite faces: the other gives the same planes.
+        options: faceOptions.filter((option) => BOX_PARALLEL_FACES.includes(option.value)),
+      },
+      position(`від грані ${faceName(choices[box.Face])}`),
+    ],
+    longitudinal: [
+      {
+        type: 'choice',
+        key: box.Trace,
+        label: 'Слід на основі',
+        options: [
+          { value: 'angle', label: 'Під кутом до ребра AB' },
+          { value: 'AC', label: 'Паралельно діагоналі AC' },
+          { value: 'BD', label: 'Паралельно діагоналі BD' },
+        ],
+      },
+      ...(choices[box.Trace] === 'angle'
+        ? [{ type: 'number' as const, key: box.TraceAngleDeg, label: 'Кут сліду до AB', suffix: '°', range: TRACE_ANGLE_RANGE }]
+        : []),
+      position('положення'),
+      ...(diagonal === undefined
+        ? choices[box.Trace] === 'angle'
+          ? []
+          : [note('longitudinal-parallel', `Площина паралельна діагоналі ${choices[box.Trace]}, але не проходить через неї.`)]
+        : [
+            note(
+              'longitudinal-diagonal',
+              diagonal === 'AC'
+                ? 'Діагональний переріз: площина проходить через діагональ AC і бічні ребра AA₁ та CC₁.'
+                : 'Діагональний переріз: площина проходить через діагональ BD і бічні ребра BB₁ та DD₁.',
+            ),
+          ]),
+      action('diagonal-ac', 'Діагональний переріз AA₁C₁C', 'diagonal-section-ac', diagonal === 'AC'),
+      action('diagonal-bd', 'Діагональний переріз BB₁D₁D', 'diagonal-section-bd', diagonal === 'BD'),
+    ],
+    'through-line': [
+      {
+        type: 'choice',
+        key: box.LineFace,
+        label: 'Грань',
+        options: faceOptions.filter((option) => lineSelection.faces.includes(option.value)),
+      },
+      {
+        type: 'choice',
+        key: box.Line,
+        label: 'Ребро або діагональ грані',
+        options: lineSelection.lines.map((segment) => ({
+          value: segmentKey(segment),
+          label: `${boxFaceSegmentKind(face, segment) === 'edge' ? 'Ребро' : 'Діагональ'} ${segmentName(segment)}`,
+        })),
+      },
+      {
+        type: 'choice',
+        key: box.LineMethod,
+        label: 'Спосіб',
+        options: lineSelection.methods.map((method) => ({
+          value: method,
+          label: method === 'angle' ? 'За кутом' : 'Через точку ребра',
+        })),
+      },
+      ...(lineSelection.method === 'angle'
+        ? [
+            {
+              type: 'number' as const,
+              key: box.LineAngleDeg,
+              label: `Кут повороту від грані ${faceName(face)}`,
+              suffix: '°',
+              range: rangeOf(box.LineAngleDeg, LINE_ANGLE_WINDOW, ANGLE_INCREMENT_DEG),
+            },
+            note(
+              'line-angle',
+              `Площина повертається навколо ${segmentName(line)} від площини грані ${faceName(face)} всередину фігури.`,
+            ),
+          ]
+        : [
+            {
+              type: 'choice' as const,
+              key: box.PointEdge,
+              label: 'Ребро з точкою',
+              options: lineSelection.pointEdges.map((segment) => ({
+                value: segmentKey(segment),
+                label: `Ребро ${segmentName(segment)}`,
+              })),
+            },
+            {
+              type: 'number' as const,
+              key: box.PointPercent,
+              label: `Точка на ${segmentName(pointEdge)} від ${vertexName(pointEdge[0])}`,
+              suffix: '%',
+              range: rangeOf(box.PointPercent, POINT_PERCENT_RANGE),
+            },
+            action(
+              'line-midpoint',
+              'Середина ребра',
+              'line-midpoint',
+              values[box.PointPercent] === 50 || !allows(context.sectionRanges?.[box.PointPercent], 50),
+            ),
+          ]),
+    ],
+    inclined: [
+      ...(along === 'none'
+        ? [
+            {
+              type: 'number' as const,
+              key: box.PlaneInclinationDeg,
+              label: 'Кут до площини основи',
+              suffix: '°',
+              range: BOX_INCLINATION_RANGE,
+            },
+            {
+              type: 'number' as const,
+              key: box.PlaneDirectionDeg,
+              label: 'Напрям нахилу',
+              suffix: '°',
+              range: obliqueDirectionRange,
+            },
+          ]
+        : [note('normal-along-note', `Площина перпендикулярна до відрізка ${segmentName(segmentOf(along))}.`)]),
+      position('положення'),
+      {
+        type: 'disclosure',
+        key: `${kind}-normal-along`,
+        label: 'Перпендикулярно ребру або діагоналі',
+        fields: [
+          {
+            type: 'choice',
+            key: box.NormalAlong,
+            label: 'Перпендикулярно до',
+            options: [
+              { value: 'none', label: 'Не вибрано — задати кутами' },
+              ...allSegments().map(({ segment, kind: segmentKind }) => ({
+                value: segmentKey(segment),
+                label: segmentLabel(segment, segmentKind),
+              })),
+            ],
+          },
+          note('normal-along-kinds', 'Ребра, діагоналі граней і діагоналі тіла позначено окремо.'),
+        ],
+      },
+    ],
+  };
+  const isMode = (value: SectionChoice): value is keyof typeof modeFields => Object.hasOwn(modeFields, value);
+  const planes: ParameterField[] = !isMode(chosen)
+    ? []
+    : [
+        ...modeFields[chosen],
+        ...(twoPlanes
+          ? [
+              percentField(second.offset, 'Другий переріз: положення'),
+              ...(chosen === 'through-line'
+                ? [note('second-from', 'Відсотки — тієї самої ширини фігури, що й для першого перерізу.')]
+                : []),
+              action('remove-second-cut', 'Прибрати другий переріз', 'remove-second-cut'),
+            ]
+          : [action('add-second-cut', 'Додати паралельний переріз', 'add-second-cut')]),
+        { type: 'toggle', key: keys.separated, label: 'Розсунути частини' },
+      ];
+  const help = isMode(chosen) ? boxSectionHelps[chosen] : undefined;
+  return section(
+    `${kind}-section`,
+    'Переріз',
+    [
+      {
+        type: 'choice',
+        key: keys.choice,
+        label: 'Тип перерізу',
+        options: (['none', 'face-parallel', 'longitudinal', 'through-line', 'inclined'] as const).map((value) => ({
+          value,
+          label: sectionNames[value],
+        })),
+      },
+      ...planes,
+    ],
+    {
+      initiallyOpen: false,
+      help: help === undefined ? undefined : twoPlanes ? { ...help, text: `${help.text}\n\n${BOX_SECOND_CUT_HELP}` } : help,
+      status: {
+        text:
+          chosen === 'none'
+            ? 'немає'
+            : twoPlanes
+              ? 'два перерізи'
+              : diagonal !== undefined
+                ? 'діагональний'
+                : sectionNames[chosen].toLowerCase(),
+        highlighted: chosen !== 'none',
+      },
+    },
+  );
+}
+
+/** A cube's or parallelepiped's section and connector groups. */
+const boxSections = (kind: BoxSolid, choices: ParameterChoices, context: PanelContext): ParameterSection[] => [
+  boxPlaneSection(kind, choices, context),
+  ...connectorSection(kind, choices, context),
+];
+
 /** The sidebar of the selected shape; for a prism or pyramid, only the selected base type's fields. */
 export function shapePanel(kind: ShapeKind, choices: ParameterChoices, context: PanelContext = {}): ShapePanel {
   switch (kind) {
     case 'cube':
+      return { type: 'parameters', note: fixedNotes.cube, sections: boxSections(kind, choices, context) };
     case 'tetrahedron':
     case 'octahedron':
     case 'icosahedron':
@@ -1883,6 +2259,7 @@ export function shapePanel(kind: ShapeKind, choices: ParameterChoices, context: 
             ratioField('cuboidWidthRatio', 'Ширина b'),
             ratioField('cuboidHeightRatio', 'Висота c'),
           ]),
+          ...boxSections(kind, choices, context),
         ],
       };
     case 'parallelepiped':
@@ -1912,6 +2289,7 @@ export function shapePanel(kind: ShapeKind, choices: ParameterChoices, context: 
             },
             context,
           ),
+          ...boxSections(kind, choices, context),
         ],
       };
     case 'prism':

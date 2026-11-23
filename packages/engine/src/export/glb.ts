@@ -161,19 +161,59 @@ export async function createPreviewGlb(objects: readonly PreviewObject[]): Promi
       );
     }
     const node = document.createNode(object.name).setMesh(mesh);
-    const offset = toGltfPosition(object.displayOffset ?? [0, 0, 0]);
-    if (object.displayTurn === undefined) {
-      if (object.displayOffset !== undefined) node.setTranslation([...offset]);
-    } else {
-      const { rotation, translation } = turnAboutLine(object.displayTurn);
-      node.setRotation(rotation);
-      node.setTranslation([translation[0] + offset[0], translation[1] + offset[1], translation[2] + offset[2]]);
-    }
+    const { rotation, translation } = previewNodeTransform(object);
+    if (rotation !== undefined) node.setRotation([...rotation]);
+    if (translation !== undefined) node.setTranslation([...translation]);
     scene.addChild(node);
   }
 
   // glTF-Transform allocates a regular ArrayBuffer; its typings predate the ArrayBuffer type parameter.
   return (await new WebIO().writeBinary(document)) as Uint8Array<ArrayBuffer>;
+}
+
+/** A node's transform in glTF axes and metres, p ↦ R·p + t, R the unit quaternion (x, y, z, w); absent parts are the identity. */
+export interface NodeTransform {
+  readonly rotation?: readonly [number, number, number, number];
+  readonly translation?: Vec3;
+}
+
+/**
+ * The transform of a preview object's node: its turn about a line, then its display offset. The GLB's node has exactly this
+ * transform, and an annotation of a point of the object's mesh is placed by `previewPosition` through the same one.
+ */
+export function previewNodeTransform({
+  displayOffset,
+  displayTurn,
+}: Pick<PreviewObject, 'displayOffset' | 'displayTurn'>): NodeTransform {
+  const offset = toGltfPosition(displayOffset ?? [0, 0, 0]);
+  if (displayTurn === undefined) return displayOffset === undefined ? {} : { translation: offset };
+  const { rotation, translation } = turnAboutLine(displayTurn);
+  return { rotation, translation: [translation[0] + offset[0], translation[1] + offset[1], translation[2] + offset[2]] };
+}
+
+/** R·v for the unit quaternion q = (u, w): v + 2w(u × v) + 2u × (u × v). */
+function rotated([x, y, z, w]: readonly [number, number, number, number], vector: Vec3): Vec3 {
+  const u: Vec3 = [x, y, z];
+  const first = cross(u, vector);
+  const second = cross(u, first);
+  return [0, 1, 2].map(
+    (index) => (vector[index] as number) + 2 * w * (first[index] as number) + 2 * (second[index] as number),
+  ) as unknown as Vec3;
+}
+
+/** Where the preview shows a point of an object's mesh, given in Z-up millimetres: in glTF metres, moved by its node. */
+export function previewPosition(object: Pick<PreviewObject, 'displayOffset' | 'displayTurn'>, point: Vec3): Vec3 {
+  const { rotation, translation = [0, 0, 0] } = previewNodeTransform(object);
+  const local = toGltfPosition(point);
+  const turned = rotation === undefined ? local : rotated(rotation, local);
+  return [turned[0] + translation[0], turned[1] + translation[1], turned[2] + translation[2]];
+}
+
+/** The same for a direction, such as a face's normal: in glTF axes, turned by its node. */
+export function previewDirection(object: Pick<PreviewObject, 'displayOffset' | 'displayTurn'>, direction: Vec3): Vec3 {
+  const { rotation } = previewNodeTransform(object);
+  const local = toGltfDirection(direction);
+  return rotation === undefined ? local : rotated(rotation, local);
 }
 
 /**

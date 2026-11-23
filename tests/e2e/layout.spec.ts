@@ -187,10 +187,10 @@ test.describe('desktop workspace at 1366 × 768', () => {
     expect(tilted.fileName).toBe('prism-trapezoid.3mf');
     expectSizesClose(tilted.measurements.size, [80, 80 / 3, 160 / 3], 1e-3);
 
-    // Back to the cube: one short line replaces the groups, and everything describes the cube.
+    // Back to the cube: one short line replaces the groups but its optional section, and everything describes the cube.
     await shapeSelect(page).selectOption({ label: 'Куб' });
     await expectPreviewOf(page, 'Куб · 80 × 80 × 80 мм');
-    await expect(sidebar(page).locator('details')).toHaveCount(0);
+    await expect(sidebar(page).locator('summary')).toHaveText([/^Переріз\s*немає/]);
     expect(await previewPlace(page)).toEqual(reference);
     await expectWholeModel(page);
     const cube = await downloadThreeMf(page);

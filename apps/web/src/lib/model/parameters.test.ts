@@ -70,6 +70,51 @@ const resetTexts = (kind: 'cylinder' | 'cone' | 'ball', overrides: Partial<Param
   return { ...texts(overrides), ...Object.fromEntries(clearances.map((key) => [key, initial[key]])) };
 };
 
+/** A cube's or parallelepiped's section fields as they start, each solid with its own. */
+const boxInitialTexts = (solid: string) => ({
+  [`${solid}SectionPercent`]: '50',
+  [`${solid}SectionSecondPercent`]: '75',
+  [`${solid}TraceAngleDeg`]: '0',
+  [`${solid}LineAngleDeg`]: '45',
+  [`${solid}PointPercent`]: '50',
+  [`${solid}PlaneInclinationDeg`]: '45',
+  [`${solid}PlaneDirectionDeg`]: '0',
+  [`${solid}DovetailSize`]: '1',
+  [`${solid}DovetailLengthPercent`]: '50',
+  [`${solid}DovetailClearanceMm`]: '0,2',
+  [`${solid}RoundSpacingPercent`]: '45',
+  [`${solid}RoundDiameter`]: '1',
+  [`${solid}RoundDepth`]: '1',
+  [`${solid}PlugClearanceMm`]: '0,5',
+  [`${solid}DowelLowerClearanceMm`]: '0,4',
+  [`${solid}DowelUpperClearanceMm`]: '0,5',
+  [`${solid}MagnetCount`]: '3',
+  [`${solid}MagnetDiameterMm`]: '6',
+  [`${solid}MagnetThicknessMm`]: '2',
+  [`${solid}MagnetDiameterAllowanceMm`]: '0,2',
+  [`${solid}MagnetDepthAllowanceMm`]: '0,1',
+});
+
+/** Its choices as they start: no section, a plane through the lower base's edge AB by its angle when one is chosen. */
+const boxInitialChoices = (solid: string) => ({
+  [`${solid}Section`]: 'none',
+  [`${solid}Face`]: 'ABCD',
+  [`${solid}Trace`]: 'angle',
+  [`${solid}LineFace`]: 'ABCD',
+  [`${solid}Line`]: 'A-B',
+  [`${solid}LineMethod`]: 'angle',
+  [`${solid}PointEdge`]: 'C-C1',
+  [`${solid}NormalAlong`]: 'none',
+  [`${solid}Connector`]: 'none',
+  [`${solid}DovetailEntrance`]: 'standard',
+  [`${solid}RoundCount`]: 1,
+  [`${solid}RoundProfile`]: 'flatted-circle',
+  [`${solid}PartsSeparated`]: true,
+  [`${solid}SecondCut`]: false,
+  [`${solid}LineAngleFor`]: '',
+  [`${solid}PointFor`]: '',
+});
+
 describe('validateRatio', () => {
   it.each([
     ['0,25', 0.25],
@@ -274,6 +319,9 @@ describe('resolveModelRequest', () => {
       ballMagnetThicknessMm: '2',
       ballMagnetDiameterAllowanceMm: '0,2',
       ballMagnetDepthAllowanceMm: '0,1',
+      ...boxInitialTexts('cube'),
+      ...boxInitialTexts('cuboid'),
+      ...boxInitialTexts('parallelepiped'),
     });
     expect(initialParameterChoices()).toEqual({
       prismBaseType: 'regular',
@@ -305,6 +353,9 @@ describe('resolveModelRequest', () => {
       ballPartsSeparated: true,
       ballPlate: false,
       ballSecondCut: false,
+      ...boxInitialChoices('cube'),
+      ...boxInitialChoices('cuboid'),
+      ...boxInitialChoices('parallelepiped'),
     });
     expect(resolveModelRequest('cuboid', initialParameterTexts(), triangle).spec).toEqual({
       shape: { kind: 'cuboid', widthRatio: 1.5, heightRatio: 2 },
@@ -1411,7 +1462,7 @@ describe('a cylinder section parallel to the bases', () => {
       expect(resolveModelRequest(kind, texts({}), parallel).spec).not.toHaveProperty('section');
       expect(activeSection(kind, parallel)).toBeUndefined();
     }
-    for (const kind of ['prism', 'cube'] as const) expect(partsSeparated(kind, parallel)).toBe(false);
+    for (const kind of ['prism', 'tetrahedron'] as const) expect(partsSeparated(kind, parallel)).toBe(false);
     const cone = shapePanel('cone', parallel);
     // The cone's own choice is still "no section": no connector group.
     expect(cone.type === 'parameters' && cone.sections.map((part) => part.title)).toEqual(['Висота', 'Нахил', 'Переріз']);

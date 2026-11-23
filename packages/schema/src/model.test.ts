@@ -746,7 +746,11 @@ describe('plane sections', () => {
   });
 
   it('offers parallel sections for the cylinder and the cone, and a plane through an apex for the cone alone', () => {
+    const box = ['face-parallel', 'longitudinal', 'through-line', 'inclined'];
     expect(SECTIONS_BY_SHAPE).toEqual({
+      cube: box,
+      cuboid: box,
+      parallelepiped: box,
       cylinder: ['parallel-to-bases', 'vertical', 'oblique', 'axis-parallel'],
       cone: ['parallel-to-bases', 'vertical', 'oblique', 'oblique-apex'],
       ball: ['horizontal'],
@@ -925,5 +929,57 @@ describe('plug and dowel connectors', () => {
     expect(parse({ ...dowel, holeClearanceMm: 0.2 })).toBe(false);
     expect(parse({ ...dowel, clearanceMm: 0.2 })).toBe(false);
     expect(DIAMETRAL_CLEARANCE_LIMITS).toEqual({ min: 0, max: 1 });
+  });
+});
+
+describe('the sections of a cube and the parallelepipeds', () => {
+  const parse = (section: Record<string, unknown>, shape: Record<string, unknown> = { kind: 'cube' }) =>
+    modelSpecSchema.safeParse({ shape, scale: { longestDimensionMm: 80 }, section });
+
+  it('start from the lower base, through the middle, and keep positions within 10–90 % of the extent', () => {
+    expect(parse({ type: 'face-parallel' }).data?.section).toEqual({ type: 'face-parallel', face: 'ABCD', positionPercent: 50 });
+    expect(parse({ type: 'longitudinal' }).data?.section).toEqual({
+      type: 'longitudinal',
+      trace: 'angle',
+      traceAngleDeg: 0,
+      positionPercent: 50,
+    });
+    expect(parse({ type: 'inclined' }).data?.section).toEqual({
+      type: 'inclined',
+      inclinationDeg: 45,
+      directionDeg: 0,
+      positionPercent: 50,
+    });
+    for (const positionPercent of [9.9, 90.1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(parse({ type: 'face-parallel', positionPercent }).success).toBe(false);
+      expect(parse({ type: 'face-parallel', secondPositionPercent: positionPercent }).success).toBe(false);
+    }
+    expect(parse({ type: 'face-parallel', face: 'ABCE' }).success).toBe(false);
+    expect(parse({ type: 'inclined', inclinationDeg: 90.5 }).success).toBe(false);
+    expect(parse({ type: 'inclined', normalAlong: ['A', 'A'] }).success).toBe(false);
+    expect(parse({ type: 'longitudinal', traceAngleDeg: 181 }).success).toBe(false);
+  });
+
+  it('take a line of the chosen face, and the angle or the point their method needs', () => {
+    const line = { type: 'through-line', face: 'ABCD', line: ['A', 'C'], method: 'angle', angleDeg: 60 };
+    expect(parse(line).success).toBe(true);
+    // A diagonal of another face, and no line at all.
+    expect(parse({ ...line, line: ['A', 'B1'] }).success).toBe(false);
+    expect(parse({ ...line, line: ['A', 'C1'] }).success).toBe(false);
+    // The face's own plane, 0° and 180°, is no section.
+    for (const angleDeg of [0, 180, undefined]) expect(parse({ ...line, angleDeg }).success).toBe(false);
+    const point = { ...line, line: ['A', 'B'], method: 'point', pointEdge: ['C', 'C1'], pointPercent: 0 };
+    expect(parse(point).success).toBe(true);
+    expect(parse({ ...point, pointPercent: 100.1 }).success).toBe(false);
+    // The point lies on an edge, not on a diagonal.
+    expect(parse({ ...point, pointEdge: ['A', 'C1'] }).success).toBe(false);
+    expect(parse({ ...point, pointEdge: undefined }).success).toBe(false);
+  });
+
+  it('belong to the cube and the parallelepipeds alone', () => {
+    const section = { type: 'face-parallel' };
+    expect(parse(section, { kind: 'cuboid', widthRatio: 1, heightRatio: 2 }).success).toBe(true);
+    expect(parse(section, { kind: 'prism', baseType: 'regular', baseSides: 4, heightRatio: 1 }).success).toBe(false);
+    expect(parse(section, { kind: 'cylinder', heightRatio: 2 }).success).toBe(false);
   });
 });

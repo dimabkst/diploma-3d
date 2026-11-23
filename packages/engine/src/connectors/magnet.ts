@@ -5,6 +5,7 @@ import type { GeometryKernel } from '../kernel.ts';
 import { dot, length, type Vec3 } from '../mesh.ts';
 import type { Track } from '../scope.ts';
 import { ballCentreMm } from '../shapes/ball.ts';
+import type { RoundShape } from '../shapes/round.ts';
 import { circularSegments } from '../shapes/round.ts';
 import {
   type BallHorizontalSection,
@@ -180,8 +181,9 @@ function pocketSides(shape: SectionedShape, scale: PhysicalScale, cut: SolidCut)
     return { frame, contour: section.contour, gap, sides };
   }
   if (shape.kind === 'ball' || isPlateCut(cut)) throw new Error('Unexpected cut.');
-  // Every cut of a cylinder or a cone read off its faces, also those its other connectors measure by formulas.
-  const faceted = facetedCut(shape, scale, cut);
+  // Every cut of a cylinder or a cone read off its faces, also those its other connectors measure by formulas; a cube's or
+  // parallelepiped's section is read off its faces already.
+  const faceted = section.type === 'box-section' ? section : facetedCut(shape as RoundShape, scale, cut);
   const sides: [PocketSide, PocketSide] = [
     facetedSide('lower', faceted, 'negative', 0),
     facetedSide('upper', faceted, 'positive', 0),

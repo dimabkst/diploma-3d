@@ -288,12 +288,18 @@ describe('the preview and the files of three parts', () => {
     const offsets = Object.fromEntries(root.listNodes().map((node) => [node.getName(), node.getTranslation()]));
     // glTF is Y-up: the model's +Z is the preview's +Y.
     const up = (name: string) => (offsets[name] as [number, number, number])[1];
-    expect(up('ball-lower-part')).toBe(0);
-    expect(up('ball-middle-part')).toBeGreaterThan(0);
-    expect(up('ball-upper-part')).toBeGreaterThan(up('ball-middle-part'));
+    // The middle part stays, the outer ones move away from it, each dowel with the part below its plane.
+    expect(up('ball-middle-part')).toBe(0);
+    expect(up('ball-lower-part')).toBeLessThan(0);
+    expect(up('ball-upper-part')).toBeGreaterThan(0);
     const dowels = model.solids.filter((solid) => solid.part === 'dowel');
-    expect(up(dowels[0]?.name as string)).toBe(0);
-    expect(up(dowels[1]?.name as string)).toBeCloseTo(up('ball-middle-part'), 12);
+    expect(up(dowels[0]?.name as string)).toBeCloseTo(up('ball-lower-part'), 12);
+    expect(up(dowels[1]?.name as string)).toBe(0);
+    // Each interface opens beyond what the dowels seated below it reach.
+    const reachAbove = (index: number, offset: number) =>
+      Math.max(...vertices((dowels[index] as Solid).mesh).map(([, , z]) => z - offset));
+    expect(-up('ball-lower-part') * 1000).toBeGreaterThan(reachAbove(0, model.section?.plane.offset as number));
+    expect(up('ball-upper-part') * 1000).toBeGreaterThan(reachAbove(1, model.section?.secondInterface?.plane.offset as number));
     // Only along the normal: nothing moves sideways.
     for (const [x, , z] of Object.values(offsets) as [number, number, number][]) {
       expect(x).toBe(0);

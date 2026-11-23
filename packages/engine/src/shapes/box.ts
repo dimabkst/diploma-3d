@@ -1,8 +1,5 @@
 import type { CubeShape, CuboidShape, PhysicalScale } from '@diploma-3d/schema';
-import type { Manifold } from 'manifold-3d';
-import type { GeometryKernel } from '../kernel.ts';
 import type { Vec3 } from '../mesh.ts';
-import type { Track } from '../scope.ts';
 
 export type BoxShape = CubeShape | CuboidShape;
 
@@ -18,11 +15,4 @@ export function boxEdgeLengthsMm(shape: BoxShape, scale: PhysicalScale): Vec3 {
   if (shape.kind === 'cube') return [scale.longestDimensionMm, scale.longestDimensionMm, scale.longestDimensionMm];
   const s = scale.longestDimensionMm / Math.max(1, shape.widthRatio, shape.heightRatio);
   return [s, s * shape.widthRatio, s * shape.heightRatio];
-}
-
-/** Box in model units, centred in XY and resting on the build plate (z = 0). */
-export function buildUnitBox(kernel: GeometryKernel, track: Track, shape: BoxShape): Manifold {
-  const size = boxProportions(shape);
-  const centred = track(kernel.Manifold.cube([...size], true));
-  return track(centred.translate([0, 0, size[2] / 2]));
 }

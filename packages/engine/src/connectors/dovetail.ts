@@ -9,6 +9,7 @@ import { type ConnectorFeasibility, connectorFeasibility } from './bounds.ts';
 import {
   type AxisParallelCylinderSection,
   type BallHorizontalSection,
+  type BoxSection,
   ballPointWall,
   CONNECTOR_MIN_WALL_MM,
   type ConeObliqueSection,
@@ -288,6 +289,7 @@ function wallsOf(
       return coneWalls(section, dimensions, groove, towardsStop);
     case 'cylinder-face':
     case 'axis-parallel':
+    case 'box-section':
       return coneWalls(section, dimensions, groove, towardsStop);
     case 'cone-plate':
       return (['upper', 'lower'] as const).flatMap((part) => plateInterfaceWalls(section.interfaces[part], part, dimensions));
@@ -426,7 +428,13 @@ function obliqueWalls(
  * and the first three each meet the last at the closed end's corners, which these walls keep inside the part.
  */
 function coneWalls(
-  section: ConeParallelSection | ConeVerticalSection | ConeObliqueSection | CylinderFaceSection | AxisParallelCylinderSection,
+  section:
+    | ConeParallelSection
+    | ConeVerticalSection
+    | ConeObliqueSection
+    | CylinderFaceSection
+    | AxisParallelCylinderSection
+    | BoxSection,
   { height, length, clearance }: DovetailDimensions,
   groove: ReturnType<typeof grooveExtent>,
   towardsStop: 1 | -1,
@@ -535,7 +543,12 @@ export function dovetailDimensions(
 /** Whether the cut is horizontal, so that its slide axis has no upper and lower end; its two sides are then named by u. */
 export const isHorizontalCut = (section: SolidSection): boolean => {
   const type = cutTypeOf(section);
-  return type === 'parallel-to-bases' || type === 'cone-parallel' || type === 'ball-horizontal';
+  return (
+    type === 'parallel-to-bases' ||
+    type === 'cone-parallel' ||
+    type === 'ball-horizontal' ||
+    (section.type === 'box-section' && Math.abs(section.frame.n[2]) > 1 - 1e-9)
+  );
 };
 
 const VERTICAL: Vec3 = [0, 0, 1];

@@ -3,9 +3,21 @@ import {
   atSecondPlane,
   axialApexAngles,
   axisParallelOffsetLimitPercent,
+  BOX_PARALLEL_FACES,
+  type BoxLikeShape,
+  type BoxPointRange,
   ballOffsetLimitPercent,
   ballRadiusMm,
   ballSliceMinimumMm,
+  boxFaceParallelPercent,
+  boxLineAngleBounds,
+  boxOppositeFace,
+  boxPartMinimumMm,
+  boxPlane,
+  boxPlanePercents,
+  boxPointRange,
+  boxSplitReach,
+  boxVertices,
   CONSTRAINT_ROUNDOFF_MM,
   type ConnectorFeasibility,
   coneApexAngleBounds,
@@ -28,6 +40,7 @@ import {
   type ParameterBounds,
   type ParameterFeasibility,
   type PlateCut,
+  type PlatedShape,
   planMagnets,
   plateSection,
   plateThicknessRange,
@@ -54,6 +67,8 @@ import {
   BALL_OFFSET_LIMITS,
   BASE_ANGLE_LIMITS,
   BASE_SHIFT_LIMITS,
+  type BoxSectionSpec,
+  type BoxSegment,
   baseAngleSchema,
   baseShiftSchema,
   type ConeShape,
@@ -118,6 +133,27 @@ import {
   type TwistConnector,
 } from '@diploma-3d/schema';
 import { formatDecimal, formatSteppedDecimal, halfSumDecimal, parseDecimal, snapDecimal } from '../decimal.ts';
+import {
+  BOX_CHOICE_FIELDS,
+  BOX_NUMBER_FIELDS,
+  BOX_SOLIDS,
+  type BoxChoices,
+  type BoxKeysOf,
+  type BoxNumberKey,
+  type BoxSolid,
+  boxKeysOf,
+  boxModeKeys,
+  boxSectionOf,
+  boxShapeOf,
+  DIAGONAL_POSITION_PERCENT,
+  initialBoxChoices,
+  isBoxSolid,
+  segmentKey,
+  segmentName,
+  throughLineChoicesFor,
+  throughLineChoicesOf,
+  throughLineSelection,
+} from './box.ts';
 import {
   type ConnectorScale,
   connectorScaleOf,
@@ -244,10 +280,11 @@ export type ParameterKey =
   | 'ballPlugClearanceMm'
   | 'ballDowelLowerClearanceMm'
   | 'ballDowelUpperClearanceMm'
+  | BoxNumberKey
   | MagnetKey;
 
 /** The solids whose cuts offer magnet pockets, each with its own settings, as every connector has. */
-type MagnetSolid = 'cylinder' | 'cone' | 'ball';
+type MagnetSolid = 'cylinder' | 'cone' | 'ball' | BoxSolid;
 
 /** The magnet pockets' fields, and the setting of the specification each one sets. */
 const MAGNET_FIELDS = {
@@ -328,7 +365,7 @@ export type ParameterChoices = {
   ballPlate: boolean;
   /** Whether the ball takes a second plane parallel to the first, which "Додати паралельний переріз" turns on. */
   ballSecondCut: boolean;
-};
+} & BoxChoices;
 
 /** The switches among the choices. */
 export type ToggleKey =
@@ -338,10 +375,14 @@ export type ToggleKey =
   | 'conePlate'
   | 'coneApexAxial'
   | 'ballPartsSeparated'
-  | 'ballPlate';
+  | 'ballPlate'
+  | `${BoxSolid}PartsSeparated`;
 
 /** The choices picked from options. */
-export type ChoiceKey = Exclude<keyof ParameterChoices, ToggleKey | 'coneApexStarted' | 'ballSecondCut'>;
+export type ChoiceKey = Exclude<
+  keyof ParameterChoices,
+  ToggleKey | 'coneApexStarted' | 'ballSecondCut' | `${BoxSolid}SecondCut` | `${BoxSolid}LineAngleFor`
+>;
 
 export type ParameterErrors = Partial<Record<ParameterKey, string>>;
 
@@ -514,7 +555,41 @@ export const initialParameterTexts = (): ParameterTexts => ({
   ...magnetTexts('cylinder'),
   ...magnetTexts('cone'),
   ...magnetTexts('ball'),
+  ...(Object.fromEntries(
+    BOX_SOLIDS.flatMap((solid) => [...Object.entries(boxTexts(solid)), ...Object.entries(magnetTexts(solid))]),
+  ) as Record<BoxNumberKey | MagnetKey, string>),
 });
+
+/** A box solid's fields as they start: its planes through the middle, a plane through an edge at 45°, the default connectors. */
+const boxTexts = (solid: BoxSolid): Record<BoxNumberKey, string> => {
+  const initial: Record<(typeof BOX_NUMBER_FIELDS)[number], number> = {
+    SectionPercent: DEFAULT_SECTION_POSITION_PERCENT,
+    SectionSecondPercent: BOX_SECOND_CUT_PLACEHOLDER_PERCENT,
+    TraceAngleDeg: 0,
+    LineAngleDeg: BOX_LINE_ANGLE_PLACEHOLDER_DEG,
+    PointPercent: 50,
+    PlaneInclinationDeg: DEFAULT_OBLIQUE_SECTION.inclinationDeg,
+    PlaneDirectionDeg: DEFAULT_OBLIQUE_SECTION.directionDeg,
+    DovetailSize: DEFAULT_DOVETAIL.sizeFactor,
+    DovetailLengthPercent: DEFAULT_DOVETAIL.lengthPercent,
+    DovetailClearanceMm: DEFAULT_DOVETAIL.clearanceMm,
+    RoundSpacingPercent: DEFAULT_ROUND_CONNECTOR.spacingPercent,
+    RoundDiameter: DEFAULT_ROUND_CONNECTOR.diameterFactor,
+    RoundDepth: DEFAULT_ROUND_CONNECTOR.depthFactor,
+    PlugClearanceMm: DEFAULT_PLUG_CLEARANCE_MM,
+    DowelLowerClearanceMm: DEFAULT_DOWEL_CLEARANCES_MM.lower,
+    DowelUpperClearanceMm: DEFAULT_DOWEL_CLEARANCES_MM.upper,
+  };
+  return Object.fromEntries(
+    Object.entries(initial).map(([field, value]) => [`${solid}${field}`, formatDecimal(value)]),
+  ) as Record<BoxNumberKey, string>;
+};
+
+/** The second plane's text before it is first added, which only the hidden field holds. */
+const BOX_SECOND_CUT_PLACEHOLDER_PERCENT = 75;
+
+/** A plane through a line's angle before the solid is known; see `startLineAngle` for the one it starts with. */
+const BOX_LINE_ANGLE_PLACEHOLDER_DEG = 45;
 
 export const initialParameterChoices = (): ParameterChoices => ({
   prismBaseType: defaultModelSpecs.prism.shape.baseType,
@@ -547,6 +622,7 @@ export const initialParameterChoices = (): ParameterChoices => ({
   ballPartsSeparated: true,
   ballPlate: false,
   ballSecondCut: false,
+  ...initialBoxChoices(),
 });
 
 type Validation = { value: number } | { error: string };
@@ -696,7 +772,45 @@ const magnetValidators = (solid: MagnetSolid) =>
 /** Every field validated on its own; inclinations depend on the height and direction and are checked with them. */
 type IndependentKey = Exclude<ParameterKey, InclinationKey>;
 
-const validators: Readonly<Record<IndependentKey, (text: string, exact?: number) => Validation>> = {
+/** An angle within inclusive limits, for the planes of a box. */
+const angleWithin = (limits: { readonly min: number; readonly max: number }, example: string) => (text: string, exact?: number) =>
+  validateNumber(text, inclusiveRange(limits), limits, example, '°', exact);
+
+/** A plane through a face's line turns from the face, 0°, towards it again, 180°: both of which are the face's own plane. */
+export const validateLineAngle = (text: string, exact?: number): Validation => {
+  const read = readNumber(text, '45', exact);
+  if ('error' in read) return read;
+  return read.value > 0 && read.value < 180 ? read : { error: 'Кут має бути більшим за 0° і меншим за 180°.' };
+};
+
+/** Each box solid's own validators, by field. */
+const boxValidators = (solid: BoxSolid): Record<BoxNumberKey, (text: string, exact?: number) => Validation> => {
+  const byField: Record<(typeof BOX_NUMBER_FIELDS)[number], (text: string, exact?: number) => Validation> = {
+    SectionPercent: validateSectionPosition,
+    SectionSecondPercent: validateSectionPosition,
+    TraceAngleDeg: angleWithin({ min: 0, max: 180 }, '30'),
+    LineAngleDeg: validateLineAngle,
+    PointPercent: (text, exact) =>
+      validateNumber(text, inclusiveRange({ min: 0, max: 100 }), { min: 0, max: 100 }, '50', ' %', exact),
+    PlaneInclinationDeg: angleWithin({ min: 0, max: 90 }, '45'),
+    PlaneDirectionDeg: validateObliqueDirection,
+    DovetailSize: validateConnectorDimension,
+    DovetailLengthPercent: validateConnectorDimension,
+    DovetailClearanceMm: validateDovetailClearance,
+    RoundSpacingPercent: validateConnectorDimension,
+    RoundDiameter: validateConnectorDimension,
+    RoundDepth: validateConnectorDimension,
+    PlugClearanceMm: validateDiametralClearance,
+    DowelLowerClearanceMm: validateDiametralClearance,
+    DowelUpperClearanceMm: validateDiametralClearance,
+  };
+  return Object.fromEntries(Object.entries(byField).map(([field, validate]) => [`${solid}${field}`, validate])) as Record<
+    BoxNumberKey,
+    (text: string, exact?: number) => Validation
+  >;
+};
+
+const validators = {
   printSizeMm: validatePrintSize,
   cuboidWidthRatio: validateRatio,
   cuboidHeightRatio: validateRatio,
@@ -787,7 +901,10 @@ const validators: Readonly<Record<IndependentKey, (text: string, exact?: number)
   ...magnetValidators('cylinder'),
   ...magnetValidators('cone'),
   ...magnetValidators('ball'),
-};
+  ...Object.fromEntries(
+    BOX_SOLIDS.flatMap((solid) => [...Object.entries(boxValidators(solid)), ...Object.entries(magnetValidators(solid))]),
+  ),
+} as Readonly<Record<IndependentKey, (text: string, exact?: number) => Validation>>;
 
 /** The exact value behind a field's text while the field still shows that value's formatted text. */
 function exactValueOf(key: ParameterKey, texts: ParameterTexts, exact: ParameterExact | undefined): number | undefined {
@@ -924,6 +1041,7 @@ export function resolveModelRequest(
       kind,
       { ...resolved.values, printSizeMm: 'value' in size ? size.value : undefined },
       options.connectorScale,
+      choices,
     ) ??
     options.connectorScale ??
     INITIAL_CONNECTOR_SCALE;
@@ -994,7 +1112,10 @@ export function plateChosen(kind: ShapeKind, choices: ParameterChoices): boolean
 /** Whether the shape's active cut has a second parallel plane. */
 export function secondCutChosen(kind: ShapeKind, choices: ParameterChoices): boolean {
   const second = sectionKeys[kind]?.secondCut;
-  return second !== undefined && choices[second.toggle] && activeSection(kind, choices) === 'horizontal';
+  const section = activeSection(kind, choices);
+  return (
+    second !== undefined && choices[second.toggle] && (section === 'horizontal' || (section !== undefined && isBoxSolid(kind)))
+  );
 }
 
 /** The second plane's text before it is first added, which only the hidden field holds. */
@@ -1009,6 +1130,17 @@ export function addSecondCut(kind: ShapeKind, state: ParameterState, values: Par
   const keys = sectionKeys[kind];
   const second = keys?.secondCut;
   if (keys === undefined || second === undefined) return state;
+  if (isBoxSolid(kind)) {
+    // Positions run from 10 % to 90 % of the solid's extent along the planes' normal; the first plane is where it is.
+    const first = boxFirstPercent(kind, state.choices, values) ?? DIAGONAL_POSITION_PERCENT;
+    const { min, max } = SECTION_POSITION_LIMITS;
+    const start = (first + (first <= (min + max) / 2 ? max : min)) / 2;
+    return {
+      ...state,
+      texts: { ...state.texts, [second.offset]: formatDecimal(Math.round(start * 10) / 10) },
+      choices: { ...state.choices, [second.toggle]: true },
+    };
+  }
   const limit =
     values.printSizeMm === undefined
       ? BALL_OFFSET_LIMITS.max
@@ -1027,6 +1159,217 @@ export function removeSecondCut(kind: ShapeKind, state: ParameterState): Paramet
   const second = sectionKeys[kind]?.secondCut;
   if (second === undefined) return state;
   return { ...state, choices: { ...state.choices, [second.toggle]: false } };
+}
+
+/**
+ * Where a box's first plane lies across the solid, in percent of its extent along the normal: its own position, or for a plane
+ * through a line, where that line puts it; undefined while the solid or the plane is not valid.
+ */
+function boxFirstPercent(kind: BoxSolid, choices: ParameterChoices, values: ParameterValues): number | undefined {
+  const keys = boxKeysOf(kind);
+  const type = activeSection(kind, choices);
+  if (type === undefined || !isBoxSectionType(type)) return undefined;
+  if (type !== 'through-line') return values[keys.SectionPercent];
+  const shape = boxShapeOf(kind, values);
+  const available = throughLineChoicesFor(shape);
+  const fields = boxModeKeys(keys, type, choices, available);
+  if (shape === undefined || values.printSizeMm === undefined || fields.some((key) => values[key] === undefined))
+    return undefined;
+  const spec = boxSectionOf(keys, type, choices, (key) => values[key] as number, false, available);
+  try {
+    return boxPlanePercents(boxVertices(shape as BoxLikeShape, { longestDimensionMm: values.printSizeMm }), spec).first;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether a section is one of a cube's or parallelepiped's modes. */
+export const isBoxSectionType = (type: SectionType): type is BoxSectionSpec['type'] =>
+  type === 'face-parallel' || type === 'longitudinal' || type === 'through-line' || type === 'inclined';
+
+/**
+ * The state with a longitudinal plane through a base diagonal, the diagonal section: its trace along the diagonal and its
+ * position through the solid's centre, which holds the diagonal whatever the solid becomes. Moving it away later keeps the
+ * trace, and the plane is then parallel to the diagonal only.
+ */
+export function diagonalSection(kind: ShapeKind, state: ParameterState, diagonal: 'AC' | 'BD'): ParameterState {
+  if (!isBoxSolid(kind)) return state;
+  const keys = boxKeysOf(kind);
+  const exact = { ...state.exact };
+  delete exact[keys.SectionPercent];
+  return {
+    ...state,
+    texts: { ...state.texts, [keys.SectionPercent]: formatDecimal(DIAGONAL_POSITION_PERCENT) },
+    choices: { ...state.choices, [keys.Trace]: diagonal },
+    exact,
+  };
+}
+
+/** Whether the longitudinal plane is the diagonal section through this base diagonal now. */
+export const isDiagonalSection = (
+  kind: ShapeKind,
+  choices: ParameterChoices,
+  values: ParameterValues,
+): 'AC' | 'BD' | undefined => {
+  if (!isBoxSolid(kind)) return undefined;
+  const keys = boxKeysOf(kind);
+  const trace = choices[keys.Trace];
+  if (activeSection(kind, choices) !== 'longitudinal' || trace === 'angle') return undefined;
+  return values[keys.SectionPercent] === DIAGONAL_POSITION_PERCENT ? trace : undefined;
+};
+
+/** The state with the point of a plane through a line at the middle of its edge. */
+export function pointAtMidpoint(kind: ShapeKind, state: ParameterState): ParameterState {
+  if (!isBoxSolid(kind)) return state;
+  const keys = boxKeysOf(kind);
+  const exact = { ...state.exact };
+  delete exact[keys.PointPercent];
+  return { ...state, texts: { ...state.texts, [keys.PointPercent]: '50' }, exact };
+}
+
+/**
+ * Whether the box's current valid plane is horizontal, so that its parts are the lower and the upper one, as the engine names
+ * them; any other plane numbers them. False while the solid or the plane is not valid.
+ */
+export function boxCutHorizontal(kind: ShapeKind, choices: ParameterChoices, values: ParameterValues): boolean {
+  if (!isBoxSolid(kind)) return false;
+  const keys = boxKeysOf(kind);
+  const type = activeSection(kind, choices);
+  const shape = boxShapeOf(kind, values);
+  if (type === undefined || !isBoxSectionType(type) || shape === undefined || values.printSizeMm === undefined) return false;
+  const available = throughLineChoicesFor(shape);
+  if (boxModeKeys(keys, type, choices, available).some((key) => values[key] === undefined)) return false;
+  const spec = boxSectionOf(keys, type, choices, (key) => values[key] as number, false, available);
+  return boxPlaneHorizontal(shape as BoxLikeShape, values.printSizeMm, spec as Section);
+}
+
+/**
+ * A plane parallel to a face is chosen by one face of each pair of opposite faces, see `BOX_PARALLEL_FACES`; one given by the
+ * other face of its pair, as an earlier choice may be, becomes the same plane measured from its representative: both planes'
+ * positions are read through the planes themselves, see `boxFaceParallelPercent`, so that neither moves. A position that is not
+ * a valid number yet stays as typed. Undefined when the face is a representative or the mode is another one, whose positions
+ * share the field.
+ */
+function representFace(kind: BoxSolid, state: ParameterState, values: ParameterValues): ParameterState | undefined {
+  const keys = boxKeysOf(kind);
+  const face = state.choices[keys.Face];
+  if (activeSection(kind, state.choices) !== 'face-parallel' || BOX_PARALLEL_FACES.includes(face)) return undefined;
+  const representative = boxOppositeFace(face);
+  const shape = boxShapeOf(kind, values);
+  const texts = { ...state.texts };
+  const exact = { ...state.exact };
+  for (const key of [keys.SectionPercent, keys.SectionSecondPercent]) {
+    const percent = values[key];
+    if (percent === undefined) continue;
+    // Opposite faces are parallel in every parallelepiped: without a valid solid, the same plane lies at 100 − p.
+    const converted =
+      shape === undefined || values.printSizeMm === undefined
+        ? 100 - percent
+        : boxFaceParallelPercent(
+            shape as BoxLikeShape,
+            { longestDimensionMm: values.printSizeMm },
+            face,
+            percent,
+            representative,
+          );
+    texts[key] = formatDecimal(Math.round(converted * 1e9) / 1e9);
+    delete exact[key];
+  }
+  return { ...state, texts, exact, choices: { ...state.choices, [keys.Face]: representative } };
+}
+
+/**
+ * The choices of a plane through a line that the fields offer, see `throughLineSelection`: a face, line, method or point's edge
+ * no longer offered for this solid or for the choices before it is replaced, all of them together, before any model is made of
+ * them. Undefined when they are all offered.
+ */
+export function settleBoxChoices(kind: ShapeKind, state: ParameterState, values: ParameterValues): ParameterState | undefined {
+  if (!isBoxSolid(kind)) return undefined;
+  const keys = boxKeysOf(kind);
+  const opposite = representFace(kind, state, values);
+  if (opposite !== undefined) return opposite;
+  const { choices } = state;
+  const selection = throughLineSelection(keys, choices, throughLineChoicesOf(kind, values));
+  const settled = {
+    [keys.LineFace]: selection.face,
+    [keys.Line]: segmentKey(selection.line),
+    [keys.LineMethod]: selection.method,
+    [keys.PointEdge]: segmentKey(selection.pointEdge),
+  };
+  if (Object.entries(settled).every(([key, value]) => choices[key as keyof typeof choices] === value)) return undefined;
+  return { ...state, choices: { ...choices, ...settled } };
+}
+
+const LINE_ANGLE_INCREMENT_DEG = 5;
+const POINT_PERCENT_INCREMENT = 5;
+
+/**
+ * A plane through a line by its angle starts in the middle of the angles that leave both parts usable for this solid, on the
+ * step's grid: 45° for a cube's edge, through the opposite edge. Once per line; afterwards the angle is the user's, and a new
+ * solid keeps it. Undefined when nothing changes.
+ */
+export function startLineAngle(kind: ShapeKind, state: ParameterState, values: ParameterValues): ParameterState | undefined {
+  if (!isBoxSolid(kind)) return undefined;
+  const keys = boxKeysOf(kind);
+  const { choices } = state;
+  if (activeSection(kind, choices) !== 'through-line') return undefined;
+  const shape = boxShapeOf(kind, values);
+  const { face, line, method } = throughLineSelection(keys, choices, throughLineChoicesFor(shape));
+  if (method !== 'angle') return undefined;
+  const marker = `${face}:${segmentKey(line)}`;
+  if (choices[keys.LineAngleFor] === marker) return undefined;
+  if (shape === undefined || values.printSizeMm === undefined) return undefined;
+  const bounds = boxLineAngleBounds(shape as BoxLikeShape, { longestDimensionMm: values.printSizeMm }, face, line);
+  const next = { ...state, choices: { ...choices, [keys.LineAngleFor]: marker } };
+  if (bounds === null) return next;
+  const range = planeAngleRange(bounds, LINE_ANGLE_INCREMENT_DEG);
+  const exact = { ...state.exact };
+  delete exact[keys.LineAngleDeg];
+  return {
+    ...next,
+    texts: { ...state.texts, [keys.LineAngleDeg]: formatSteppedDecimal(snapDecimal((range.min + range.max) / 2, range)) },
+    exact,
+  };
+}
+
+/**
+ * The positions a point's field allows: the usable ones, see `boxPointRange`, with an open end, where the point would lie on
+ * the line, moved in by one step of the field, so that the field shows no value it would refuse.
+ */
+const pointInterval = (range: BoxPointRange): Interval => ({
+  min: range.minOpen ? range.min + POINT_PERCENT_INCREMENT : range.min,
+  max: range.maxOpen ? range.max - POINT_PERCENT_INCREMENT : range.max,
+});
+
+/**
+ * A point on a newly chosen edge, or on an edge that a new line or face leaves, stays where it is when it gives a usable plane
+ * there, and otherwise moves to the edge's midpoint, or where that is not usable either to the middle of the usable positions,
+ * on the field's grid. Once per line and edge; afterwards the position is the user's. Undefined when nothing changes.
+ */
+export function startPoint(kind: ShapeKind, state: ParameterState, values: ParameterValues): ParameterState | undefined {
+  if (!isBoxSolid(kind)) return undefined;
+  const keys = boxKeysOf(kind);
+  const { choices } = state;
+  if (activeSection(kind, choices) !== 'through-line') return undefined;
+  const shape = boxShapeOf(kind, values);
+  const { face, line, method, pointEdge } = throughLineSelection(keys, choices, throughLineChoicesFor(shape));
+  if (method !== 'point') return undefined;
+  const marker = `${face}:${segmentKey(line)}:${segmentKey(pointEdge)}`;
+  if (choices[keys.PointFor] === marker) return undefined;
+  if (shape === undefined || values.printSizeMm === undefined) return undefined;
+  const range = boxPointRange(shape as BoxLikeShape, { longestDimensionMm: values.printSizeMm }, face, line, pointEdge);
+  const next = { ...state, choices: { ...choices, [keys.PointFor]: marker } };
+  if (range === null) return next;
+  const allowed = pointInterval(range);
+  const current = values[keys.PointPercent];
+  const within = (percent: number) =>
+    percent >= allowed.min - CONSTRAINT_ROUNDOFF_MM && percent <= allowed.max + CONSTRAINT_ROUNDOFF_MM;
+  if (current !== undefined && within(current)) return next;
+  const grid = planeAngleRange(allowed, POINT_PERCENT_INCREMENT);
+  const start = within(50) ? 50 : snapDecimal((grid.min + grid.max) / 2, grid);
+  const exact = { ...state.exact };
+  delete exact[keys.PointPercent];
+  return { ...next, texts: { ...state.texts, [keys.PointPercent]: formatSteppedDecimal(start) }, exact };
 }
 
 /** Why the twist connector is not offered here, for a choice made before the solid or the cut changed. */
@@ -1352,6 +1695,9 @@ function sectionChecks(
   edits: ConnectorEdits | undefined,
 ): SectionCheck | undefined {
   const keys = sectionKeys[kind];
+  if (keys?.box !== undefined && isBoxSolid(shape.kind) && isBoxSectionType(section.type)) {
+    return boxChecks(keys, shape as BoxLikeShape, longestDimensionMm, section as BoxSection, edits);
+  }
   if (keys === undefined || (shape.kind !== 'cylinder' && shape.kind !== 'cone' && shape.kind !== 'ball')) return undefined;
   if (section.type === 'parallel-to-bases') return connectorChecks(keys, shape as RoundShape, longestDimensionMm, section, edits);
   const solid = shape as RoundShape;
@@ -1384,6 +1730,7 @@ function sectionChecks(
   }
   if (section.type === 'axis-parallel')
     return axisParallelChecks(keys, solid as CylinderShape, longestDimensionMm, section, edits);
+  if (section.type !== 'vertical') return undefined;
   return offsetChecks(
     keys,
     solid,
@@ -1393,6 +1740,169 @@ function sectionChecks(
     roundDimensionsMm(solid, scale).radius,
     edits,
   );
+}
+
+/** A cube's or parallelepiped's section with its connector, as the specification has it. */
+type BoxSection = Extract<Section, { type: BoxSectionSpec['type'] }>;
+
+/** The field that moves a box's plane: its position, or for a plane through a line its angle or its point. */
+const boxPlaneField = (box: BoxKeysOf, section: BoxSection) =>
+  section.type !== 'through-line' ? box.SectionPercent : section.method === 'angle' ? box.LineAngleDeg : box.PointPercent;
+
+/**
+ * A cube's or parallelepiped's plane: an angle about a line within those that leave both parts usable, a point off the line,
+ * positions within the solid's extent that leave both parts at least their minimum along the normal, see `boxPartMinimumMm`,
+ * and a second plane far enough from the first for a usable middle part; then the connector at each plane. The positions'
+ * ranges follow from the solid's extent along the normal. Nothing is moved to make anything fit.
+ */
+function boxChecks(
+  keys: SectionKeys,
+  shape: BoxLikeShape,
+  longestDimensionMm: number,
+  section: BoxSection,
+  edits: ConnectorEdits | undefined,
+): SectionCheck {
+  const box = keys.box as BoxKeysOf;
+  const scale = { longestDimensionMm };
+  const { connector: _connector, ...spec } = section;
+  const ranges: SectionRanges = {};
+  const field = boxPlaneField(box, section);
+  if (section.type === 'through-line' && section.method === 'angle') {
+    const bounds = boxLineAngleBounds(shape, scale, section.face, section.line);
+    ranges[box.LineAngleDeg] = bounds;
+    const name = segmentName(section.line);
+    if (bounds === null) {
+      return {
+        errors: {
+          [field]: `За жодного кута площина через ${name} не лишає обом частинам придатної товщини. Виберіть іншу пряму або збільште модель.`,
+        },
+        ranges,
+      };
+    }
+    const angle = section.angleDeg as number;
+    if (angle < bounds.min - CONSTRAINT_ROUNDOFF_MM || angle > bounds.max + CONSTRAINT_ROUNDOFF_MM) {
+      const shown = planeAngleRange(bounds, 1);
+      return {
+        errors: {
+          [field]:
+            `За цього кута одна з частин була б надто тонкою. Для прямої ${name} допустимо від ${formatDecimal(shown.min)}° ` +
+            `до ${formatDecimal(shown.max)}°.`,
+        },
+        ranges,
+      };
+    }
+  }
+  const collinear = (point: BoxSegment | undefined) =>
+    `Точка${point === undefined ? '' : ` на ребрі ${segmentName(point)}`} лежить на прямій ${section.type === 'through-line' ? segmentName(section.line) : ''}, ` +
+    'тож площину не визначено. Пересуньте точку або виберіть інше ребро.';
+  if (section.type === 'through-line' && section.method === 'point') {
+    const edge = section.pointEdge as BoxSegment;
+    const range = boxPointRange(shape, scale, section.face, section.line, edge);
+    const interval = range === null ? null : pointInterval(range);
+    ranges[box.PointPercent] = interval;
+    const name = segmentName(edge);
+    if (range === null || interval === null) {
+      return {
+        errors: {
+          [field]: `Жодна точка ребра ${name} не лишає обом частинам придатної товщини. Виберіть інше ребро або збільште модель.`,
+        },
+        ranges,
+      };
+    }
+    const percent = section.pointPercent as number;
+    if (percent < interval.min - CONSTRAINT_ROUNDOFF_MM || percent > interval.max + CONSTRAINT_ROUNDOFF_MM) {
+      const onLine =
+        (range.minOpen && percent <= range.min + CONSTRAINT_ROUNDOFF_MM) ||
+        (range.maxOpen && percent >= range.max - CONSTRAINT_ROUNDOFF_MM);
+      return {
+        errors: {
+          [field]: onLine
+            ? collinear(edge)
+            : `За цього положення точки одна з частин була б надто тонкою. На ребрі ${name} допустимо від ` +
+              `${formatDecimal(Math.ceil(interval.min * 10) / 10)} % до ${formatDecimal(Math.floor(interval.max * 10) / 10)} %.`,
+        },
+        ranges,
+      };
+    }
+  }
+  const vertices = boxVertices(shape, scale);
+  let plane: ReturnType<typeof boxPlane>;
+  try {
+    plane = boxPlane(vertices, spec as BoxSectionSpec);
+  } catch {
+    return {
+      errors: { [field]: collinear(section.type === 'through-line' ? section.pointEdge : undefined) },
+      ranges,
+    };
+  }
+  const span = plane.extent.max - plane.extent.min;
+  const least = boxPartMinimumMm(plane.extent);
+  const edge = Math.max(SECTION_POSITION_LIMITS.min, (100 * least) / span);
+  const allowed = edge <= 50 ? { min: edge, max: 100 - edge } : null;
+  if (section.type !== 'through-line') ranges[box.SectionPercent] = allowed;
+  const allowedText = (shown: Interval | null) =>
+    shown === null
+      ? 'Модель замала для двох придатних частин уздовж цього напряму: збільште її.'
+      : `Допустимі значення — від ${formatDecimal(Math.ceil(shown.min * 10) / 10)} % до ${formatDecimal(Math.floor(shown.max * 10) / 10)} %: ` +
+        'усі частини мають лишатися придатними до друку.';
+  const reach = boxSplitReach(shape, scale, { box: spec as BoxSectionSpec });
+  if (!satisfies(reach)) {
+    return {
+      errors: {
+        [field]:
+          section.type === 'through-line'
+            ? `Тонша частина сягає від площини лише ${millimetres(reach.valueMm)}, потрібно щонайменше ` +
+              `${millimetres(reach.minimumMm)}. Пересуньте точку, виберіть інше ребро або збільште модель.`
+            : allowedText(allowed),
+      },
+      ranges,
+    };
+  }
+  const second = section.secondPositionPercent;
+  if (second === undefined || keys.secondCut === undefined) {
+    const connector = connectorChecks(keys, shape, longestDimensionMm, section, edits);
+    return connector === undefined ? { errors: {}, ranges } : { ...connector, ranges: { ...ranges, ...connector.ranges } };
+  }
+  const secondKey = keys.secondCut.offset;
+  const allRanges: SectionRanges = { ...ranges, [secondKey]: allowed };
+  if (allowed === null || second < allowed.min - CONSTRAINT_ROUNDOFF_MM || second > allowed.max + CONSTRAINT_ROUNDOFF_MM) {
+    return { errors: { [secondKey]: allowedText(allowed) }, ranges: allRanges };
+  }
+  const first = boxPlanePercents(vertices, spec as BoxSectionSpec).first;
+  const thickness = (Math.abs(second - first) / 100) * span;
+  if (thickness < least - CONSTRAINT_ROUNDOFF_MM) {
+    return {
+      errors: {
+        [secondKey]:
+          `Перерізи надто близько: середня частина має завтовшки ${millimetres(thickness)}, а потрібно щонайменше ` +
+          `${formatMillimetres(least)} мм (${formatDecimal(Math.ceil(((100 * least) / span) * 10) / 10)} % між перерізами). ` +
+          'Розсуньте перерізи або збільште модель.',
+      },
+      ranges: allRanges,
+    };
+  }
+  return pairedConnectorChecks(keys, shape, longestDimensionMm, section, edits, allRanges);
+}
+
+const HORIZONTAL_NORMAL_ROUNDOFF = 1e-9;
+
+/** Whether a box's plane is horizontal, so that its parts are the lower and the upper one rather than numbered. */
+function boxPlaneHorizontal(shape: SectionedShape, longestDimensionMm: number, section: Section): boolean {
+  if (!isBoxSectionType(section.type) || !isBoxSolid(shape.kind)) return false;
+  try {
+    const { connector: _connector, ...spec } = section as BoxSection;
+    const plane = boxPlane(boxVertices(shape as BoxLikeShape, { longestDimensionMm }), spec as BoxSectionSpec);
+    // The engine's own test, which names the parts below and above such a plane the lower and the upper one.
+    return Math.abs(plane.normal[2]) > 1 - HORIZONTAL_NORMAL_ROUNDOFF;
+  } catch {
+    return false;
+  }
+}
+
+/** The words of a cut's messages: a box's horizontal plane reads like a cut parallel to the bases, any other like an oblique one. */
+function cutWordingOf(shape: SectionedShape, longestDimensionMm: number, section: Section): CutWording {
+  if (!isBoxSectionType(section.type)) return section.type;
+  return boxPlaneHorizontal(shape, longestDimensionMm, section) ? 'parallel-to-bases' : 'oblique';
 }
 
 /** The direction a new plane parallel to the axis moves along: +Y, across the lean, as a vertical cut's. */
@@ -1477,7 +1987,11 @@ function connectorChecks(
   const plate = plateKeysOf(keys);
   if (plate === undefined) return jointChecks(keys, shape, longestDimensionMm, section, edits);
   const plane = cutOfSection(withoutPlate(section));
-  const range = plateThicknessRange(shape, { longestDimensionMm }, plane as Exclude<typeof plane, { plate: unknown }>);
+  const range = plateThicknessRange(
+    shape as PlatedShape,
+    { longestDimensionMm },
+    plane as Exclude<typeof plane, { plate: unknown }>,
+  );
   const fits = range.min <= range.max + CONSTRAINT_ROUNDOFF_MM;
   const ranges: SectionRanges = { [plate.thickness]: fits ? range : null };
   const chosen = 'plate' in section ? section.plate : undefined;
@@ -1536,7 +2050,7 @@ function magnetChecks(shape: SectionedShape, longestDimensionMm: number, section
   const plan = cachedMagnetPlan(shape, longestDimensionMm, section, connector);
   if (plan.issues.length === 0) return { errors: {}, ranges: {} };
   const { connector: _none, ...plain } = section;
-  const unavailable = magnetIssuesMessage(plan.issues, section.type, connector);
+  const unavailable = magnetIssuesMessage(plan.issues, cutWordingOf(shape, longestDimensionMm, section), connector);
   return {
     errors: {},
     ranges: {},
@@ -1545,7 +2059,7 @@ function magnetChecks(shape: SectionedShape, longestDimensionMm: number, section
 }
 
 /** The part as the magnet messages name it: below or above a horizontal cut, by its number beside any other. */
-const magnetPart = (part: 'lower' | 'upper', cut: SectionType) =>
+const magnetPart = (part: 'lower' | 'upper', cut: CutWording) =>
   cut === 'parallel-to-bases' || cut === 'horizontal'
     ? part === 'lower'
       ? 'нижня частина'
@@ -1555,7 +2069,7 @@ const magnetPart = (part: 'lower' | 'upper', cut: SectionType) =>
       : 'частина 2';
 
 /** What keeps the requested magnets from fitting, the part it concerns where known, and what to change; in Ukrainian. */
-export function magnetIssuesMessage(issues: readonly MagnetIssue[], cut: SectionType, connector: MagnetConnector): string {
+export function magnetIssuesMessage(issues: readonly MagnetIssue[], cut: CutWording, connector: MagnetConnector): string {
   const ending = ' Налаштування збережено; доки магніти не вміщуються, завантаження вимкнено.';
   const first = issues[0] as MagnetIssue;
   const partsOf = (code: MagnetIssue['code']) =>
@@ -1694,6 +2208,23 @@ function secondPlaneChecks(
       ranges: allRanges,
     };
   }
+  return pairedConnectorChecks(keys, shape, longestDimensionMm, section, edits, allRanges);
+}
+
+/**
+ * The connector at each of two parallel planes, a ball's or a box's. Each plane's own checks see the other plane, so that the
+ * middle part's connectors from both sides keep their material. Both planes share the connector's settings: their feasible
+ * ranges are what both allow, and a round connector fitted to the first plane is fitted to the second as well, and taken back
+ * to the first if that changed it. Nothing is moved to make anything fit.
+ */
+function pairedConnectorChecks(
+  keys: SectionKeys,
+  shape: SectionedShape,
+  longestDimensionMm: number,
+  section: Section,
+  edits: ConnectorEdits | undefined,
+  allRanges: SectionRanges,
+): SectionCheck {
   const { connector } = section;
   if (connector === undefined) return { errors: {}, ranges: allRanges };
   const first = connectorChecks(keys, shape, longestDimensionMm, section, edits);
@@ -1878,7 +2409,11 @@ function jointChecks(
   const plated = 'plate' in section && section.plate !== undefined;
   // Beside a plate on another cut the parts keep their numbers, which the cut's own words give.
   const wording: CutWording =
-    shape.kind === 'cone' && section.type === 'parallel-to-bases' ? (plated ? 'cone-plate' : 'cone') : section.type;
+    shape.kind === 'cone' && section.type === 'parallel-to-bases'
+      ? plated
+        ? 'cone-plate'
+        : 'cone'
+      : cutWordingOf(shape, longestDimensionMm, section);
   const fields: [ParameterKey, string][] =
     connector.type === 'twist'
       ? [
@@ -1936,6 +2471,11 @@ function jointChecks(
       oblique: planar?.oblique.inclination ?? keys.offset,
       'oblique-apex': coneApexKeys.inclination,
       'axis-parallel': planar?.axisParallel?.offset ?? keys.offset,
+      'face-parallel': keys.offset,
+      longitudinal: keys.offset,
+      inclined: keys.offset,
+      'through-line':
+        keys.box !== undefined && section.type === 'through-line' ? boxPlaneField(keys.box, section as BoxSection) : keys.offset,
     };
     errors[cutField[section.type]] = feasibility.unattributed.map(explain).join(' ');
   }
@@ -1967,12 +2507,22 @@ export type CutWording = SectionType | 'cone' | 'cone-plate';
 const BALL_REPAIR = 'наблизьте переріз до центра кулі';
 
 /** A plane through the apex reads like any oblique one, but for the position it does not have; a plate's cut like a cone's. */
-const wordingOf = (cut: CutWording): Exclude<CutWording, 'oblique-apex' | 'cone-plate' | 'axis-parallel'> =>
-  cut === 'oblique-apex' ? 'oblique' : cut === 'cone-plate' ? 'cone' : cut === 'axis-parallel' ? 'vertical' : cut;
+const wordingOf = (cut: CutWording): 'vertical' | 'oblique' | 'parallel-to-bases' | 'cone' | 'horizontal' =>
+  cut === 'oblique-apex' || isBoxCutWording(cut)
+    ? 'oblique'
+    : cut === 'cone-plate'
+      ? 'cone'
+      : cut === 'axis-parallel'
+        ? 'vertical'
+        : cut;
+
+/** A box's own cut type, which its messages read as an oblique cut's; see `cutWordingOf` for its horizontal planes. */
+const isBoxCutWording = (cut: CutWording): cut is BoxSectionSpec['type'] =>
+  cut === 'face-parallel' || cut === 'longitudinal' || cut === 'through-line' || cut === 'inclined';
 
 /** A part as the messages name it: by its place in a parallel cut, by its number in the others, where it has no place. */
 function partInMessage(part: 'lower' | 'upper', cut: CutWording): string {
-  if (cut === 'vertical' || cut === 'oblique' || cut === 'oblique-apex' || cut === 'axis-parallel') {
+  if (cut === 'vertical' || cut === 'oblique' || cut === 'oblique-apex' || cut === 'axis-parallel' || isBoxCutWording(cut)) {
     return part === 'lower' ? 'у частині 1' : 'у частині 2';
   }
   return part === 'lower' ? 'у нижній частині' : 'у верхній частині';
@@ -2192,29 +2742,40 @@ export function dovetailIssueMessage(issue: DovetailIssue, cut: CutWording = 'pa
   }
 }
 
+/** The solids with a section, each with its own fields. */
+type SectionSolid = 'cylinder' | 'cone' | 'ball' | BoxSolid;
+
 type SectionKeys = {
-  readonly choice: 'cylinderSection' | 'coneSection' | 'ballSection';
-  readonly offset: 'cylinderSectionOffsetPercent' | 'coneSectionOffsetPercent' | 'ballSectionOffsetPercent';
-  /** A second plane parallel to the first, of the one solid that offers it: whether it is on, and its offset. */
-  readonly secondCut?: { readonly toggle: 'ballSecondCut'; readonly offset: 'ballSectionSecondOffsetPercent' };
+  readonly choice: `${SectionSolid}Section`;
+  /** The first plane's own field: a distance from an axis or a centre, or a box's position across the solid. */
+  readonly offset:
+    | 'cylinderSectionOffsetPercent'
+    | 'coneSectionOffsetPercent'
+    | 'ballSectionOffsetPercent'
+    | `${BoxSolid}SectionPercent`;
+  /** A second plane parallel to the first, of the solids that offer it: whether it is on, and its position. */
+  readonly secondCut?: {
+    readonly toggle: 'ballSecondCut' | `${BoxSolid}SecondCut`;
+    readonly offset: 'ballSectionSecondOffsetPercent' | `${BoxSolid}SectionSecondPercent`;
+  };
   readonly separated: ToggleKey;
-  readonly connector: 'cylinderConnector' | 'coneConnector' | 'ballConnector';
-  readonly dovetailEntrance: 'cylinderDovetailEntrance' | 'coneDovetailEntrance' | 'ballDovetailEntrance';
+  readonly connector: `${SectionSolid}Connector`;
+  readonly dovetailEntrance: `${SectionSolid}DovetailEntrance`;
   readonly dovetail: {
-    readonly size: 'cylinderDovetailSize' | 'coneDovetailSize' | 'ballDovetailSize';
-    readonly length: 'cylinderDovetailLengthPercent' | 'coneDovetailLengthPercent' | 'ballDovetailLengthPercent';
-    readonly clearance: 'cylinderDovetailClearanceMm' | 'coneDovetailClearanceMm' | 'ballDovetailClearanceMm';
+    readonly size: `${SectionSolid}DovetailSize`;
+    readonly length: `${SectionSolid}DovetailLengthPercent`;
+    readonly clearance: `${SectionSolid}DovetailClearanceMm`;
   };
   /** Plugs and dowels share the count, profile, spacing and multipliers; each keeps its own clearances. */
   readonly round: {
-    readonly count: 'cylinderRoundCount' | 'coneRoundCount' | 'ballRoundCount';
-    readonly profile: 'cylinderRoundProfile' | 'coneRoundProfile' | 'ballRoundProfile';
-    readonly spacing: 'cylinderRoundSpacingPercent' | 'coneRoundSpacingPercent' | 'ballRoundSpacingPercent';
-    readonly diameter: 'cylinderRoundDiameter' | 'coneRoundDiameter' | 'ballRoundDiameter';
-    readonly depth: 'cylinderRoundDepth' | 'coneRoundDepth' | 'ballRoundDepth';
-    readonly plugClearance: 'cylinderPlugClearanceMm' | 'conePlugClearanceMm' | 'ballPlugClearanceMm';
-    readonly dowelLowerClearance: 'cylinderDowelLowerClearanceMm' | 'coneDowelLowerClearanceMm' | 'ballDowelLowerClearanceMm';
-    readonly dowelUpperClearance: 'cylinderDowelUpperClearanceMm' | 'coneDowelUpperClearanceMm' | 'ballDowelUpperClearanceMm';
+    readonly count: `${SectionSolid}RoundCount`;
+    readonly profile: `${SectionSolid}RoundProfile`;
+    readonly spacing: `${SectionSolid}RoundSpacingPercent`;
+    readonly diameter: `${SectionSolid}RoundDiameter`;
+    readonly depth: `${SectionSolid}RoundDepth`;
+    readonly plugClearance: `${SectionSolid}PlugClearanceMm`;
+    readonly dowelLowerClearance: `${SectionSolid}DowelLowerClearanceMm`;
+    readonly dowelUpperClearance: `${SectionSolid}DowelUpperClearanceMm`;
   };
   readonly twist?: typeof TWIST_KEYS;
   readonly magnet: MagnetKeys;
@@ -2224,7 +2785,35 @@ type SectionKeys = {
     readonly thickness: 'cylinderPlateThicknessMm' | 'conePlateThicknessMm' | 'ballPlateThicknessMm';
     readonly margin: 'cylinderPlateMarginMm' | 'conePlateMarginMm' | 'ballPlateMarginMm';
   };
+  /** The plane fields of a cube's or parallelepiped's modes. */
+  readonly box?: BoxKeysOf;
 };
+
+/** A cube's or parallelepiped's section fields, like any other solid's, with its modes' own. */
+function boxSectionKeys(solid: BoxSolid): SectionKeys {
+  const box = boxKeysOf(solid);
+  return {
+    choice: box.Section,
+    offset: box.SectionPercent,
+    secondCut: { toggle: box.SecondCut, offset: box.SectionSecondPercent },
+    separated: box.PartsSeparated,
+    connector: box.Connector,
+    dovetailEntrance: box.DovetailEntrance,
+    dovetail: { size: box.DovetailSize, length: box.DovetailLengthPercent, clearance: box.DovetailClearanceMm },
+    round: {
+      count: box.RoundCount,
+      profile: box.RoundProfile,
+      spacing: box.RoundSpacingPercent,
+      diameter: box.RoundDiameter,
+      depth: box.RoundDepth,
+      plugClearance: box.PlugClearanceMm,
+      dowelLowerClearance: box.DowelLowerClearanceMm,
+      dowelUpperClearance: box.DowelUpperClearanceMm,
+    },
+    magnet: magnetKeysOf(solid),
+    box,
+  };
+}
 
 /** The further fields of the solids with an axis: a plane parallel to their base and a plane through a point on the axis. */
 export type PlanarSectionKeys = SectionKeys & {
@@ -2269,6 +2858,15 @@ export const scaledConnectorDefaults: Readonly<Record<ScaledConnectorKey, number
   coneRoundDiameter: DEFAULT_ROUND_CONNECTOR.diameterFactor,
   coneRoundDepth: DEFAULT_ROUND_CONNECTOR.depthFactor,
   coneRoundSpacingPercent: DEFAULT_ROUND_CONNECTOR.spacingPercent,
+  ...(Object.fromEntries(
+    BOX_SOLIDS.flatMap((solid) => [
+      [`${solid}DovetailSize`, DEFAULT_DOVETAIL.sizeFactor],
+      [`${solid}DovetailLengthPercent`, DEFAULT_DOVETAIL.lengthPercent],
+      [`${solid}RoundDiameter`, DEFAULT_ROUND_CONNECTOR.diameterFactor],
+      [`${solid}RoundDepth`, DEFAULT_ROUND_CONNECTOR.depthFactor],
+      [`${solid}RoundSpacingPercent`, DEFAULT_ROUND_CONNECTOR.spacingPercent],
+    ]),
+  ) as Record<Exclude<ScaledConnectorKey, `${'cylinder' | 'cone' | 'ball'}${string}`>, number>),
 };
 
 export const isScaledConnectorKey = (key: ParameterKey): key is ScaledConnectorKey => Object.hasOwn(scaledConnectorDefaults, key);
@@ -2291,6 +2889,9 @@ export const TWIST_KEYS = [
 
 /** The fields of the plane section and its connector, for the shapes that offer one. */
 export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys | PlanarSectionKeys>>> = {
+  cube: boxSectionKeys('cube'),
+  cuboid: boxSectionKeys('cuboid'),
+  parallelepiped: boxSectionKeys('parallelepiped'),
   ball: {
     choice: 'ballSection',
     offset: 'ballSectionOffsetPercent',
@@ -2472,6 +3073,13 @@ function resolveSection(
   const secondCut = secondCutChosen(kind, choices) ? keys.secondCut : undefined;
   const plate = keys.plate !== undefined && plateChosen(kind, choices) ? keys.plate : undefined;
   const plateFields: IndependentKey[] = plate === undefined ? [] : [plate.thickness, plate.margin];
+  const boxFields = (mode: BoxSectionSpec['type']): IndependentKey[] =>
+    keys.box === undefined
+      ? []
+      : [
+          ...boxModeKeys(keys.box, mode, choices, throughLineChoicesFor(shape)),
+          ...(secondCut === undefined ? [] : [secondCut.offset]),
+        ];
   const cutFields: Readonly<Record<SectionType, readonly IndependentKey[]>> = {
     'parallel-to-bases': planar === undefined ? [] : [planar.position, ...plateFields],
     vertical: [keys.offset, ...plateFields],
@@ -2481,6 +3089,10 @@ function resolveSection(
       ? [coneApexKeys.direction, ...plateFields]
       : [...Object.values(coneApexKeys), ...plateFields],
     'axis-parallel': planar?.axisParallel === undefined ? [] : [...Object.values(planar.axisParallel), ...plateFields],
+    'face-parallel': boxFields('face-parallel'),
+    longitudinal: boxFields('longitudinal'),
+    'through-line': boxFields('through-line'),
+    inclined: boxFields('inclined'),
   };
   const cutKeys = cutFields[type];
   const { values, errors } = validateFields([...cutKeys, ...fields], texts, exact);
@@ -2549,6 +3161,13 @@ function resolveSection(
     ...(connector === undefined ? {} : { connector }),
   };
   const sectionOf = (): Section => {
+    if (isBoxSectionType(type)) {
+      const box = keys.box as BoxKeysOf;
+      return {
+        ...boxSectionOf(box, type, choices, read, secondCut !== undefined, throughLineChoicesFor(shape)),
+        ...joining,
+      } as Section;
+    }
     switch (type) {
       case 'vertical':
         return { type, offsetPercent: read(keys.offset), ...joining };
@@ -2740,6 +3359,18 @@ export function alignedTrapezoidShift(sideRatio: number, alignment: TrapezoidAli
   return alignment === 'left' ? halfSumDecimal(sideRatio, -1) : halfSumDecimal(1, -sideRatio);
 }
 
+/** A box solid's own section and connector texts. */
+function boxParameterTexts(solid: BoxSolid): ParameterKey[] {
+  const keys = boxKeysOf(solid);
+  return [...BOX_NUMBER_FIELDS.map((field) => keys[field]), ...Object.values(magnetKeysOf(solid))];
+}
+
+/** A box solid's own section and connector choices. */
+function boxParameterChoices(solid: BoxSolid): (keyof ParameterChoices)[] {
+  const keys = boxKeysOf(solid);
+  return BOX_CHOICE_FIELDS.map((field) => keys[field]);
+}
+
 /**
  * Every field and choice a shape owns, including those of its inactive base variants. Resetting a shape restores
  * exactly these, so the values of other shapes stay as they are; the shared print size belongs to no shape and is
@@ -2748,8 +3379,11 @@ export function alignedTrapezoidShift(sideRatio: number, alignment: TrapezoidAli
 export const shapeParameterKeys: Readonly<
   Record<ShapeKind, { readonly texts: readonly ParameterKey[]; readonly choices: readonly (keyof ParameterChoices)[] }>
 > = {
-  cube: { texts: [], choices: [] },
-  cuboid: { texts: ['cuboidWidthRatio', 'cuboidHeightRatio'], choices: [] },
+  cube: { texts: boxParameterTexts('cube'), choices: boxParameterChoices('cube') },
+  cuboid: {
+    texts: ['cuboidWidthRatio', 'cuboidHeightRatio', ...boxParameterTexts('cuboid')],
+    choices: boxParameterChoices('cuboid'),
+  },
   parallelepiped: {
     texts: [
       'parallelepipedBaseSideRatio',
@@ -2759,8 +3393,9 @@ export const shapeParameterKeys: Readonly<
       'parallelepipedOffsetYRatio',
       'parallelepipedInclinationDeg',
       'parallelepipedDirectionDeg',
+      ...boxParameterTexts('parallelepiped'),
     ],
-    choices: [],
+    choices: boxParameterChoices('parallelepiped'),
   },
   prism: {
     texts: [
@@ -2988,6 +3623,7 @@ function inactiveSectionKeys(kind: ShapeKind, choices: ParameterChoices): (keyof
   const plateFields =
     plate === undefined || twoPlanes ? [] : [plate.toggle, ...(choices[plate.toggle] ? [plate.thickness, plate.margin] : [])];
   const secondFields = second === undefined ? [] : [second.toggle, ...(twoPlanes ? [second.offset] : [])];
+  const box = keys.box;
   const cutFields: Readonly<Record<SectionType, readonly (keyof ParameterChoices | ParameterKey)[]>> = {
     'parallel-to-bases': planar === undefined ? [] : [planar.position, ...plateFields],
     vertical: [keys.offset, ...plateFields],
@@ -3000,6 +3636,30 @@ function inactiveSectionKeys(kind: ShapeKind, choices: ParameterChoices): (keyof
       ...plateFields,
     ],
     'axis-parallel': [...(planar?.axisParallel === undefined ? [] : Object.values(planar.axisParallel)), ...plateFields],
+    'face-parallel': box === undefined ? [] : [box.Face, box.SectionPercent, ...secondFields],
+    longitudinal:
+      box === undefined
+        ? []
+        : [box.Trace, ...(choices[box.Trace] === 'angle' ? [box.TraceAngleDeg] : []), box.SectionPercent, ...secondFields],
+    'through-line':
+      box === undefined
+        ? []
+        : [
+            box.LineFace,
+            box.Line,
+            box.LineMethod,
+            ...(choices[box.LineMethod] === 'angle' ? [box.LineAngleDeg] : [box.PointEdge, box.PointPercent]),
+            ...secondFields,
+          ],
+    inclined:
+      box === undefined
+        ? []
+        : [
+            box.NormalAlong,
+            ...(choices[box.NormalAlong] === 'none' ? [box.PlaneInclinationDeg, box.PlaneDirectionDeg] : []),
+            box.SectionPercent,
+            ...secondFields,
+          ],
   };
   const active = new Set<string>(section === undefined ? [] : cutFields[section]);
   const allPlateFields = [
@@ -3008,7 +3668,7 @@ function inactiveSectionKeys(kind: ShapeKind, choices: ParameterChoices): (keyof
   ];
   const cuts = [...new Set([...Object.values(cutFields).flat(), ...allPlateFields])].filter((key) => !active.has(key));
   // Whether the first plane through the apex was set up is no setting, and starts over with the section.
-  const always: (keyof ParameterChoices)[] = ['coneApexStarted'];
+  const always: (keyof ParameterChoices)[] = ['coneApexStarted', ...(box === undefined ? [] : [box.LineAngleFor])];
   return [...always, ...cuts, ...connectorFields, ...(section === undefined ? ([keys.separated, keys.connector] as const) : [])];
 }
 

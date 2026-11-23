@@ -1,6 +1,17 @@
 import { z } from 'zod';
 
-export const SECTION_TYPES = ['parallel-to-bases', 'vertical', 'oblique', 'oblique-apex', 'horizontal', 'axis-parallel'] as const;
+export const SECTION_TYPES = [
+  'parallel-to-bases',
+  'vertical',
+  'oblique',
+  'oblique-apex',
+  'horizontal',
+  'axis-parallel',
+  'face-parallel',
+  'longitudinal',
+  'through-line',
+  'inclined',
+] as const;
 
 export type SectionType = (typeof SECTION_TYPES)[number];
 
@@ -366,6 +377,150 @@ export const horizontalSectionSchema = z
 
 export type HorizontalSection = z.infer<typeof horizontalSectionSchema>;
 
+/**
+ * The vertices of a cube or parallelepiped as school notation names them: the lower base ABCD counter-clockwise seen from
+ * above, AB along +X, and the upper base A1B1C1D1 above it, A1 joined to A by a lateral edge.
+ */
+export const BOX_VERTICES = ['A', 'B', 'C', 'D', 'A1', 'B1', 'C1', 'D1'] as const;
+
+export type BoxVertex = (typeof BOX_VERTICES)[number];
+
+/** The faces, each by its vertices in order around it: both bases, then the lateral faces from AB on. */
+export const BOX_FACES = {
+  ABCD: ['A', 'B', 'C', 'D'],
+  A1B1C1D1: ['A1', 'B1', 'C1', 'D1'],
+  ABB1A1: ['A', 'B', 'B1', 'A1'],
+  BCC1B1: ['B', 'C', 'C1', 'B1'],
+  CDD1C1: ['C', 'D', 'D1', 'C1'],
+  DAA1D1: ['D', 'A', 'A1', 'D1'],
+} as const satisfies Record<string, readonly [BoxVertex, BoxVertex, BoxVertex, BoxVertex]>;
+
+export type BoxFace = keyof typeof BOX_FACES;
+
+export const BOX_FACE_NAMES = Object.keys(BOX_FACES) as readonly BoxFace[];
+
+/** A segment between two vertices: an edge, a face diagonal or a body diagonal, by its endpoints. */
+export const boxSegmentSchema = z
+  .tuple([z.enum(BOX_VERTICES), z.enum(BOX_VERTICES)])
+  .refine(([first, second]) => first !== second, { message: 'A segment needs two different vertices.' });
+
+export type BoxSegment = z.infer<typeof boxSegmentSchema>;
+
+/** Whether two vertices are consecutive around the face, an edge of it, or opposite, a diagonal of it. */
+export function boxFaceSegmentKind(
+  face: BoxFace,
+  [first, second]: readonly [BoxVertex, BoxVertex],
+): 'edge' | 'diagonal' | undefined {
+  const corners: readonly BoxVertex[] = BOX_FACES[face];
+  const [i, j] = [corners.indexOf(first), corners.indexOf(second)];
+  if (i < 0 || j < 0 || i === j) return undefined;
+  return Math.abs(i - j) === 2 ? 'diagonal' : 'edge';
+}
+
+/** The twelve edges, as the faces have them. */
+export const BOX_EDGES: readonly BoxSegment[] = [
+  ['A', 'B'],
+  ['B', 'C'],
+  ['C', 'D'],
+  ['D', 'A'],
+  ['A1', 'B1'],
+  ['B1', 'C1'],
+  ['C1', 'D1'],
+  ['D1', 'A1'],
+  ['A', 'A1'],
+  ['B', 'B1'],
+  ['C', 'C1'],
+  ['D', 'D1'],
+];
+
+const isBoxEdge = ([first, second]: readonly [BoxVertex, BoxVertex]) =>
+  BOX_EDGES.some(([a, b]) => (a === first && b === second) || (a === second && b === first));
+
+/**
+ * The second of two parallel planes of a cube or parallelepiped, at its own percentage of the original solid's extent along
+ * the planes' normal: from the plane through the farthest vertex on one side, 0 %, to the one on the other, 100 %, measured
+ * the way the first plane's position is. The two planes make three parts.
+ */
+const secondBoxPlane = { secondPositionPercent: sectionPositionSchema.optional() };
+
+/**
+ * A plane of a cube or parallelepiped parallel to one of its faces, at positionPercent of the way from that face to the
+ * opposite one, whose distance is the solid's extent along the face's normal.
+ */
+export const faceParallelSectionSchema = z.strictObject({
+  type: z.literal('face-parallel'),
+  face: z.enum(BOX_FACE_NAMES as [BoxFace, ...BoxFace[]]).default('ABCD'),
+  positionPercent: sectionPositionSchema.default(DEFAULT_SECTION_POSITION_PERCENT),
+  ...secondBoxPlane,
+  connector: connectorSchema.optional(),
+});
+
+/**
+ * A plane parallel to the lateral edges, whose direction a = A1 − A is the solid's own: its trace on the base plane runs at
+ * traceAngleDeg to the edge AB, counter-clockwise seen from above, or along a diagonal of the base, AC or BD, whatever the base
+ * becomes; positionPercent places it across the solid's extent along its normal, 50 % through the centre and so through a
+ * diagonal.
+ */
+export const longitudinalSectionSchema = z.strictObject({
+  type: z.literal('longitudinal'),
+  trace: z.enum(['angle', 'AC', 'BD']).default('angle'),
+  traceAngleDeg: z.number().min(0).max(180).default(0),
+  positionPercent: sectionPositionSchema.default(DEFAULT_SECTION_POSITION_PERCENT),
+  ...secondBoxPlane,
+  connector: connectorSchema.optional(),
+});
+
+/**
+ * A plane through an edge or a diagonal of a face: turned about that line from the face's own plane into the solid by
+ * angleDeg, or through the point at pointPercent of the way along another edge, from its first vertex to its second.
+ */
+export const throughLineSectionSchema = z
+  .strictObject({
+    type: z.literal('through-line'),
+    face: z.enum(BOX_FACE_NAMES as [BoxFace, ...BoxFace[]]),
+    line: boxSegmentSchema,
+    method: z.enum(['angle', 'point']),
+    angleDeg: z.number().gt(0).lt(180).optional(),
+    pointEdge: boxSegmentSchema.optional(),
+    pointPercent: z.number().min(0).max(100).optional(),
+    ...secondBoxPlane,
+    connector: connectorSchema.optional(),
+  })
+  .refine((section) => boxFaceSegmentKind(section.face, section.line) !== undefined, {
+    message: 'The line is no edge or diagonal of the face.',
+    path: ['line'],
+  })
+  .refine(
+    (section) =>
+      section.method === 'angle'
+        ? section.angleDeg !== undefined
+        : section.pointEdge !== undefined && section.pointPercent !== undefined && isBoxEdge(section.pointEdge),
+    { message: 'An angle, or an edge and the point on it.', path: ['method'] },
+  );
+
+/**
+ * Any plane of a cube or parallelepiped: at inclinationDeg to the base plane, rising along the horizontal direction
+ * directionDeg, from +X towards +Y, or perpendicular to a segment between two vertices, an edge or a diagonal, whatever the
+ * solid becomes; positionPercent places it across the solid's extent along its normal.
+ */
+export const inclinedSectionSchema = z.strictObject({
+  type: z.literal('inclined'),
+  inclinationDeg: z.number().min(0).max(90).default(45),
+  directionDeg: z.number().min(OBLIQUE_DIRECTION_LIMITS.min).max(OBLIQUE_DIRECTION_LIMITS.max).default(0),
+  normalAlong: boxSegmentSchema.optional(),
+  positionPercent: sectionPositionSchema.default(DEFAULT_SECTION_POSITION_PERCENT),
+  ...secondBoxPlane,
+  connector: connectorSchema.optional(),
+});
+
+export type FaceParallelSection = z.infer<typeof faceParallelSectionSchema>;
+export type LongitudinalSection = z.infer<typeof longitudinalSectionSchema>;
+export type ThroughLineSection = z.infer<typeof throughLineSectionSchema>;
+export type InclinedSection = z.infer<typeof inclinedSectionSchema>;
+export type BoxSectionSpec = FaceParallelSection | LongitudinalSection | ThroughLineSection | InclinedSection;
+
+export const BOX_SECTION_TYPES = ['face-parallel', 'longitudinal', 'through-line', 'inclined'] as const;
+
 export const sectionSchema = z.discriminatedUnion('type', [
   parallelSectionSchema,
   verticalSectionSchema,
@@ -373,6 +528,10 @@ export const sectionSchema = z.discriminatedUnion('type', [
   apexSectionSchema,
   horizontalSectionSchema,
   axisParallelSectionSchema,
+  faceParallelSectionSchema,
+  longitudinalSectionSchema,
+  throughLineSectionSchema,
+  inclinedSectionSchema,
 ]);
 
 export type Section = z.infer<typeof sectionSchema>;

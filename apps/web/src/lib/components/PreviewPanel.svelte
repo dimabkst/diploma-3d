@@ -1,5 +1,7 @@
 <script lang="ts">
+import type { VertexLabel } from '@diploma-3d/engine';
 import type { Section } from '@diploma-3d/schema';
+import { vertexName } from '../model/box.ts';
 import { type ModelState, visibleArtifacts } from '../model/modelState.ts';
 import type { ParameterKey } from '../model/parameters.ts';
 import { formatSize } from '../shapes.ts';
@@ -42,6 +44,17 @@ let cameraDirection = $state.raw({ theta: 0, phi: 0 });
 const artifacts = $derived(visibleArtifacts(model));
 // Either preview of a section is ready with the model, so toggling the separation only swaps them.
 const glb = $derived(separated ? (artifacts?.separatedPreviewGlb ?? artifacts?.previewGlb) : artifacts?.previewGlb);
+// The vertices go with the preview shown, also with the parts apart; named as a textbook writes them, A₁ for A1.
+const labels = $derived<readonly VertexLabel[]>(
+  (
+    (separated && artifacts?.separatedPreviewGlb !== undefined ? artifacts?.separatedVertexLabels : artifacts?.vertexLabels) ?? []
+  ).map((label) => ({ ...label, name: vertexName(label.name as Parameters<typeof vertexName>[0]) })),
+);
+// The parts of the shown model: two of a single cut, three between two parallel planes.
+const partCount = $derived(
+  artifacts?.model.solids.filter((solid) => solid.part !== undefined && solid.part !== 'dowel' && solid.part !== 'plate')
+    .length ?? 0,
+);
 const previewStatus = $derived(
   model.status !== 'ready' ? model.status : glb === failedGlb ? 'failed' : glb === loadedGlb ? 'loaded' : 'loading',
 );
@@ -81,14 +94,15 @@ const assembled = $derived(shownArtifacts?.model.section !== undefined);
           bind:this={modelViewer}
           {glb}
           viewKey={artifacts?.model.kind ?? ''}
-          alt={`Інтерактивна 3D-модель: ${shapeName.toLowerCase()}${artifacts?.model.section === undefined ? '' : ', дві частини перерізу'}`}
+          alt={`Інтерактивна 3D-модель: ${shapeName.toLowerCase()}${artifacts?.model.section === undefined ? '' : partCount === 3 ? ', три частини перерізу' : ', дві частини перерізу'}`}
+          {labels}
           onload={showLoaded}
           onerror={(failed) => (failedGlb = failed)}
           oncamerachange={(direction) => (cameraDirection = direction)}
         />
       </div>
     {/if}
-    {#if shownSection?.type === 'oblique' || shownSection?.type === 'oblique-apex'}
+    {#if shownSection?.type === 'oblique' || shownSection?.type === 'oblique-apex' || (shownSection?.type === 'inclined' && shownSection.normalAlong === undefined)}
       <SectionCompass directionDeg={shownSection.directionDeg} camera={cameraDirection} />
     {/if}
 

@@ -1,4 +1,7 @@
 import {
+  BOX_VERTICES,
+  type BoxSectionSpec,
+  type BoxVertex,
   type ModelSpec,
   type ModelSpecInput,
   modelSpecSchema,
@@ -8,6 +11,7 @@ import {
   type ShapeKind,
 } from '@diploma-3d/schema';
 import type { Manifold } from 'manifold-3d';
+import { type BoxCut, boxPartMinimumMm, boxPlane, boxSection, boxSplitReach, boxVertices, isBoxShape } from './connectors/box.ts';
 import {
   buildDovetail,
   buildPlateDovetail,
@@ -30,7 +34,9 @@ import {
   coneVerticalSection,
   connectorVolumeTolerance,
   cutOfSection,
+  hasSecondPlane,
   isApexChordUsable,
+  isBoxSectionSpec,
   isPlateCut,
   isPlateThicknessFeasible,
   obliqueCylinderSection,
@@ -66,9 +72,7 @@ import { buildSectionPlate, type SectionPlateGeometry, sectionPlateGeometry } fr
 import { type Track, withScope } from './scope.ts';
 import { type Plane, sectionPlane, splitByParallelPlanes, splitByPlane } from './section.ts';
 import { ballRadiusMm, buildBall } from './shapes/ball.ts';
-import { buildUnitBox } from './shapes/box.ts';
 import { checkNumericalFeasibility } from './shapes/feasibility.ts';
-import { buildParallelepiped } from './shapes/parallelepiped.ts';
 import { buildPrismShape } from './shapes/prism.ts';
 import { buildPyramidShape } from './shapes/pyramid.ts';
 import { buildRegularPolyhedron } from './shapes/regular-polyhedron.ts';
@@ -137,6 +141,11 @@ export interface GeneratedModel {
   readonly bounds: Bounds;
   readonly size: Vec3;
   readonly section?: ModelSection;
+  /**
+   * For a cube or parallelepiped, its vertices by the names its sections refer to, A–D on the lower base and A1–D1 above them,
+   * where the model has them: what the preview labels.
+   */
+  readonly vertexLabels?: readonly { readonly name: BoxVertex; readonly position: Vec3 }[];
 }
 
 type BuiltMeshes =
@@ -159,6 +168,10 @@ const sectionNames: Readonly<Record<SectionType, string>> = {
   'oblique-apex': 'apex-section',
   horizontal: 'horizontal-section',
   'axis-parallel': 'axis-parallel-section',
+  'face-parallel': 'face-parallel-section',
+  longitudinal: 'longitudinal-section',
+  'through-line': 'edge-section',
+  inclined: 'inclined-section',
 };
 
 /** The names of a section's parts in the order of the plane's negative and positive side, and their object names. */
@@ -169,7 +182,18 @@ const partNames: Readonly<Record<SectionType, readonly [SectionPart, SectionPart
   'oblique-apex': ['part-1', 'part-2'],
   horizontal: ['lower', 'upper'],
   'axis-parallel': ['part-1', 'part-2'],
+  'face-parallel': ['part-1', 'part-2'],
+  longitudinal: ['part-1', 'part-2'],
+  'through-line': ['part-1', 'part-2'],
+  inclined: ['part-1', 'part-2'],
 };
+
+/** A box section's parts are the lower and the upper one only when its plane is horizontal. */
+const partNamesOf = (type: SectionType, plane: Plane): readonly [SectionPart, SectionPart] =>
+  isBoxSectionType(type) && Math.abs(plane.normal[2]) > 1 - HORIZONTAL_ROUNDOFF ? ['lower', 'upper'] : partNames[type];
+const HORIZONTAL_ROUNDOFF = 1e-9;
+const isBoxSectionType = (type: SectionType): type is BoxSectionSpec['type'] =>
+  type === 'face-parallel' || type === 'longitudinal' || type === 'through-line' || type === 'inclined';
 const partObjectName = (name: string, part: SectionPart): string =>
   part === 'lower' || part === 'middle' || part === 'upper' ? `${name}-${part}-part` : `${name}-${part}`;
 
@@ -190,6 +214,7 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
 
   assertVerticalOffset(spec);
   assertObliqueSplit(spec);
+  assertBoxSplit(spec);
   const plateGeometry = planPlate(spec);
   const pair = parallelPair(spec);
   const connector = pair === undefined ? planConnector(spec) : pair.lower.connector;
@@ -295,15 +320,19 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
       ...(round && shape.offsetRatio !== 0 ? { smoothingShear: roundShear(shape) } : {}),
     };
   };
+  const vertexLabels = isBoxShape(shape)
+    ? { vertexLabels: BOX_VERTICES.map((vertex) => ({ name: vertex, position: boxVertices(shape, spec.scale)[vertex] })) }
+    : {};
   if ('whole' in built) {
     const solid = solidOf(name, built.whole);
     const { bounds, size } = solid.measurements;
-    return { kind: shape.kind, name, spec, solids: [solid], bounds, size };
+    return { kind: shape.kind, name, spec, solids: [solid], bounds, size, ...vertexLabels };
   }
   const sides: readonly ('lower' | 'middle' | 'upper')[] =
     built.parts.middle === undefined ? ['lower', 'upper'] : ['lower', 'middle', 'upper'];
   const parts = sides.map((side): Solid => {
-    const part: SectionPart = side === 'middle' ? 'middle' : (partNames[built.type][side === 'lower' ? 0 : 1] as SectionPart);
+    const names = partNamesOf(built.type, built.plane);
+    const part: SectionPart = side === 'middle' ? 'middle' : names[side === 'lower' ? 0 : 1];
     const mesh = built.parts[side] as MarkedMesh;
     return { ...solidOf(partObjectName(name, part), mesh.mesh), part, newFaces: mesh.newFaces };
   });
@@ -328,7 +357,9 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
     name:
       pair === undefined
         ? `${name}-${sectionNames[built.type]}${plateGeometry === undefined ? '' : '-plate'}`
-        : `${name}-parallel-horizontal-sections`,
+        : spec.section?.type === 'horizontal'
+          ? `${name}-parallel-horizontal-sections`
+          : `${name}-two-${sectionNames[built.type]}s`,
     spec,
     solids: [...parts, ...plates, ...dowels],
     bounds,
@@ -347,6 +378,7 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
             },
           }),
     },
+    ...vertexLabels,
   };
 }
 
@@ -398,23 +430,26 @@ interface ParallelPlane {
 }
 
 /**
- * A ball's two parallel planes, the lower and the upper one along their shared normal, each with the connector planned on its
- * own section, which knows the other plane; undefined for a single cut. The specification's first and second plane keep their
- * identity; only the order of building follows their offsets.
+ * Two parallel planes, of a ball or of a cube or parallelepiped, the lower and the upper one along their shared normal, each with
+ * the connector planned on its own section, which knows the other plane; undefined for a single cut. The specification's first
+ * and second plane keep their identity; only the order of building follows their offsets.
  */
 function parallelPair(spec: ModelSpec): { readonly lower: ParallelPlane; readonly upper: ParallelPlane } | undefined {
-  const { section, scale } = spec;
-  if (section?.type !== 'horizontal' || section.secondOffsetPercent === undefined) return undefined;
-  const views = [section, atSecondPlane(section)].map((view): ParallelPlane & { readonly offset: number } => {
+  const { shape, section, scale } = spec;
+  if (section === undefined || !hasSecondPlane(section)) return undefined;
+  const views = [section, atSecondPlane(section)].map((view): ParallelPlane => {
     const plan = planConnector({ ...spec, section: view });
-    return {
-      offset: view.offsetPercent,
-      plane: ballSection(scale, view.offsetPercent).plane,
-      ...(plan === undefined ? {} : { connector: plan }),
-    };
+    return { plane: planeOfView(shape, scale, view), ...(plan === undefined ? {} : { connector: plan }) };
   });
-  const [lower, upper] = [...views].sort((a, b) => a.offset - b.offset) as unknown as [ParallelPlane, ParallelPlane];
+  const [lower, upper] = [...views].sort((a, b) => a.plane.offset - b.plane.offset) as [ParallelPlane, ParallelPlane];
   return { lower, upper };
+}
+
+/** The plane of a section with two planes, seen from either of them. */
+function planeOfView(shape: ModelSpec['shape'], scale: PhysicalScale, view: NonNullable<ModelSpec['section']>): Plane {
+  if (view.type === 'horizontal') return ballSection(scale, view.offsetPercent).plane;
+  if (!isBoxShape(shape)) throw new GeometryError('Only a ball, a cube and a parallelepiped take two parallel planes.');
+  return boxSection(shape, scale, cutOfSection(view) as BoxCut).plane;
 }
 
 function plateSolid(name: string, mesh: TriangleMesh): Solid {
@@ -498,6 +533,9 @@ function cutPlaneOf({ shape, scale, section }: ModelSpec): Plane {
     return coneObliqueSection(shape, scale, section).plane;
   }
   if (section?.type === 'horizontal' && shape.kind === 'ball') return ballSection(scale, section.offsetPercent).plane;
+  if (section !== undefined && isBoxSectionSpec(section) && isBoxShape(shape)) {
+    return boxSection(shape, scale, cutOfSection(section) as BoxCut).plane;
+  }
   throw new GeometryError('Expected a cut that this solid offers.');
 }
 
@@ -573,10 +611,49 @@ function assertObliqueSplit({ shape, scale, section }: ModelSpec): void {
   }
 }
 
+/**
+ * A cube's or parallelepiped's section: a plane its mode fixes at all, through a point off the chosen line, and both parts, and a
+ * middle part between two planes, of a usable thickness along the normal; see `boxPartMinimumMm`. Refused before anything is
+ * built, like the other solids' cuts beyond their limits.
+ */
+function assertBoxSplit({ shape, scale, section }: ModelSpec): void {
+  if (section === undefined || !isBoxSectionSpec(section)) return;
+  if (!isBoxShape(shape)) {
+    throw new InvalidModelSpecError([`section.type: ${section.type} is a section of a cube or a parallelepiped.`]);
+  }
+  const box = cutOfSection(section) as BoxCut;
+  try {
+    boxPlane(boxVertices(shape, scale), box.box);
+  } catch (error) {
+    if (!(error instanceof GeometryError)) throw error;
+    throw new InvalidModelSpecError(['section.pointPercent: the point lies on the chosen line, which leaves the plane open.']);
+  }
+  const views: [string, BoxCut][] = [['positionPercent', box]];
+  if (box.box.secondPositionPercent !== undefined) views.push(['secondPositionPercent', { ...box, atSecond: true }]);
+  for (const [field, view] of views) {
+    const reach = boxSplitReach(shape, scale, view);
+    if (!satisfies(reach)) {
+      throw new InvalidModelSpecError([
+        `section.${field}: the thinner part reaches ${reach.valueMm} mm from the plane, less than the ${reach.minimumMm} mm of a usable part.`,
+      ]);
+    }
+  }
+  const first = boxSection(shape, scale, box);
+  if (first.middle !== undefined) {
+    const vertices = boxVertices(shape, scale);
+    const least = boxPartMinimumMm(boxPlane(vertices, box.box).extent);
+    if (first.middle.thickness < least - CONSTRAINT_ROUNDOFF_MM) {
+      throw new InvalidModelSpecError([
+        `section.secondPositionPercent: the part between the planes is ${first.middle.thickness} mm thick, less than the ${least} mm of a usable part.`,
+      ]);
+    }
+  }
+}
+
 /** The connector's plan; refuses the specification before any geometry is built when the connector does not fit. */
 function planConnector({ shape, scale, section }: ModelSpec): ConnectorPlan | undefined {
   if (section?.connector === undefined) return undefined;
-  if (shape.kind !== 'cylinder' && shape.kind !== 'cone' && shape.kind !== 'ball') {
+  if (shape.kind !== 'cylinder' && shape.kind !== 'cone' && shape.kind !== 'ball' && !isBoxShape(shape)) {
     throw new ConnectorUnsuitableError([{ code: 'unsupported-shape' }]);
   }
   const { connector } = section;
@@ -626,18 +703,21 @@ export function modelName(shape: Shape): string {
 }
 
 /**
- * The solid in millimetres: boxes are built in model units and scaled once; prisms and pyramids are scaled once after
- * their complete unnormalised construction, including a displaced upper base or apex; curved solids are built at size,
- * and regular polyhedra as the convex hull of their vertices in millimetres.
+ * The solid in millimetres: prisms and pyramids are scaled once after their complete unnormalised construction, including a
+ * displaced upper base or apex; curved solids are built at size; regular polyhedra, a cube and the parallelepipeds as the convex
+ * hull of their vertices in millimetres.
  */
 function buildShape(kernel: GeometryKernel, track: Track, shape: Shape, scale: PhysicalScale): Manifold {
-  const toMillimetres = (unitSolid: Manifold) => track(unitSolid.scale(scale.longestDimensionMm));
   switch (shape.kind) {
     case 'cube':
     case 'cuboid':
-      return toMillimetres(buildUnitBox(kernel, track, shape));
-    case 'parallelepiped':
-      return buildParallelepiped(kernel, track, shape, scale);
+    case 'parallelepiped': {
+      // The very vertices that its sections' planes are constructed through and its preview labels name: an extruded base is
+      // rounded to the cross-section's grid, a fraction of a micrometre off them, and a plane through a vertex then left a
+      // sliver beside it that no longer passed as a closed solid once turned to its print orientation.
+      const vertices = boxVertices(shape, scale);
+      return track(kernel.Manifold.hull(BOX_VERTICES.map((name): [number, number, number] => [...vertices[name]])));
+    }
     case 'prism':
       return buildPrismShape(kernel, track, shape, scale);
     case 'pyramid':

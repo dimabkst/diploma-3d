@@ -197,7 +197,7 @@ export function measureMesh(mesh: TriangleMesh): MeshMeasurements {
  * exactly two triangles that traverse it in opposite directions. Self-intersections are not detected here.
  */
 // An edge this much shorter than the mesh's largest coordinate lies within a few float32 rounding steps of nothing.
-const ROUNDING_EDGE_RELATIVE = 1e-6;
+export const ROUNDING_EDGE_RELATIVE = 1e-6;
 
 /**
  * Removes the slivers that rounding leaves in a part: a plane through a vertex can leave the kernel a copy of it a

@@ -46,6 +46,9 @@ export const SECTIONS_BY_SHAPE: Readonly<Partial<Record<ShapeKind, readonly Sect
   cylinder: ['parallel-to-bases', 'vertical', 'oblique', 'axis-parallel'],
   cone: ['parallel-to-bases', 'vertical', 'oblique', 'oblique-apex'],
   ball: ['horizontal'],
+  cube: ['face-parallel', 'longitudinal', 'through-line', 'inclined'],
+  cuboid: ['face-parallel', 'longitudinal', 'through-line', 'inclined'],
+  parallelepiped: ['face-parallel', 'longitudinal', 'through-line', 'inclined'],
 };
 
 export const supportsSection = (kind: ShapeKind, type: SectionType): boolean => SECTIONS_BY_SHAPE[kind]?.includes(type) ?? false;

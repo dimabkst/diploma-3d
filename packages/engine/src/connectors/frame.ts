@@ -2,6 +2,7 @@ import {
   APEX_INCLINATION_MAX_DEG,
   BALL_OFFSET_LIMITS,
   type BallShape,
+  type BoxSectionSpec,
   type ConeShape,
   type CylinderShape,
   type PhysicalScale,
@@ -15,6 +16,7 @@ import { cross, dot, length, type Vec3 } from '../mesh.ts';
 import { cosSinDeg } from '../shapes/angle.ts';
 import { ballCentreMm, ballInradiusMm, ballPolyhedron, ballRadiusMm } from '../shapes/ball.ts';
 import { circularSegments, type RoundShape, roundDimensionsMm } from '../shapes/round.ts';
+import { type BoxCut, type BoxLikeShape, boxSection, isBoxShape } from './box.ts';
 
 /**
  * An orthonormal frame at the centre of the section: n is the cut's normal from the lower part into the upper one, u
@@ -130,6 +132,16 @@ export interface AxisParallelCylinderSection extends FacetedSection {
   readonly type: 'axis-parallel';
   /** The base-plane line's signed distance from the base's centre along w, in millimetres. */
   readonly offset: number;
+}
+
+/**
+ * A cut of a cube or parallelepiped, by any of its modes, read off the actual solid's faces: its contour is whatever polygon the
+ * plane makes, from a triangle to a hexagon. Beside a second parallel plane, the middle part as a ball's.
+ */
+export interface BoxSection extends FacetedSection {
+  readonly type: 'box-section';
+  readonly cutType: 'face-parallel' | 'longitudinal' | 'through-line' | 'inclined';
+  readonly middle?: { readonly side: 'negative' | 'positive'; readonly thickness: number };
 }
 
 /**
@@ -276,6 +288,7 @@ export type SolidSection =
   | VerticalCylinderSection
   | ObliqueCylinderSection
   | AxisParallelCylinderSection
+  | BoxSection
   | ConeParallelSection
   | ConeVerticalSection
   | ConeObliqueSection
@@ -314,7 +327,7 @@ export interface ApexCut {
 }
 
 /** A plane without a plate: parallel to the base at this percentage of the height, or another plane. */
-export type PlaneCut = number | OffsetCut | ObliqueCut | ApexCut | AxisParallelCut;
+export type PlaneCut = number | OffsetCut | ObliqueCut | ApexCut | AxisParallelCut | BoxCut;
 
 /**
  * A cut that removes a section plate centred on its plane: the plane's own fields, a parallel cut's position among them, and
@@ -557,7 +570,7 @@ function polygonCentroid(corners: readonly Vec3[], u: Vec3, v: Vec3): { readonly
 }
 
 /** The polygonal solid as manifold-3d builds it: its corners, its edges, and its faces with their corners. */
-interface Polyhedron {
+export interface Polyhedron {
   readonly vertices: readonly Vec3[];
   readonly edges: readonly (readonly [number, number])[];
   readonly faces: readonly { readonly normal: Vec3; readonly offset: number; readonly corners: readonly number[] }[];
@@ -631,7 +644,7 @@ function conePolyhedron({ radius, height, offset: d }: { radius: number; height:
  * wherever it reaches one; no ellipse or circle is assumed. Only faces with a corner strictly on a part's side bound that
  * part.
  */
-function facetedSection(
+export function facetedSection(
   { vertices, edges, faces, sides }: Polyhedron,
   axes: { readonly n: Vec3; readonly u: Vec3; readonly v: Vec3 },
   offset: number,
@@ -772,6 +785,7 @@ export function facetedCut(shape: RoundShape, scale: PhysicalScale, cut: PlaneCu
 /** The cone's own section for a plane without a plate. */
 function coneCut(shape: ConeShape, scale: PhysicalScale, cut: PlaneCut): ConeCutSection {
   if (typeof cut === 'number') return coneSection(shape, scale, cut);
+  if ('box' in cut) throw new GeometryError('Only a cube or parallelepiped takes this section.');
   if ('offsetDirectionDeg' in cut) throw new GeometryError('A cone offers no plane parallel to its axis but the vertical one.');
   return 'offsetPercent' in cut ? coneVerticalSection(shape, scale, cut.offsetPercent) : coneObliqueSection(shape, scale, cut);
 }
@@ -916,6 +930,7 @@ export function conePlateSection(shape: ConeShape, scale: PhysicalScale, cut: Pl
 export function plateSection(shape: SectionedShape, scale: PhysicalScale, cut: PlateCut): PlateSection {
   if (shape.kind === 'cone') return conePlateSection(shape, scale, cut);
   if (shape.kind === 'ball') return ballPlateSection(scale, cut);
+  if (isBoxShape(shape)) throw new GeometryError('A cube or parallelepiped takes no section plate.');
   return cylinderPlateSection(shape, scale, cut);
 }
 
@@ -1082,16 +1097,31 @@ export function ballSliceMinimumMm(scale: PhysicalScale): number {
 }
 
 /** The part between two parallel planes of a ball as its connectors see it; undefined for a single cut. */
-export const middleOf = (section: SolidSection) => (section.type === 'ball-horizontal' ? section.middle : undefined);
+export const middleOf = (section: SolidSection) =>
+  section.type === 'ball-horizontal' || section.type === 'box-section' ? section.middle : undefined;
 
 /**
  * The section as seen from its second plane: the same two planes with their roles swapped, so that the first plane's offset is
  * the second's. What a single plane's checks and plans read for the second interface.
  */
 export function atSecondPlane<S extends Section>(section: S): S {
+  if (isBoxSectionSpec(section) && section.secondPositionPercent !== undefined) return { ...section, atSecond: true };
   if (section.type !== 'horizontal' || section.secondOffsetPercent === undefined) return section;
   return { ...section, offsetPercent: section.secondOffsetPercent, secondOffsetPercent: section.offsetPercent };
 }
+
+/** Whether the section is one of a cube's or parallelepiped's. */
+export const isBoxSectionSpec = (section: Section): section is Extract<Section, { type: BoxSectionSpec['type'] }> =>
+  section.type === 'face-parallel' ||
+  section.type === 'longitudinal' ||
+  section.type === 'through-line' ||
+  section.type === 'inclined';
+
+/** Whether the section has a second parallel plane, of a ball or a cube or parallelepiped. */
+export const hasSecondPlane = (section: Section): boolean =>
+  section.type === 'horizontal'
+    ? section.secondOffsetPercent !== undefined
+    : isBoxSectionSpec(section) && section.secondPositionPercent !== undefined;
 
 /**
  * A ball's section by the plane `height` above its centre. `downwards` turns n to −Z, u staying +Y, for the face below a
@@ -1189,8 +1219,14 @@ export const pointWall = (face: SolidFace, along: number, across: number, normal
 export const facesOfPart = ({ faces }: FacetedSection, part: 'negative' | 'positive'): readonly SolidFace[] =>
   faces.filter((face) => (part === 'negative' ? face.boundsNegative : face.boundsPositive));
 
-/** Where the specification's section cuts the cylinder. */
+/**
+ * Where the specification's section cuts the solid; a section seen from its second plane (see `atSecondPlane`) cuts it there.
+ */
 export const cutOfSection = (section: Section): SolidCut => {
+  if (isBoxSectionSpec(section)) {
+    const { connector: _connector, atSecond, ...box } = section as typeof section & { readonly atSecond?: true };
+    return { box: box as BoxSectionSpec, ...(atSecond === true ? { atSecond } : {}) };
+  }
   const plane = planeCutOf(section);
   if (!('plate' in section) || section.plate === undefined) return plane;
   const plate = { thicknessMm: section.plate.thicknessMm, marginMm: section.plate.marginMm };
@@ -1218,14 +1254,24 @@ const planeCutOf = (section: Section): PlaneCut => {
       return { offsetPercent: section.offsetPercent, offsetDirectionDeg: section.directionDeg };
     case 'parallel-to-bases':
       return section.positionPercent;
+    case 'face-parallel':
+    case 'longitudinal':
+    case 'through-line':
+    case 'inclined':
+      throw new GeometryError('A cube or parallelepiped section has no plane of a round solid.');
   }
 };
 
 /** The solids whose cuts carry connectors. */
-export type SectionedShape = RoundShape | BallShape;
+export type SectionedShape = RoundShape | BallShape | BoxLikeShape;
 
 /** The geometry of the cut. */
 export function solidCut(shape: SectionedShape, scale: PhysicalScale, cut: SolidCut): SolidSection {
+  if (isBoxShape(shape)) {
+    if (typeof cut === 'number' || !('box' in cut)) throw new GeometryError('A cube or parallelepiped takes its own sections.');
+    return boxSection(shape, scale, cut);
+  }
+  if (typeof cut !== 'number' && 'box' in cut) throw new GeometryError('Only a cube or parallelepiped takes this section.');
   if (isPlateCut(cut)) return plateSection(shape, scale, cut);
   if (shape.kind === 'ball') {
     if (typeof cut === 'number' || !('offsetPercent' in cut) || 'offsetDirectionDeg' in cut) {

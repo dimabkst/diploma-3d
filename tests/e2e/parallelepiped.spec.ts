@@ -78,7 +78,7 @@ test('parallelepiped: side ratio, height and angle drive the preview, its dimens
   await expect(entry(page, 'Висота h')).toHaveValue('1');
   await expect(entry(page, 'Кут α')).toHaveValue('60');
   // Groups: the base and the height open, the optional tilt collapsed; the base explains itself on demand.
-  await expect(page.locator('summary')).toHaveText([/^Основа/, /^Висота/, /^Нахил/]);
+  await expect(page.locator('summary')).toHaveText([/^Основа/, /^Висота/, /^Нахил/, /^Переріз/]);
   await page.getByRole('button', { name: 'Як задано паралелограм?' }).click();
   await expect(page.getByText('Сторонами a і b та кутом α між ними')).toBeVisible();
   await expect(page.getByRole('term')).toHaveCount(0);

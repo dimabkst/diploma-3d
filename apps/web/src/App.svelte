@@ -20,6 +20,7 @@ import {
   type ConnectorEdits,
   canResetShapeParameters,
   commitConnectorEdit,
+  diagonalSection,
   initialParameterChoices,
   initialParameterTexts,
   magnetAllowancesChanged,
@@ -29,13 +30,17 @@ import {
   partsSeparated,
   plateChosen,
   plateConnectorFallback,
+  pointAtMidpoint,
   removeSecondCut,
   resetMagnetAllowances,
   resetShapeParameters,
   resolveModelRequest,
   type SectionRanges,
   sectionKeys,
+  settleBoxChoices,
   startApexSection,
+  startLineAngle,
+  startPoint,
   switchTiltMode,
 } from './lib/model/parameters.ts';
 import { loadPrintSizeText, savePrintSize } from './lib/model/printSize.ts';
@@ -94,13 +99,13 @@ const request = $derived(
 const connectorScale = $derived(
   selectedKind === undefined
     ? undefined
-    : (connectorScaleOf(selectedKind, request?.values ?? {}, lastConnectorScale) ?? lastConnectorScale),
+    : (connectorScaleOf(selectedKind, request?.values ?? {}, lastConnectorScale, parameterChoices) ?? lastConnectorScale),
 );
 $effect.pre(() => {
   if (selectedKind === undefined) return;
   // Only a different scale is stored: the request reads it, so storing an equal copy would recompute it in a loop.
   const last = untrack(() => lastConnectorScales[selectedKind]);
-  const current = connectorScaleOf(selectedKind, request?.values ?? {}, last);
+  const current = connectorScaleOf(selectedKind, request?.values ?? {}, last, parameterChoices);
   if (
     current !== undefined &&
     (current.longestDimensionMm !== last?.longestDimensionMm ||
@@ -110,7 +115,9 @@ $effect.pre(() => {
       current.parallelSpanMm !== last?.parallelSpanMm ||
       current.verticalSpanMm !== last?.verticalSpanMm ||
       current.apexSpanMm !== last?.apexSpanMm ||
-      current.horizontalSpanMm !== last?.horizontalSpanMm)
+      current.horizontalSpanMm !== last?.horizontalSpanMm ||
+      current.axisSpanMm !== last?.axisSpanMm ||
+      current.boxSpanMm !== last?.boxSpanMm)
   ) {
     lastConnectorScales = { ...untrack(() => lastConnectorScales), [selectedKind]: current };
   }
@@ -236,6 +243,16 @@ function runPanelAction(action: PanelAction) {
     if (selectedKind !== undefined) applyState(axialAxisParallel(selectedKind, parameterState));
     return;
   }
+  if (action === 'diagonal-section-ac' || action === 'diagonal-section-bd') {
+    if (selectedKind !== undefined) {
+      applyState(diagonalSection(selectedKind, parameterState, action === 'diagonal-section-ac' ? 'AC' : 'BD'));
+    }
+    return;
+  }
+  if (action === 'line-midpoint') {
+    if (selectedKind !== undefined) applyState(pointAtMidpoint(selectedKind, parameterState));
+    return;
+  }
   if (action === 'reset-magnet-allowances') {
     if (selectedKind !== undefined) applyState(resetMagnetAllowances(selectedKind, parameterState));
     return;
@@ -261,6 +278,20 @@ $effect.pre(() => {
 // The first plane through a cone's apex takes a valid angle for the cone it finds; after that nothing changes on its own.
 $effect.pre(() => {
   const next = startApexSection(parameterState, request?.values ?? {});
+  if (next !== undefined) untrack(() => applyState(next));
+});
+
+// A box's plane through a line keeps only choices that lead to a usable plane of the solid, all replaced together; each new
+// line starts at a usable angle, and a point on a new edge at a usable position.
+$effect.pre(() => {
+  if (selectedKind === undefined) return;
+  const values = request?.values ?? {};
+  const settled = settleBoxChoices(selectedKind, parameterState, values);
+  if (settled !== undefined) {
+    untrack(() => applyState(settled));
+    return;
+  }
+  const next = startLineAngle(selectedKind, parameterState, values) ?? startPoint(selectedKind, parameterState, values);
   if (next !== undefined) untrack(() => applyState(next));
 });
 

@@ -251,7 +251,11 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
                 bind:open={() => openDisclosures[disclosureKey] ?? false, (open) => (openDisclosures[disclosureKey] = open)}
               >
                 {#each field.fields as inner (inner.key)}
-                  {#if inner.type === 'note'}
+                  {#if inner.type === 'choice'}
+                    <Field label={inner.label} forId={inner.key}>
+                      <Select id={inner.key} bind:value={choices[inner.key]} options={inner.options} />
+                    </Field>
+                  {:else if inner.type === 'note'}
                     {@render noteView(inner)}
                   {:else if inner.type === 'action'}
                     {@render actionView(inner)}

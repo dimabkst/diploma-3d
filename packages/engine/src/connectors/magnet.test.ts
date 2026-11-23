@@ -18,6 +18,7 @@ import { loadGeometryKernel } from '../kernel.ts';
 import { dot, findMeshDefects, measureMesh, type TriangleMesh, type Vec3 } from '../mesh.ts';
 import { type GeneratedModel, generateModel, type ModelSection, type Solid } from '../model.ts';
 import { type Track, withScope } from '../scope.ts';
+import type { RoundShape } from '../shapes/round.ts';
 import { cutOfSection, facetedCut, type PlaneCut, type SectionedShape, solidCut } from './frame.ts';
 import {
   MAGNET_PLACEMENT_POLICY,
@@ -250,7 +251,9 @@ describe('placement', () => {
       expect(first.sites).toHaveLength(5);
       if ('plate' in section) continue;
       // Each opening, by its polygon's corners, keeps the clearance to the section's own contour.
-      const contour = (shape.kind === 'ball' ? solidCut(shape, M80, cut) : facetedCut(shape, M80, cut as PlaneCut)) as {
+      const contour = (
+        shape.kind === 'ball' ? solidCut(shape, M80, cut) : facetedCut(shape as RoundShape, M80, cut as PlaneCut)
+      ) as {
         contour: readonly Vec3[];
       };
       const { opening } = magnetPocketGeometry(magnet({ count: 5 }));

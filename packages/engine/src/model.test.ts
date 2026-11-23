@@ -302,13 +302,8 @@ describe('releases Manifold objects', () => {
       scale: { longestDimensionMm: 80 },
     },
   } as const satisfies Record<string, ModelSpecInput>;
-  // Boxes: cube, translate onto the build plate, scale to millimetres. Right prisms, parallelepipeds and pyramids:
-  // extrude, scale. Oblique prisms and parallelepipeds: extrude, shear, scale.
+  // Right prisms and pyramids: extrude, scale. Oblique prisms: extrude, shear, scale.
   const polyhedra: readonly (readonly [string, ModelSpecInput, number])[] = [
-    ['cube', defaultModelSpecs.cube, 3],
-    ['cuboid', defaultModelSpecs.cuboid, 3],
-    ['parallelepiped', defaultModelSpecs.parallelepiped, 2],
-    ['oblique parallelepiped', oblique.parallelepiped, 3],
     ['prism', defaultModelSpecs.prism, 2],
     ['oblique prism', oblique.prism, 3],
     ['triangle prism', triangle.right, 2],
@@ -334,12 +329,17 @@ describe('releases Manifold objects', () => {
     ['ball', defaultModelSpecs.ball, 2],
   ];
   // The convex hull of the vertices in millimetres, in one step.
-  const regularPolyhedra: readonly (readonly [string, ModelSpecInput, number])[] = [
+  // The convex hull of their vertices in millimetres.
+  const hulls: readonly (readonly [string, ModelSpecInput, number])[] = [
+    ['cube', defaultModelSpecs.cube, 1],
+    ['cuboid', defaultModelSpecs.cuboid, 1],
+    ['parallelepiped', defaultModelSpecs.parallelepiped, 1],
+    ['oblique parallelepiped', oblique.parallelepiped, 1],
     ['octahedron', defaultModelSpecs.octahedron, 1],
     ['icosahedron', defaultModelSpecs.icosahedron, 1],
     ['dodecahedron', defaultModelSpecs.dodecahedron, 1],
   ];
-  const solids = [...polyhedra, ...curvedSolids, ...regularPolyhedra];
+  const solids = [...polyhedra, ...curvedSolids, ...hulls];
 
   it.each(solids)('after successful generation of a %s', (_, spec, objects) => {
     const { created } = trackCreatedManifolds();
@@ -380,7 +380,7 @@ describe('releases Manifold objects', () => {
     expect(created.every(isDeleted)).toBe(true);
   });
 
-  it.each(regularPolyhedra)('when the convex hull of a %s throws', (_, spec) => {
+  it.each(hulls)('when the convex hull of a %s throws', (_, spec) => {
     const { created } = trackCreatedManifolds();
     vi.spyOn(kernel.Manifold, 'hull').mockImplementation(() => {
       throw new Error('out of memory');
@@ -389,16 +389,13 @@ describe('releases Manifold objects', () => {
     expect(created).toHaveLength(0);
   });
 
-  it.each([...curvedSolids, ...regularPolyhedra])(
-    'when copying the mesh of a %s out of the kernel throws',
-    (_, spec, objects) => {
-      const { created, prototype } = trackCreatedManifolds();
-      vi.spyOn(prototype, 'getMesh').mockImplementation(() => {
-        throw new Error('out of memory');
-      });
-      expect(() => generateModel(kernel, spec)).toThrow('out of memory');
-      expect(created).toHaveLength(objects);
-      expect(created.every(isDeleted)).toBe(true);
-    },
-  );
+  it.each([...curvedSolids, ...hulls])('when copying the mesh of a %s out of the kernel throws', (_, spec, objects) => {
+    const { created, prototype } = trackCreatedManifolds();
+    vi.spyOn(prototype, 'getMesh').mockImplementation(() => {
+      throw new Error('out of memory');
+    });
+    expect(() => generateModel(kernel, spec)).toThrow('out of memory');
+    expect(created).toHaveLength(objects);
+    expect(created.every(isDeleted)).toBe(true);
+  });
 });

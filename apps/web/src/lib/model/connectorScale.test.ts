@@ -263,7 +263,7 @@ describe('connector settings on a cone', () => {
     expect(coneConnectorScale(values, last)?.parallelSpanMm).toBe(last?.parallelSpanMm);
     expect(coneConnectorScale({ printSizeMm: 80 })).toBeUndefined();
     expect(connectorScaleOf('cone', values)?.radiusMm).toBe(40);
-    expect(connectorScaleOf('cube', values)).toBeUndefined();
+    expect(connectorScaleOf('prism', values)).toBeUndefined();
   });
 
   it('measures a vertical cut on the actual section’s height, which falls with the distance from the axis', () => {

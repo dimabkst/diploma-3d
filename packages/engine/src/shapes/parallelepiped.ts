@@ -1,9 +1,6 @@
 import type { ParallelepipedShape, PhysicalScale } from '@diploma-3d/schema';
-import type { Manifold } from 'manifold-3d';
-import type { GeometryKernel } from '../kernel.ts';
-import type { Track } from '../scope.ts';
 import { parallelogramVertices } from './parallelogram.ts';
-import { buildPrism, type PrismDimensions, type PrismProportions, prismDimensionsMm } from './prism-geometry.ts';
+import { type PrismDimensions, type PrismProportions, prismDimensionsMm } from './prism-geometry.ts';
 
 /**
  * The parallelepiped before scaling: the parallelogram with a0 = 1, b0 = b/a and the angle α, centred at the origin
@@ -28,14 +25,4 @@ export interface ParallelepipedDimensions extends PrismDimensions {
 export function parallelepipedDimensionsMm(shape: ParallelepipedShape, scale: PhysicalScale): ParallelepipedDimensions {
   const dimensions = prismDimensionsMm(parallelepipedProportions(shape), scale);
   return { ...dimensions, baseSideB: shape.baseSideRatio * dimensions.edge };
-}
-
-/** The parallelepiped in millimetres, with the base centre at the origin and the lower base in z = 0. */
-export function buildParallelepiped(
-  kernel: GeometryKernel,
-  track: Track,
-  shape: ParallelepipedShape,
-  scale: PhysicalScale,
-): Manifold {
-  return buildPrism(kernel, track, parallelepipedProportions(shape), scale);
 }
