@@ -29,8 +29,9 @@ import {
   vertexAt,
   vertexCount,
 } from './mesh.ts';
-import { type GeneratedModel, generateModel, type Solid } from './model.ts';
+import { type ConnectorPlan, type GeneratedModel, generateModel, type Solid } from './model.ts';
 import { withScope } from './scope.ts';
+import type { Plane } from './section.ts';
 import { roundDimensionsMm } from './shapes/round.ts';
 
 export interface ModelArtifacts {
@@ -203,6 +204,7 @@ function previewObjects(model: GeneratedModel, gap: number): PreviewObject[] {
   const shown = solids.map(withAppearance);
   if (section === undefined || gap === 0) return shown;
   if (section.plate !== undefined) return explodedAroundPlate(model, shown, gap);
+  if (section.secondInterface !== undefined) return explodedAlongPlanes(model, shown);
   const { connector, plane, type } = section;
   if (connector?.type === 'twist') {
     // Locked lugs cannot be pulled through their ledges: the upper part is shown turned to where it comes off, and withdrawn.
@@ -219,6 +221,52 @@ function previewObjects(model: GeneratedModel, gap: number): PreviewObject[] {
 }
 
 const scaled = (a: Vec3, factor: number): Vec3 => [a[0] * factor, a[1] * factor, a[2] * factor];
+
+/**
+ * The three parts of two parallel planes moved apart along their shared normal for display: the lower part stays, the middle
+ * part moves by the lower plane's gap and the upper part by both, so that the parts keep their order and their cut faces stay
+ * parallel and aligned. Each gap is the single cut's, `SECTION_PREVIEW_GAP_RELATIVE`·M or for plugs, dowels and magnets
+ * `CONNECTOR_PREVIEW_GAP_RELATIVE`·M, and more where what the plane's lower part carries, a plug, a tongue or seated dowels,
+ * reaches further beyond it. A dowel stays seated in the part below its plane. Not an assembly path.
+ */
+function explodedAlongPlanes(model: GeneratedModel, shown: readonly PreviewObject[]): PreviewObject[] {
+  const section = model.section as NonNullable<GeneratedModel['section']>;
+  const second = section.secondInterface as NonNullable<typeof section.secondInterface>;
+  const longest = Math.max(...model.size);
+  const { normal } = section.plane;
+  const gapAt = ({ offset }: Plane, connector: ConnectorPlan | undefined, below: (solid: Solid) => boolean) => {
+    let reach = 0;
+    for (const { mesh } of model.solids.filter(below)) {
+      for (let vertex = 0; vertex < vertexCount(mesh); vertex += 1) {
+        const [x, y, z] = vertexAt(mesh, vertex);
+        reach = Math.max(reach, normal[0] * x + normal[1] * y + normal[2] * z - offset);
+      }
+    }
+    const flat = connector === undefined || connector.type === 'dovetail';
+    const least = (flat ? SECTION_PREVIEW_GAP_RELATIVE : CONNECTOR_PREVIEW_GAP_RELATIVE) * longest;
+    return Math.max(least, reach + SECTION_PREVIEW_GAP_RELATIVE * longest);
+  };
+  const lowerGap = gapAt(
+    section.plane,
+    section.connector,
+    (solid) => solid.part === 'lower' || (solid.part === 'dowel' && solid.joint === 0),
+  );
+  const upperGap = gapAt(
+    second.plane,
+    second.connector,
+    (solid) => solid.part === 'middle' || (solid.part === 'dowel' && solid.joint === 1),
+  );
+  return shown.map((object, index) => {
+    const solid = model.solids[index] as Solid;
+    const moved =
+      solid.part === 'upper'
+        ? lowerGap + upperGap
+        : solid.part === 'middle' || (solid.part === 'dowel' && solid.joint === 1)
+          ? lowerGap
+          : 0;
+    return moved === 0 ? object : { ...object, displayOffset: scaled(normal, moved) };
+  });
+}
 
 /** A section plate is shown in its own neutral colour, apart from the solid and its cut faces. */
 const withAppearance = (solid: Solid): PreviewObject => (solid.part === 'plate' ? { ...solid, appearance: 'plate' } : solid);

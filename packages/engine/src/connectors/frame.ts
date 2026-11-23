@@ -159,6 +159,11 @@ export interface BallHorizontalSection extends CutGeometry {
   readonly type: 'ball-horizontal';
   /** The signed distance of the plane above the centre, in millimetres. */
   readonly offset: number;
+  /**
+   * Beside a second parallel plane, the part between the two: on which side of this plane it lies, and how thick it is along n.
+   * Both planes join it with the same connector, so whatever this one cuts or adds there meets what the other does.
+   */
+  readonly middle?: { readonly side: 'negative' | 'positive'; readonly thickness: number };
   readonly plane: { readonly normal: Vec3; readonly offset: number };
   readonly contour: readonly Vec3[];
   readonly area: number;
@@ -272,6 +277,8 @@ export const isFaceted = (section: SolidSection): section is SolidSection & Face
 /** A cut's signed distance, from a vertical plane to the axis or a ball's horizontal plane to the centre, in percent of the radius. */
 export interface OffsetCut {
   readonly offsetPercent: number;
+  /** For a ball's plane beside a second parallel one, that plane's offset: the cut is then this plane's interface alone. */
+  readonly otherOffsetPercent?: number;
 }
 
 /** An oblique cut: the point on the axis, the angle to the base plane, and the horizontal direction it rises along. */
@@ -973,8 +980,36 @@ export function coneApexAngleBounds(
  * mirror symmetries, so the contour's area centroid lies on the vertical through the centre; it comes from the contour all
  * the same. The frame is a parallel cut's: u is +Y, the groove's entrance at −u.
  */
-export function ballSection(scale: PhysicalScale, offsetPercent: number): BallHorizontalSection {
-  return ballSectionAt(scale, sectionOffsetMm(offsetPercent, ballRadiusMm(scale)), false);
+export function ballSection(scale: PhysicalScale, offsetPercent: number, otherOffsetPercent?: number): BallHorizontalSection {
+  const radius = ballRadiusMm(scale);
+  const section = ballSectionAt(scale, sectionOffsetMm(offsetPercent, radius), false);
+  if (otherOffsetPercent === undefined) return section;
+  const other = sectionOffsetMm(otherOffsetPercent, radius);
+  return {
+    ...section,
+    middle: { side: other > section.offset ? 'positive' : 'negative', thickness: Math.abs(other - section.offset) },
+  };
+}
+
+/**
+ * The least thickness of the part between two parallel planes of a ball, in millimetres: the rule of its caps, a tenth of the
+ * diameter and at least one wall, which keeps the planes apart and the middle part usable; an application restriction that
+ * does not make every thin part printable.
+ */
+export function ballSliceMinimumMm(scale: PhysicalScale): number {
+  return Math.max((SECTION_POSITION_LIMITS.min / 100) * 2 * ballRadiusMm(scale), CONNECTOR_MIN_WALL_MM);
+}
+
+/** The part between two parallel planes of a ball as its connectors see it; undefined for a single cut. */
+export const middleOf = (section: SolidSection) => (section.type === 'ball-horizontal' ? section.middle : undefined);
+
+/**
+ * The section as seen from its second plane: the same two planes with their roles swapped, so that the first plane's offset is
+ * the second's. What a single plane's checks and plans read for the second interface.
+ */
+export function atSecondPlane<S extends Section>(section: S): S {
+  if (section.type !== 'horizontal' || section.secondOffsetPercent === undefined) return section;
+  return { ...section, offsetPercent: section.secondOffsetPercent, secondOffsetPercent: section.offsetPercent };
 }
 
 /**
@@ -1085,8 +1120,11 @@ export const cutOfSection = (section: Section): SolidCut => {
 const planeCutOf = (section: Section): PlaneCut => {
   switch (section.type) {
     case 'vertical':
-    case 'horizontal':
       return { offsetPercent: section.offsetPercent };
+    case 'horizontal':
+      return section.secondOffsetPercent === undefined
+        ? { offsetPercent: section.offsetPercent }
+        : { offsetPercent: section.offsetPercent, otherOffsetPercent: section.secondOffsetPercent };
     case 'oblique':
       return {
         positionPercent: section.positionPercent,
@@ -1108,7 +1146,7 @@ export function solidCut(shape: SectionedShape, scale: PhysicalScale, cut: Solid
   if (isPlateCut(cut)) return plateSection(shape, scale, cut);
   if (shape.kind === 'ball') {
     if (typeof cut === 'number' || !('offsetPercent' in cut)) throw new GeometryError('A ball offers only a horizontal cut.');
-    return ballSection(scale, cut.offsetPercent);
+    return ballSection(scale, cut.offsetPercent, cut.otherOffsetPercent);
   }
   if (shape.kind === 'cone') {
     if (typeof cut === 'number') return coneSection(shape, scale, cut);

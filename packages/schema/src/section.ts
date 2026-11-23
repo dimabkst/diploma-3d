@@ -320,14 +320,26 @@ export const apexSectionSchema = z.strictObject({
 export type ApexSection = z.infer<typeof apexSectionSchema>;
 
 /** A horizontal plane through a ball, at a signed distance from its centre in percent of the radius, positive upwards. */
-export const horizontalSectionSchema = z.strictObject({
-  type: z.literal('horizontal'),
-  offsetPercent: z.number().min(BALL_OFFSET_LIMITS.min).max(BALL_OFFSET_LIMITS.max).default(DEFAULT_SECTION_OFFSET_PERCENT),
-  /** A section plate on this plane, centred on it. */
-  plate: sectionPlateSchema.optional(),
-  /** Joins the parts; without one, both cut faces stay flat. */
-  connector: connectorSchema.optional(),
-});
+/**
+ * A ball's horizontal cut, and optionally a second plane parallel to it: each at its own signed distance from the centre in
+ * percent of the radius, both of the original ball, so that the two planes make three parts. A missing second plane is the
+ * single cut, as every configuration saved before there was a choice. The two planes do not take a section plate.
+ */
+export const horizontalSectionSchema = z
+  .strictObject({
+    type: z.literal('horizontal'),
+    offsetPercent: z.number().min(BALL_OFFSET_LIMITS.min).max(BALL_OFFSET_LIMITS.max).default(DEFAULT_SECTION_OFFSET_PERCENT),
+    /** The second plane, with the first plane's orientation; the engine checks that the part between them is usable. */
+    secondOffsetPercent: z.number().min(BALL_OFFSET_LIMITS.min).max(BALL_OFFSET_LIMITS.max).optional(),
+    /** A section plate on this plane, centred on it. */
+    plate: sectionPlateSchema.optional(),
+    /** Joins the parts, at each plane alike; without one, every cut face stays flat. */
+    connector: connectorSchema.optional(),
+  })
+  .refine((section) => section.secondOffsetPercent === undefined || section.plate === undefined, {
+    message: 'A second parallel plane does not take a section plate.',
+    path: ['plate'],
+  });
 
 export type HorizontalSection = z.infer<typeof horizontalSectionSchema>;
 

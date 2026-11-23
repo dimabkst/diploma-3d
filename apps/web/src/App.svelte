@@ -15,6 +15,7 @@ import { describeModelError, type ModelState, visibleArtifacts } from './lib/mod
 import {
   activeConnector,
   activeSection,
+  addSecondCut,
   type ConnectorEdits,
   canResetShapeParameters,
   commitConnectorEdit,
@@ -27,6 +28,7 @@ import {
   partsSeparated,
   plateChosen,
   plateConnectorFallback,
+  removeSecondCut,
   resetMagnetAllowances,
   resetShapeParameters,
   resolveModelRequest,
@@ -218,6 +220,15 @@ function runPanelAction(action: PanelAction) {
   }
   if (action === 'download-trial') {
     if (trialFile !== undefined) saveFile(trialFile.bytes, trialFile.fileName, THREE_MF_MEDIA_TYPE);
+    return;
+  }
+  if (action === 'add-second-cut' || action === 'remove-second-cut') {
+    if (selectedKind === undefined) return;
+    applyState(
+      action === 'add-second-cut'
+        ? addSecondCut(selectedKind, parameterState, request?.values ?? {})
+        : removeSecondCut(selectedKind, parameterState),
+    );
     return;
   }
   if (action === 'reset-magnet-allowances') {

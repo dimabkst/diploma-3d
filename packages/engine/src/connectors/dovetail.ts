@@ -23,6 +23,7 @@ import {
   isFaceted,
   isPlateSection,
   lateralWall,
+  middleOf,
   type ObliqueCylinderSection,
   type ParallelCylinderSection,
   pointWall,
@@ -86,7 +87,8 @@ export interface DovetailIssue {
     | 'groove-wall-thin'
     | 'stop-thin'
     | 'backing-thin'
-    | 'base-thin';
+    | 'base-thin'
+    | 'middle-thin';
   /** Beside a section plate, which part's groove it concerns; the plate carries both tongues. */
   readonly part?: 'lower' | 'upper';
   readonly valueMm: number;
@@ -244,7 +246,19 @@ export function dovetailChecks(section: SolidSection, dimensions: DovetailDimens
     { code: 'undercut-lost', valueMm: headWidth / 2 - groove.neckHalfWidth, minimumMm: undercut },
     { code: 'tongue-too-short', valueMm: length - DOVETAIL_LEAD_IN_RELATIVE * height, minimumMm: straightLength },
     ...wallsOf(section, dimensions, groove),
+    ...middleWalls(section, groove),
   ];
+}
+
+/**
+ * Between two parallel planes the middle part takes the groove of the plane below it, h + c deep, and the tongue of the plane
+ * above it, whose root reaches into it by the root overlap: what remains between them keeps one wall.
+ */
+function middleWalls(section: SolidSection, groove: ReturnType<typeof grooveExtent>): DovetailIssue[] {
+  const middle = middleOf(section);
+  if (middle === undefined) return [];
+  const value = middle.thickness - groove.top - DOVETAIL_ROOT_OVERLAP_MM;
+  return [{ code: 'middle-thin', valueMm: value, minimumMm: DOVETAIL_MINIMUMS_MM.wall }];
 }
 
 /**

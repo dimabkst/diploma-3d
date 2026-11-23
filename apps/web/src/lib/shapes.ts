@@ -65,6 +65,7 @@ import {
   plateChosen,
   type SectionChoice,
   type SectionRanges,
+  secondCutChosen,
   sectionKeys,
   type ToggleKey,
   TWIST_UNSUPPORTED_MESSAGE,
@@ -197,7 +198,13 @@ export type ActionField = {
   readonly disabled?: boolean;
 };
 
-export type PanelAction = 'download-pins' | 'download-trial' | 'choose-no-connector' | 'reset-magnet-allowances';
+export type PanelAction =
+  | 'download-pins'
+  | 'download-trial'
+  | 'choose-no-connector'
+  | 'reset-magnet-allowances'
+  | 'add-second-cut'
+  | 'remove-second-cut';
 
 /**
  * Further fields within a group, collapsed at first, such as the magnets' fit allowances. Opening or closing it changes no value
@@ -716,6 +723,12 @@ const ballSectionHelp: Help = {
     'Частини експортуються окремими об’єктами в одному масштабі; розсування змінює лише перегляд. Межі ±80 % відсувають ' +
     'площину від полюсів, але не гарантують, що тонку частину вдасться надрукувати.',
 };
+
+const BALL_SECOND_CUT_HELP =
+  'Другий переріз паралельний першому, і кожен задано зміщенням від центра всієї кулі, тож куля ділиться на три частини: ' +
+  'нижню, середню й верхню. Перерізи можуть лежати по різні боки від центра, з одного боку або один — через центр; ' +
+  'середня частина має бути не тоншою за десяту частину діаметра. Кріплення однакове на обох перерізах, а для середньої ' +
+  'частини враховано обидва.';
 
 const coneObliqueSectionHelp: Help = {
   label: 'Як задано переріз?',
@@ -1472,18 +1485,32 @@ function connectorSection(
           ...help,
           text: [help.text, ...(circular ? [] : [PROFILE_CLEARANCE_HELP]), TRIAL_VALUES_HELP].join('\n\n'),
         };
+  const bothPlanes =
+    chosen !== 'none' && secondCutChosen(kind, choices)
+      ? [
+          note(
+            'connector-both-planes',
+            'Кріплення однакове на обох перерізах: між нижньою й середньою та між середньою й верхньою частинами.',
+          ),
+        ]
+      : [];
   const notice =
     context.connectorNotice === undefined
       ? []
       : [{ ...note('connector-notice', context.connectorNotice), tone: 'status' as const }];
   return [
-    section(`${kind}-connector`, 'Кріплення', [selector, ...notice, ...unsupportedNote, ...printNote, ...fields[chosen]], {
-      help: chosen === 'none' ? undefined : withRoundNotes(chosen, helpOf(chosen)),
-      status:
-        chosen !== 'none' && unavailable !== undefined && chosen !== 'dovetail'
-          ? { text: chosen === 'twist' && !offersTwist ? 'недоступно' : 'не вміщується', highlighted: true }
-          : { text: chosen === 'none' ? 'немає' : connectorNames[chosen].toLowerCase(), highlighted: chosen !== 'none' },
-    }),
+    section(
+      `${kind}-connector`,
+      'Кріплення',
+      [selector, ...bothPlanes, ...notice, ...unsupportedNote, ...printNote, ...fields[chosen]],
+      {
+        help: chosen === 'none' ? undefined : withRoundNotes(chosen, helpOf(chosen)),
+        status:
+          chosen !== 'none' && unavailable !== undefined && chosen !== 'dovetail'
+            ? { text: chosen === 'twist' && !offersTwist ? 'недоступно' : 'не вміщується', highlighted: true }
+            : { text: chosen === 'none' ? 'немає' : connectorNames[chosen].toLowerCase(), highlighted: chosen !== 'none' },
+      },
+    ),
   ];
 }
 
@@ -1511,17 +1538,49 @@ function obliqueContainsAxis(
  */
 function ballPlaneSection(choices: ParameterChoices, context: PanelContext): ParameterSection {
   const keys = sectionKeys.ball;
-  if (keys === undefined) throw new Error('No section fields for the ball.');
+  if (keys === undefined || keys.secondCut === undefined) throw new Error('No section fields for the ball.');
   const chosen = choices[keys.choice];
-  const plateOn = keys.plate !== undefined && choices[keys.plate.toggle];
-  const interval = context.sectionRanges?.[keys.offset];
-  const offset: NumericField = {
-    type: 'number',
-    key: keys.offset,
-    label: 'Зміщення від центра',
-    suffix: '% r',
-    range: interval === undefined || interval === null ? undefined : percentRange(interval, SECTION_PERCENT_INCREMENT),
+  const twoPlanes = choices[keys.secondCut.toggle];
+  const plateOn = !twoPlanes && keys.plate !== undefined && choices[keys.plate.toggle];
+  const offsetField = (key: ParameterKey, label: string): NumericField => {
+    const interval = context.sectionRanges?.[key];
+    return {
+      type: 'number',
+      key,
+      label,
+      suffix: '% r',
+      range: interval === undefined || interval === null ? undefined : percentRange(interval, SECTION_PERCENT_INCREMENT),
+    };
   };
+  const plateNote = 'ball-second-cut-plate';
+  const planes: ParameterField[] = twoPlanes
+    ? [
+        offsetField(keys.offset, 'Перший переріз: зміщення від центра'),
+        offsetField(keys.secondCut.offset, 'Другий переріз: зміщення від центра'),
+        { type: 'action', key: 'ball-remove-second-cut', label: 'Прибрати другий переріз', action: 'remove-second-cut' },
+      ]
+    : [
+        offsetField(keys.offset, 'Зміщення від центра'),
+        {
+          type: 'action',
+          key: 'ball-add-second-cut',
+          label: 'Додати паралельний переріз',
+          action: 'add-second-cut',
+          ...(plateOn ? { disabled: true } : {}),
+        },
+        ...(plateOn
+          ? [{ type: 'note' as const, key: plateNote, text: 'Паралельний переріз недоступний із січною пластиною.' }]
+          : []),
+      ];
+  // Two planes take no plate: its switch stays, off, with the reason.
+  const plateFields: ParameterField[] =
+    twoPlanes && keys.plate !== undefined
+      ? [
+          { type: 'toggle', key: keys.plate.toggle, label: 'Січна пластина', disabled: true, describedBy: plateNote },
+          { type: 'note', key: plateNote, text: 'Січна пластина доступна лише з одним перерізом.' },
+        ]
+      : plateFieldsOf('ball', keys, choices, context, chosen);
+  const help = twoPlanes ? { ...ballSectionHelp, text: `${ballSectionHelp.text}\n\n${BALL_SECOND_CUT_HELP}` } : ballSectionHelp;
   return section(
     'ball-section',
     'Переріз',
@@ -1536,19 +1595,15 @@ function ballPlaneSection(choices: ParameterChoices, context: PanelContext): Par
         ],
       },
       ...(chosen === 'horizontal'
-        ? [
-            offset,
-            { type: 'toggle' as const, key: keys.separated, label: 'Розсунути частини' },
-            ...plateFieldsOf('ball', keys, choices, context, chosen),
-          ]
+        ? [...planes, { type: 'toggle' as const, key: keys.separated, label: 'Розсунути частини' }, ...plateFields]
         : []),
     ],
     {
       initiallyOpen: false,
-      help:
-        chosen !== 'horizontal' ? undefined : plateOn ? withPlateHelp(ballSectionHelp, false, BALL_PLATE_HELP) : ballSectionHelp,
+      help: chosen !== 'horizontal' ? undefined : plateOn ? withPlateHelp(ballSectionHelp, false, BALL_PLATE_HELP) : help,
       status: {
-        text: chosen === 'none' ? 'немає' : plateOn ? 'з пластиною' : sectionNames[chosen].toLowerCase(),
+        text:
+          chosen === 'none' ? 'немає' : twoPlanes ? 'два перерізи' : plateOn ? 'з пластиною' : sectionNames[chosen].toLowerCase(),
         highlighted: chosen !== 'none',
       },
     },

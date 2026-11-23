@@ -1,7 +1,9 @@
 import {
   apexChordCrossesBase,
+  atSecondPlane,
   ballOffsetLimitPercent,
   ballRadiusMm,
+  ballSliceMinimumMm,
   CONSTRAINT_ROUNDOFF_MM,
   type ConnectorFeasibility,
   coneApexAngleBounds,
@@ -36,6 +38,7 @@ import {
   type SectionedShape,
   satisfies,
   sectionOffsetMm,
+  sectionOffsetPercent,
   sectionPlateGeometry,
   type TwistIssue,
   type TwistOutcome,
@@ -46,6 +49,7 @@ import {
 import {
   APEX_INCLINATION_MAX_DEG,
   apexRatioSchema,
+  BALL_OFFSET_LIMITS,
   BASE_ANGLE_LIMITS,
   BASE_SHIFT_LIMITS,
   baseAngleSchema,
@@ -223,6 +227,7 @@ export type ParameterKey =
   | 'coneDowelLowerClearanceMm'
   | 'coneDowelUpperClearanceMm'
   | 'ballSectionOffsetPercent'
+  | 'ballSectionSecondOffsetPercent'
   | 'ballPlateThicknessMm'
   | 'ballPlateMarginMm'
   | 'ballDovetailSize'
@@ -314,6 +319,8 @@ export type ParameterChoices = {
   ballRoundProfile: ConnectorProfile;
   ballPartsSeparated: boolean;
   ballPlate: boolean;
+  /** Whether the ball takes a second plane parallel to the first, which "Додати паралельний переріз" turns on. */
+  ballSecondCut: boolean;
 };
 
 /** The switches among the choices. */
@@ -326,7 +333,7 @@ export type ToggleKey =
   | 'ballPlate';
 
 /** The choices picked from options. */
-export type ChoiceKey = Exclude<keyof ParameterChoices, ToggleKey | 'coneApexStarted'>;
+export type ChoiceKey = Exclude<keyof ParameterChoices, ToggleKey | 'coneApexStarted' | 'ballSecondCut'>;
 
 export type ParameterErrors = Partial<Record<ParameterKey, string>>;
 
@@ -482,6 +489,7 @@ export const initialParameterTexts = (): ParameterTexts => ({
   coneDowelLowerClearanceMm: formatDecimal(DEFAULT_DOWEL_CLEARANCES_MM.lower),
   coneDowelUpperClearanceMm: formatDecimal(DEFAULT_DOWEL_CLEARANCES_MM.upper),
   ballSectionOffsetPercent: formatDecimal(DEFAULT_SECTION_OFFSET_PERCENT),
+  ballSectionSecondOffsetPercent: formatDecimal(SECOND_CUT_PLACEHOLDER_PERCENT),
   ballPlateThicknessMm: formatDecimal(DEFAULT_SECTION_PLATE.thicknessMm),
   ballPlateMarginMm: formatDecimal(DEFAULT_SECTION_PLATE.marginMm),
   ballDovetailSize: formatDecimal(DEFAULT_DOVETAIL.sizeFactor),
@@ -527,6 +535,7 @@ export const initialParameterChoices = (): ParameterChoices => ({
   ballRoundProfile: DEFAULT_CONNECTOR_PROFILE,
   ballPartsSeparated: true,
   ballPlate: false,
+  ballSecondCut: false,
 });
 
 type Validation = { value: number } | { error: string };
@@ -750,6 +759,7 @@ const validators: Readonly<Record<IndependentKey, (text: string, exact?: number)
   coneDowelLowerClearanceMm: validateDiametralClearance,
   coneDowelUpperClearanceMm: validateDiametralClearance,
   ballSectionOffsetPercent: validateSectionOffset,
+  ballSectionSecondOffsetPercent: validateSectionOffset,
   ballPlateThicknessMm: validatePlateThickness,
   ballPlateMarginMm: validatePlateMargin,
   ballDovetailSize: validateConnectorDimension,
@@ -959,11 +969,51 @@ export function plateConnectorFallback(kind: ShapeKind, state: ParameterState): 
   return { ...state, choices: { ...state.choices, [keys.connector]: 'none' } };
 }
 
-/** Whether a section plate is chosen for the shape's active cut. */
+/** Whether a section plate is chosen for the shape's active cut; two parallel planes take none. */
 export function plateChosen(kind: ShapeKind, choices: ParameterChoices): boolean {
   const keys = sectionKeys[kind];
   const plate = keys?.plate;
-  return plate !== undefined && choices[plate.toggle] && activeSection(kind, choices) !== undefined;
+  return (
+    plate !== undefined && choices[plate.toggle] && activeSection(kind, choices) !== undefined && !secondCutChosen(kind, choices)
+  );
+}
+
+/** Whether the shape's active cut has a second parallel plane. */
+export function secondCutChosen(kind: ShapeKind, choices: ParameterChoices): boolean {
+  const second = sectionKeys[kind]?.secondCut;
+  return second !== undefined && choices[second.toggle] && activeSection(kind, choices) === 'horizontal';
+}
+
+/** The second plane's text before it is first added, which only the hidden field holds. */
+const SECOND_CUT_PLACEHOLDER_PERCENT = 40;
+
+/**
+ * The state with a second plane parallel to the first: the first plane keeps its position, and the second starts halfway
+ * between it and the farther end of the positions a plane may take, on the other side, so that the two are well apart; a first
+ * plane at the centre gets the second above it. Until the first plane is valid, it counts as through the centre.
+ */
+export function addSecondCut(kind: ShapeKind, state: ParameterState, values: ParameterValues): ParameterState {
+  const keys = sectionKeys[kind];
+  const second = keys?.secondCut;
+  if (keys === undefined || second === undefined) return state;
+  const limit =
+    values.printSizeMm === undefined
+      ? BALL_OFFSET_LIMITS.max
+      : ballOffsetLimitPercent({ longestDimensionMm: values.printSizeMm });
+  const first = values[keys.offset] ?? 0;
+  const start = (first + (first <= 0 ? limit : -limit)) / 2;
+  return {
+    ...state,
+    texts: { ...state.texts, [second.offset]: formatDecimal(Math.round(start * 10) / 10) },
+    choices: { ...state.choices, [second.toggle]: true },
+  };
+}
+
+/** The state with the single plane again, the first one as it is. */
+export function removeSecondCut(kind: ShapeKind, state: ParameterState): ParameterState {
+  const second = sectionKeys[kind]?.secondCut;
+  if (second === undefined) return state;
+  return { ...state, choices: { ...state.choices, [second.toggle]: false } };
 }
 
 /** Why the twist connector is not offered here, for a choice made before the solid or the cut changed. */
@@ -1140,6 +1190,7 @@ function unavailableMessage(issues: readonly RoundConnectorIssue[], type: 'plug'
     'hole-wall-thin': `навіть за найменшого розміру стінка біля отвору — ${shortfall}`,
     'hole-bottom-thin': `навіть за найменшого розміру під дном отвору лишається ${shortfall}`,
     'holes-too-close': `навіть за найменшого розміру між отворами лишається ${shortfall}`,
+    'middle-thin': `у середній частині між отворами обох перерізів лишається ${shortfall}`,
     'base-thin': `за виступом лишається ${shortfall}`,
     'keying-lost': `більший ${pin} ширший за менший отвір лише на ${shortfall}`,
   };
@@ -1149,6 +1200,10 @@ function unavailableMessage(issues: readonly RoundConnectorIssue[], type: 'plug'
     'чи кількість або оберіть «Без кріплення». Доти завантаження вимкнено.'
   );
 }
+
+/** What a round connector's fit depends on but its own dimensions, as `ConnectorStatus.context` records it. */
+const roundContext = (shape: SectionedShape, longestDimensionMm: number, section: Section, connector: RoundConnector) =>
+  JSON.stringify([shape, longestDimensionMm, cutOfSection(section), connector.type, connector.profile, connector.count]);
 
 /**
  * The round connector to build, unless the stored values count as they are: a new one from what the section offers, an
@@ -1167,9 +1222,9 @@ function resolveRound(
     return undefined;
   }
   if (connector.type === 'twist') return resolveTwist(shape, longestDimensionMm, section, connector, edits);
-  const { type, count, profile } = connector;
-  const context = JSON.stringify([shape, longestDimensionMm, cutOfSection(section), type, profile, count]);
+  const context = roundContext(shape, longestDimensionMm, section, connector);
   const edited = edits[shape.kind];
+  const { type } = connector;
   if (edited === context) return { status: { context, corrections: [] }, values: {}, section };
   const outcome = cachedRoundOutcome(edited === undefined, shape, longestDimensionMm, section, connector);
   if (outcome.status === 'unavailable') {
@@ -1467,6 +1522,11 @@ export function magnetIssuesMessage(issues: readonly MagnetIssue[], cut: Section
         `${capitalised(partsOf('wall-thin').join(' і '))}: навколо гнізда лишається замало матеріалу, бо поверхня фігури ` +
         `надто близько. Візьміть менші чи тонші магніти, збільште модель чи змініть положення перерізу.${ending}`
       );
+    case 'middle-thin':
+      return (
+        `Середня частина затонка для гнізд з обох боків: між ними лишається ${millimetres(first.valueMm)}, потрібно щонайменше ` +
+        `${formatMillimetres(first.minimumMm)} мм. Візьміть тонші магніти, розсуньте перерізи або збільште модель.${ending}`
+      );
     case 'no-arrangement':
       return (
         `Для вибраних магнітів недостатньо місця: вдалося розмістити лише ${first.placed} з ${connector.count} пар. ` +
@@ -1522,9 +1582,155 @@ function offsetChecks(
     const allowed = `Допустимі значення — від ${formatDecimal(shown.min)} % до ${formatDecimal(shown.max)} %: `;
     return { errors: { [keys.offset]: `${allowed}обидві частини мають лишатися придатними до друку.` }, ranges };
   }
+  if (section.type === 'horizontal' && section.secondOffsetPercent !== undefined && keys.secondCut !== undefined) {
+    const paired = { ...section, secondOffsetPercent: section.secondOffsetPercent };
+    return secondPlaneChecks(keys, keys.secondCut.offset, shape, longestDimensionMm, paired, limit, radius, edits, ranges);
+  }
   const connector = connectorChecks(keys, shape, longestDimensionMm, section, edits);
   return connector === undefined ? { errors: {}, ranges } : { ...connector, ranges: { ...ranges, ...connector.ranges } };
 }
+
+/** How the messages of each plane's connector say which plane they concern. */
+const PLANE_LABELS = ['Біля першого перерізу', 'Біля другого перерізу'] as const;
+
+/**
+ * A ball's two parallel planes: the second within the same limits as the first and far enough from it for a usable middle part,
+ * then the connector at each plane. Each plane's own checks see the other plane, so that the middle part's connectors from both
+ * sides keep their material. Both planes share the connector's settings: their feasible ranges are what both allow, and a round
+ * connector fitted to the first plane is fitted to the second as well, and taken back to the first if that changed it. Nothing
+ * is moved to make anything fit.
+ */
+function secondPlaneChecks(
+  keys: SectionKeys,
+  secondKey: ParameterKey,
+  shape: SectionedShape,
+  longestDimensionMm: number,
+  section: Extract<Section, { type: 'horizontal' }> & { readonly secondOffsetPercent: number },
+  limit: number,
+  radius: number,
+  edits: ConnectorEdits | undefined,
+  ranges: SectionRanges,
+): SectionCheck {
+  const scale = { longestDimensionMm };
+  const allRanges: SectionRanges = { ...ranges, [secondKey]: { min: -limit, max: limit } };
+  if (Math.abs(section.secondOffsetPercent) > limit + CONSTRAINT_ROUNDOFF_MM) {
+    const shown = percentRange({ min: -limit, max: limit }, 1);
+    return {
+      errors: {
+        [secondKey]:
+          `Допустимі значення — від ${formatDecimal(shown.min)} % до ${formatDecimal(shown.max)} %: ` +
+          'усі частини мають лишатися придатними до друку.',
+      },
+      ranges: allRanges,
+    };
+  }
+  const thickness = sectionOffsetMm(Math.abs(section.secondOffsetPercent - section.offsetPercent), radius);
+  const least = ballSliceMinimumMm(scale);
+  if (thickness < least - CONSTRAINT_ROUNDOFF_MM) {
+    return {
+      errors: {
+        [secondKey]:
+          `Перерізи надто близько: середня частина має завтовшки ${millimetres(thickness)}, а потрібно щонайменше ` +
+          `${formatMillimetres(least)} мм (${formatDecimal(Math.ceil(sectionOffsetPercent(least, radius) * 10) / 10)} % r між ` +
+          'перерізами). Розсуньте перерізи або збільште модель.',
+      },
+      ranges: allRanges,
+    };
+  }
+  const { connector } = section;
+  if (connector === undefined) return { errors: {}, ranges: allRanges };
+  const first = connectorChecks(keys, shape, longestDimensionMm, section, edits);
+  const prefixed = (check: SectionCheck | undefined, label: string): ParameterErrors =>
+    Object.fromEntries(Object.entries(check?.errors ?? {}).map(([key, message]) => [key, `${label}: ${message}`]));
+  const unavailable = (message: string, corrections: readonly string[] = []): SectionCheck => {
+    const { connector: _none, ...plain } = section;
+    return {
+      errors: {},
+      ranges: allRanges,
+      resolved: {
+        status: { context: first?.resolved?.status.context ?? '', corrections, unavailable: message },
+        values: {},
+        section: plain as Section,
+      },
+    };
+  };
+  if (first?.resolved?.status.unavailable !== undefined) {
+    return unavailable(`${PLANE_LABELS[0]}: ${first.resolved.status.unavailable}`);
+  }
+  const fitted = first?.resolved?.section.connector ?? connector;
+  // The second plane reads the first plane's fit as edited elsewhere, kept wherever it fits; typed values in the context of
+  // their last edit stay as typed there too, so that a value out of range is the field's error rather than corrected.
+  const atSecond = { ...atSecondPlane(section), connector: fitted };
+  const secondEdits = (current: Section): ConnectorEdits | undefined => {
+    if (edits === undefined || (fitted.type !== 'plug' && fitted.type !== 'dowel')) return edits;
+    const typed =
+      connector.type === fitted.type &&
+      edits[shape.kind] === roundContext(shape, longestDimensionMm, section, connector as RoundConnector);
+    return {
+      ...edits,
+      [shape.kind]: typed ? roundContext(shape, longestDimensionMm, current, fitted as RoundConnector) : SECOND_PLANE_EDIT,
+    };
+  };
+  const second = connectorChecks(keys, shape, longestDimensionMm, atSecond, secondEdits(atSecond));
+  if (second?.resolved?.status.unavailable !== undefined) {
+    return unavailable(`${PLANE_LABELS[1]}: ${second.resolved.status.unavailable}`);
+  }
+  const final = second?.resolved?.section.connector ?? fitted;
+  if (JSON.stringify(final) !== JSON.stringify(fitted)) {
+    // The second plane needed less: the first must take that too, as it is.
+    const back = connectorChecks(
+      keys,
+      shape,
+      longestDimensionMm,
+      { ...section, connector: final },
+      {
+        ...edits,
+        [shape.kind]: SECOND_PLANE_EDIT,
+      },
+    );
+    if (JSON.stringify(back?.resolved?.section.connector ?? final) !== JSON.stringify(final)) {
+      return unavailable(
+        'Кріплення не вдається підібрати так, щоб воно вміщувалося біля обох перерізів. Змініть положення перерізів, тип чи ' +
+          'розміри кріплення або оберіть «Без кріплення». Доти завантаження вимкнено.',
+      );
+    }
+  }
+  const intersect = (a: Interval | null | undefined, b: Interval | null | undefined): Interval | null | undefined => {
+    if (a === undefined) return b;
+    if (b === undefined) return a;
+    if (a === null || b === null) return null;
+    const both = { min: Math.max(a.min, b.min), max: Math.min(a.max, b.max) };
+    return both.min <= both.max + CONSTRAINT_ROUNDOFF_MM ? both : null;
+  };
+  const merged: SectionRanges = { ...allRanges };
+  for (const key of new Set([...Object.keys(first?.ranges ?? {}), ...Object.keys(second?.ranges ?? {})]) as Set<ParameterKey>) {
+    const both = intersect(first?.ranges[key], second?.ranges[key]);
+    if (both !== undefined) merged[key] = both;
+  }
+  const errors: ParameterErrors = { ...prefixed(first, PLANE_LABELS[0]) };
+  for (const [key, message] of Object.entries(prefixed(second, PLANE_LABELS[1])) as [ParameterKey, string][]) {
+    errors[key] = errors[key] === undefined ? message : `${errors[key]} ${message}`;
+  }
+  const corrections = [...(first?.resolved?.status.corrections ?? []), ...(second?.resolved?.status.corrections ?? [])];
+  const status = first?.resolved?.status ?? second?.resolved?.status;
+  const values = { ...first?.resolved?.values, ...second?.resolved?.values };
+  return {
+    errors,
+    ranges: merged,
+    ...(status === undefined
+      ? {}
+      : {
+          resolved: {
+            status: { context: status.context, corrections: [...new Set(corrections)] },
+            values,
+            section: { ...section, connector: final },
+          },
+        }),
+  };
+}
+
+/** An edit context that matches no plane's: the stored values are then kept where they fit and corrected where they do not. */
+const SECOND_PLANE_EDIT = 'second-plane';
 
 /**
  * The angles a plane through the apex may take in this direction, and why the current one or the direction itself does
@@ -1788,6 +1994,11 @@ export function roundConnectorIssueMessage(
         }[wordingOf(cut)] +
         `${plated && !conePlated ? ', або зменште товщину пластини' : ''}.`
       );
+    case 'middle-thin':
+      return (
+        `У середній частині між отворами обох перерізів лишається ${shortfall}. Зменште ${length}, розсуньте перерізи ` +
+        'або збільште модель.'
+      );
     case 'base-thin':
       return {
         vertical: `За виступом у частині 1 лишається ${shortfall}. Зменште ${diameter} або зміщення від осі.`,
@@ -1877,6 +2088,11 @@ export function dovetailIssueMessage(issue: DovetailIssue, cut: CutWording = 'pa
   switch (issue.code) {
     case 'tongue-too-low':
       return `Виступ заввишки ${shortfall}. Збільште висоту виступу.`;
+    case 'middle-thin':
+      return (
+        `У середній частині між пазом одного перерізу й виступом другого лишається ${shortfall}. Зменште висоту виступу чи ` +
+        'зазор, розсуньте перерізи або збільште модель.'
+      );
     case 'neck-too-narrow':
       return `Ширина виступу біля основи — ${shortfall}. Збільште висоту виступу, з якою вона пов’язана.`;
     case 'undercut-lost':
@@ -1919,6 +2135,8 @@ export function dovetailIssueMessage(issue: DovetailIssue, cut: CutWording = 'pa
 type SectionKeys = {
   readonly choice: 'cylinderSection' | 'coneSection' | 'ballSection';
   readonly offset: 'cylinderSectionOffsetPercent' | 'coneSectionOffsetPercent' | 'ballSectionOffsetPercent';
+  /** A second plane parallel to the first, of the one solid that offers it: whether it is on, and its offset. */
+  readonly secondCut?: { readonly toggle: 'ballSecondCut'; readonly offset: 'ballSectionSecondOffsetPercent' };
   readonly separated: ToggleKey;
   readonly connector: 'cylinderConnector' | 'coneConnector' | 'ballConnector';
   readonly dovetailEntrance: 'cylinderDovetailEntrance' | 'coneDovetailEntrance' | 'ballDovetailEntrance';
@@ -2014,6 +2232,7 @@ export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys | Plana
   ball: {
     choice: 'ballSection',
     offset: 'ballSectionOffsetPercent',
+    secondCut: { toggle: 'ballSecondCut', offset: 'ballSectionSecondOffsetPercent' },
     separated: 'ballPartsSeparated',
     plate: { toggle: 'ballPlate', thickness: 'ballPlateThicknessMm', margin: 'ballPlateMarginMm' },
     magnet: magnetKeysOf('ball'),
@@ -2187,12 +2406,13 @@ function resolveSection(
   // A plane parallel to the bases has a position along the height, a vertical one a distance from the axis, an oblique
   // one a point on the axis and two angles, a plane through an apex those angles alone.
   const planar = 'position' in keys ? (keys as PlanarSectionKeys) : undefined;
-  const plate = keys.plate !== undefined && choices[keys.plate.toggle] ? keys.plate : undefined;
+  const secondCut = secondCutChosen(kind, choices) ? keys.secondCut : undefined;
+  const plate = keys.plate !== undefined && plateChosen(kind, choices) ? keys.plate : undefined;
   const plateFields: IndependentKey[] = plate === undefined ? [] : [plate.thickness, plate.margin];
   const cutFields: Readonly<Record<SectionType, readonly IndependentKey[]>> = {
     'parallel-to-bases': planar === undefined ? [] : [planar.position, ...plateFields],
     vertical: [keys.offset, ...plateFields],
-    horizontal: [keys.offset, ...plateFields],
+    horizontal: [keys.offset, ...(secondCut === undefined ? [] : [secondCut.offset]), ...plateFields],
     oblique: planar === undefined ? [] : [...Object.values(planar.oblique), ...plateFields],
     'oblique-apex': [...Object.values(coneApexKeys), ...plateFields],
   };
@@ -2265,8 +2485,14 @@ function resolveSection(
   const sectionOf = (): Section => {
     switch (type) {
       case 'vertical':
-      case 'horizontal':
         return { type, offsetPercent: read(keys.offset), ...joining };
+      case 'horizontal':
+        return {
+          type,
+          offsetPercent: read(keys.offset),
+          ...(secondCut === undefined ? {} : { secondOffsetPercent: read(secondCut.offset) }),
+          ...joining,
+        };
       case 'parallel-to-bases':
         return { type, positionPercent: read(planarKeysOf(keys).position), ...joining };
       case 'oblique': {
@@ -2561,6 +2787,7 @@ export const shapeParameterKeys: Readonly<
   ball: {
     texts: [
       'ballSectionOffsetPercent',
+      'ballSectionSecondOffsetPercent',
       'ballPlateThicknessMm',
       'ballPlateMarginMm',
       'ballDovetailSize',
@@ -2578,6 +2805,7 @@ export const shapeParameterKeys: Readonly<
       'ballSection',
       'ballPartsSeparated',
       'ballPlate',
+      'ballSecondCut',
       'ballConnector',
       'ballDovetailEntrance',
       'ballRoundCount',
@@ -2673,17 +2901,24 @@ function inactiveSectionKeys(kind: ShapeKind, choices: ParameterChoices): (keyof
   const obliqueFields = planar === undefined ? [] : Object.values(planar.oblique);
   const apexFields = Object.values(coneApexKeys);
   const plate = keys.plate;
+  const second = keys.secondCut;
+  const twoPlanes = second !== undefined && choices[second.toggle];
+  // Beside a second plane the plate's switch is off, and its fields with it.
   const plateFields =
-    plate === undefined ? [] : [plate.toggle, ...(choices[plate.toggle] ? [plate.thickness, plate.margin] : [])];
+    plate === undefined || twoPlanes ? [] : [plate.toggle, ...(choices[plate.toggle] ? [plate.thickness, plate.margin] : [])];
+  const secondFields = second === undefined ? [] : [second.toggle, ...(twoPlanes ? [second.offset] : [])];
   const cutFields: Readonly<Record<SectionType, readonly (keyof ParameterChoices | ParameterKey)[]>> = {
     'parallel-to-bases': planar === undefined ? [] : [planar.position, ...plateFields],
     vertical: [keys.offset, ...plateFields],
-    horizontal: [keys.offset, ...plateFields],
+    horizontal: [keys.offset, ...secondFields, ...plateFields],
     oblique: [...obliqueFields, 'coneObliqueThrough', ...plateFields],
     'oblique-apex': [...apexFields, 'coneObliqueThrough', ...plateFields],
   };
   const active = new Set<string>(section === undefined ? [] : cutFields[section]);
-  const allPlateFields = plate === undefined ? [] : [plate.toggle, plate.thickness, plate.margin];
+  const allPlateFields = [
+    ...(plate === undefined ? [] : [plate.toggle, plate.thickness, plate.margin]),
+    ...(second === undefined ? [] : [second.toggle, second.offset]),
+  ];
   const cuts = [...new Set([...Object.values(cutFields).flat(), ...allPlateFields])].filter((key) => !active.has(key));
   // Whether the first plane through the apex was set up is no setting, and starts over with the section.
   const always: (keyof ParameterChoices)[] = ['coneApexStarted'];

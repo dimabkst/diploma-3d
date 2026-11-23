@@ -21,6 +21,7 @@ import {
   isFaceted,
   isPlateSection,
   lateralWall,
+  middleOf,
   type SectionedShape,
   type SectionFrame,
   type SolidCut,
@@ -87,7 +88,9 @@ export type RoundConnectorIssue =
   | { readonly code: 'hole-wall-thin'; readonly part: Part; readonly valueMm: number; readonly minimumMm: number }
   | { readonly code: 'holes-too-close'; readonly part: Part; readonly valueMm: number; readonly minimumMm: number }
   | { readonly code: 'hole-bottom-thin'; readonly part: Part; readonly valueMm: number; readonly minimumMm: number }
-  | { readonly code: 'base-thin'; readonly valueMm: number; readonly minimumMm: number };
+  | { readonly code: 'base-thin'; readonly valueMm: number; readonly minimumMm: number }
+  /** Between two parallel planes: what remains of the middle part between the connectors of both. */
+  | { readonly code: 'middle-thin'; readonly valueMm: number; readonly minimumMm: number };
 
 export interface RoundConnectorPlan {
   readonly type: 'plug' | 'dowel';
@@ -275,6 +278,13 @@ export function roundConnectorChecks(section: SolidSection, dimensions: RoundCon
   }
   if (type === 'plug') {
     checks.push({ code: 'base-thin', valueMm: plugBacking(section, profile, sites), minimumMm: wall });
+  }
+  const middle = middleOf(section);
+  if (middle !== undefined) {
+    // The part between two planes takes the holes of the plane below it and, from the plane above it, either the plug's root,
+    // which it carries, or the dowels' holes: the same connector at both, so the sum does not depend on which plane this is.
+    const fromBothPlanes = holeDepth + (type === 'plug' ? PLUG_ROOT_OVERLAP_MM : holeDepth);
+    checks.push({ code: 'middle-thin', valueMm: middle.thickness - fromBothPlanes, minimumMm: wall });
   }
   return checks;
 }

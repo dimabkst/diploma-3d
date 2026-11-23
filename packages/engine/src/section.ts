@@ -32,6 +32,31 @@ export function splitByPlane(track: Track, solid: Manifold, plane: Plane): Split
   return { positive: positive as Manifold, negative: negative as Manifold };
 }
 
+/** The three regions of a solid between two parallel planes, from the negative side of the normal to the positive one. */
+export interface ParallelParts {
+  readonly lower: Manifold;
+  readonly middle: Manifold;
+  readonly upper: Manifold;
+}
+
+/**
+ * Splits a solid by two parallel planes n·x = low and n·x = high, low < high, with the shared unit normal n: the solid is cut
+ * at the lower plane and the rest at the upper one, so that each region is made once from the solid and no material is
+ * duplicated; every cut face is closed. Throws where a plane misses the solid's interior or the planes do not leave a
+ * nonempty middle region.
+ */
+export function splitByParallelPlanes(
+  track: Track,
+  solid: Manifold,
+  normal: Plane['normal'],
+  [low, high]: readonly [number, number],
+): ParallelParts {
+  if (!(low < high)) throw new GeometryError(`The parallel planes at ${low} and ${high} leave no region between them.`);
+  const below = splitByPlane(track, solid, { normal, offset: low });
+  const above = splitByPlane(track, below.positive, { normal, offset: high });
+  return { lower: below.negative, middle: above.negative, upper: above.positive };
+}
+
 /**
  * The cutting plane of a section of a solid with horizontal bases in z = zBottom and z = zBottom + h, where h is the
  * perpendicular distance between them: z = zBottom + t·h with normal +Z. It stays parallel to the bases when the solid

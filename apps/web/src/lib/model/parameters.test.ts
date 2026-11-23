@@ -226,6 +226,7 @@ describe('resolveModelRequest', () => {
       coneDowelLowerClearanceMm: '0,4',
       coneDowelUpperClearanceMm: '0,5',
       ballSectionOffsetPercent: '0',
+      ballSectionSecondOffsetPercent: '40',
       ballPlateThicknessMm: '1,6',
       ballPlateMarginMm: '10',
       ballDovetailSize: '1',
@@ -300,6 +301,7 @@ describe('resolveModelRequest', () => {
       ballRoundProfile: 'flatted-circle',
       ballPartsSeparated: true,
       ballPlate: false,
+      ballSecondCut: false,
     });
     expect(resolveModelRequest('cuboid', initialParameterTexts(), triangle).spec).toEqual({
       shape: { kind: 'cuboid', widthRatio: 1.5, heightRatio: 2 },

@@ -16,6 +16,7 @@ import {
   framePoint,
   insideEnvelope,
   isPlateCut,
+  middleOf,
   type SectionedShape,
   type SectionFrame,
   type SolidCut,
@@ -46,7 +47,9 @@ export type MagnetIssue =
   /** Openings fit on the faces, but nowhere does a whole pocket keep its wall in this part. */
   | { readonly code: 'wall-thin'; readonly part: Part }
   /** The search found single positions, but no arrangement of all pairs that keeps the spacing between them. */
-  | { readonly code: 'no-arrangement'; readonly placed: number };
+  | { readonly code: 'no-arrangement'; readonly placed: number }
+  /** Between two parallel planes the middle part is too thin for the pockets of both and the material between them. */
+  | { readonly code: 'middle-thin'; readonly valueMm: number; readonly minimumMm: number };
 
 export interface MagnetPlan {
   readonly type: 'magnet';
@@ -277,6 +280,14 @@ export function planMagnets(shape: SectionedShape, scale: PhysicalScale, cut: So
     side.reach < needed ? [{ code: 'too-shallow', part: side.part, valueMm: side.reach, minimumMm: needed }] : [],
   );
   if (shallow.length > 0) return unavailable(shallow);
+  // The middle part between two parallel planes takes a pocket from each plane, of the same depth; wherever they lie, the
+  // material beneath one is what separates it from the other plane's, so both stacked keep the bottom's material between them.
+  const middle = middleOf(solidCut(shape, scale, cut));
+  if (middle !== undefined && middle.thickness < 2 * pocket.depth + policy.bottomMaterialMm) {
+    return unavailable([
+      { code: 'middle-thin', valueMm: middle.thickness - 2 * pocket.depth, minimumMm: policy.bottomMaterialMm },
+    ]);
+  }
   const at = ([along, across]: FramePoint) => measure(frame, sides, pocket, along, across);
   const slack = (point: FramePoint) => slackOf(at(point));
   const apart = 2 * pocket.opening + policy.spacingMm;

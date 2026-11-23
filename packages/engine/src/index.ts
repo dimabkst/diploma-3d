@@ -46,11 +46,13 @@ export {
   type ApexChord,
   type ApexCut,
   apexChordCrossesBase,
+  atSecondPlane,
   type BallHorizontalSection,
   type BallPlateSection,
   ballOffsetLimitPercent,
   ballPlateSection,
   ballSection,
+  ballSliceMinimumMm,
   CONNECTOR_MIN_WALL_MM,
   CONSTRAINT_ROUNDOFF_MM,
   type ConeCutSection,
@@ -84,6 +86,7 @@ export {
   isPlateThicknessFeasible,
   lateralWall,
   type Measurement,
+  middleOf,
   type ObliqueCut,
   type ObliqueCylinderSection,
   type OffsetCut,
@@ -253,7 +256,14 @@ export {
   type SectionPlateGeometry,
   sectionPlateGeometry,
 } from './plate.ts';
-export { type Plane, type SplitParts, sectionPlane, splitByPlane } from './section.ts';
+export {
+  type ParallelParts,
+  type Plane,
+  type SplitParts,
+  sectionPlane,
+  splitByParallelPlanes,
+  splitByPlane,
+} from './section.ts';
 export { cosSinDeg } from './shapes/angle.ts';
 export {
   BALL_SEGMENTS,

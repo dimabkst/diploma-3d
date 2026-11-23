@@ -17,8 +17,10 @@ import {
   verifyDovetail,
 } from './connectors/dovetail.ts';
 import {
+  atSecondPlane,
   ballOffsetLimitPercent,
   ballSection,
+  ballSliceMinimumMm,
   CONSTRAINT_ROUNDOFF_MM,
   coneApexChord,
   coneObliqueSection,
@@ -59,8 +61,8 @@ import {
 } from './mesh.ts';
 import { buildSectionPlate, type SectionPlateGeometry, sectionPlateGeometry } from './plate.ts';
 import { type Track, withScope } from './scope.ts';
-import { type Plane, sectionPlane, splitByPlane } from './section.ts';
-import { buildBall } from './shapes/ball.ts';
+import { type Plane, sectionPlane, splitByParallelPlanes, splitByPlane } from './section.ts';
+import { ballRadiusMm, buildBall } from './shapes/ball.ts';
 import { buildUnitBox } from './shapes/box.ts';
 import { checkNumericalFeasibility } from './shapes/feasibility.ts';
 import { buildParallelepiped } from './shapes/parallelepiped.ts';
@@ -82,10 +84,12 @@ export interface Solid {
    */
   readonly smoothingShear?: readonly [number, number];
   /**
-   * Which part of a sectioned solid this is: below or above a horizontal plane or one parallel to the bases, on the negative (1) or
-   * positive (2) side of the normal of a vertical or oblique plane, or a separate removable dowel.
+   * Which part of a sectioned solid this is: below or above a horizontal plane or one parallel to the bases, between two such
+   * planes, on the negative (1) or positive (2) side of the normal of a vertical or oblique plane, or a separate removable dowel.
    */
   readonly part?: SectionPart;
+  /** For a dowel beside two parallel planes, the plane it joins at: 0 the lower, 1 the upper one. */
+  readonly joint?: 0 | 1;
   /**
    * For a part: 1 per triangle that the cut or a connector made, 0 where the solid's original surface remains. The
    * preview shows these faces apart from the exterior.
@@ -97,7 +101,7 @@ export interface Solid {
  * Which part of a sectioned solid this is; `plate` is a section plate between the lower and the upper part, which belongs to
  * neither and is shown in its own colour.
  */
-export type SectionPart = 'lower' | 'upper' | 'part-1' | 'part-2' | 'plate' | 'dowel';
+export type SectionPart = 'lower' | 'middle' | 'upper' | 'part-1' | 'part-2' | 'plate' | 'dowel';
 
 export type ConnectorPlan = DovetailPlan | RoundConnectorPlan | TwistPlan | MagnetPlan;
 
@@ -109,6 +113,11 @@ export interface ModelSection {
   readonly connector?: ConnectorPlan;
   /** A section plate between the parts, centred on `plane`; the parts' faces lie T/2 to either side of it. */
   readonly plate?: SectionPlateGeometry;
+  /**
+   * A second parallel plane: its plane along the same normal, above `plane`, which is then the lower of the two, and its own
+   * connector of the same settings, fitted to its own section. The middle part lies between them.
+   */
+  readonly secondInterface?: { readonly plane: Plane; readonly connector?: ConnectorPlan };
 }
 
 export interface GeneratedModel {
@@ -132,9 +141,9 @@ type BuiltMeshes =
   | {
       readonly type: SectionType;
       readonly plane: Plane;
-      readonly parts: Readonly<Record<'lower' | 'upper', MarkedMesh>>;
+      readonly parts: Readonly<Record<'lower' | 'upper', MarkedMesh>> & { readonly middle?: MarkedMesh };
       readonly plate?: TriangleMesh;
-      readonly dowels: readonly MarkedMesh[];
+      readonly dowels: readonly (MarkedMesh & { readonly joint?: 0 | 1 })[];
     };
 
 type MarkedMesh = { readonly mesh: TriangleMesh; readonly newFaces: Uint8Array };
@@ -157,7 +166,7 @@ const partNames: Readonly<Record<SectionType, readonly [SectionPart, SectionPart
   horizontal: ['lower', 'upper'],
 };
 const partObjectName = (name: string, part: SectionPart): string =>
-  part === 'lower' || part === 'upper' ? `${name}-${part}-part` : `${name}-${part}`;
+  part === 'lower' || part === 'middle' || part === 'upper' ? `${name}-${part}-part` : `${name}-${part}`;
 
 /**
  * Validates the specification, filling in defaults, checks that the solid can be represented reliably, and builds it in
@@ -177,11 +186,36 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
   assertVerticalOffset(spec);
   assertObliqueSplit(spec);
   const plateGeometry = planPlate(spec);
-  const connector = planConnector(spec);
+  const pair = parallelPair(spec);
+  const connector = pair === undefined ? planConnector(spec) : pair.lower.connector;
   const built = withScope((track): BuiltMeshes => {
     const solid = checked(buildShape(kernel, track, spec.shape, spec.scale));
     if (spec.section === undefined) return { whole: meshFromManifold(solid) };
     const originalIds = originalIdsOf(solid);
+    const marked = (part: Manifold) => collapseRoundingSlivers(meshWithNewFaces(part, originalIds));
+    if (pair !== undefined) {
+      const { normal } = pair.lower.plane;
+      const regions = splitByParallelPlanes(track, solid, normal, [pair.lower.plane.offset, pair.upper.plane.offset]);
+      const longest = spec.scale.longestDimensionMm;
+      const first = joinParts(
+        kernel,
+        track,
+        solid,
+        { lower: regions.lower, upper: regions.middle },
+        pair.lower.connector,
+        longest,
+      );
+      const second = joinParts(kernel, track, solid, { lower: first.upper, upper: regions.upper }, pair.upper.connector, longest);
+      return {
+        type: spec.section.type,
+        plane: pair.lower.plane,
+        parts: { lower: marked(first.lower), middle: marked(second.lower), upper: marked(second.upper) },
+        dowels: [
+          ...first.dowels.map((dowel) => ({ ...meshWithNewFaces(dowel, originalIds), joint: 0 as const })),
+          ...second.dowels.map((dowel) => ({ ...meshWithNewFaces(dowel, originalIds), joint: 1 as const })),
+        ],
+      };
+    }
     const plane = spec.section.type === 'parallel-to-bases' ? sectionPlane(spec.section, solid.boundingBox()) : cutPlaneOf(spec);
     let parts: { lower: Manifold; upper: Manifold };
     let plate: Manifold | undefined;
@@ -215,25 +249,17 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
       });
       parts = { lower: checked(joined.lower), upper: checked(joined.upper) };
       plate = checked(joined.plate);
-    } else if (connector?.type === 'dovetail') {
-      const joined = buildDovetail(kernel, track, parts, connector);
-      verifyDovetail(kernel, track, { whole: solid, upper: parts.upper }, joined, connector, longest);
-      parts = { lower: checked(joined.lower), upper: checked(joined.upper) };
-    } else if (connector?.type === 'magnet') {
-      // Pockets in both parts; a section plate between them stays whole, and the magnets attract through it.
-      const joined = buildMagnetPockets(kernel, track, parts, connector);
-      verifyMagnetPockets(kernel, track, solid, joined, connector, longest);
-      parts = { lower: checked(joined.lower), upper: checked(joined.upper) };
-    } else if (connector?.type === 'twist') {
-      const joined = buildTwist(kernel, track, parts, connector);
-      verifyTwist(kernel, track, solid, joined, connector);
-      parts = { lower: checked(joined.lower), upper: checked(joined.upper) };
-    } else if (connector !== undefined) {
-      const joined = buildRoundConnectors(kernel, track, { ...parts, plate }, connector);
-      verifyRoundConnectors(kernel, track, solid, joined, connector, longest);
+    } else if (plate !== undefined && connector !== undefined && connector.type !== 'magnet' && connector.type !== 'twist') {
+      const joined = buildRoundConnectors(kernel, track, { ...parts, plate }, connector as RoundConnectorPlan);
+      verifyRoundConnectors(kernel, track, solid, joined, connector as RoundConnectorPlan, longest);
       parts = { lower: checked(joined.lower), upper: checked(joined.upper) };
       if (joined.plate !== undefined) plate = checked(joined.plate);
       dowels = joined.pins.map(checked);
+    } else {
+      // Without a plate, or with magnets, whose pockets lie in the parts alone and leave a plate whole between them.
+      const joined = joinParts(kernel, track, solid, parts, connector, longest);
+      parts = { lower: joined.lower, upper: joined.upper };
+      dowels = joined.dowels;
     }
     if (plate !== undefined) {
       assertConnected(plate);
@@ -269,15 +295,18 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
     const { bounds, size } = solid.measurements;
     return { kind: shape.kind, name, spec, solids: [solid], bounds, size };
   }
-  const parts = (['lower', 'upper'] as const).map((side, index): Solid => {
-    const part = partNames[built.type][index] as SectionPart;
-    return { ...solidOf(partObjectName(name, part), built.parts[side].mesh), part, newFaces: built.parts[side].newFaces };
+  const sides: readonly ('lower' | 'middle' | 'upper')[] =
+    built.parts.middle === undefined ? ['lower', 'upper'] : ['lower', 'middle', 'upper'];
+  const parts = sides.map((side): Solid => {
+    const part: SectionPart = side === 'middle' ? 'middle' : (partNames[built.type][side === 'lower' ? 0 : 1] as SectionPart);
+    const mesh = built.parts[side] as MarkedMesh;
+    return { ...solidOf(partObjectName(name, part), mesh.mesh), part, newFaces: mesh.newFaces };
   });
   // Flat, apart from its rounded corners, which the preview shades smoothly; never sheared, as it lies in the cut's frame.
   const plates = built.plate === undefined ? [] : [plateSolid(`${name}-section-plate`, built.plate)];
   const bounds = unionBounds([...parts, ...plates].map((part) => part.measurements.bounds));
   // Curved but never sheared: a dowel lies along the cut's normal however the cylinder leans.
-  const dowels = built.dowels.map(({ mesh, newFaces }, index): Solid => {
+  const dowels = built.dowels.map(({ mesh, newFaces, joint }, index): Solid => {
     assertValidSolidMesh(mesh);
     return {
       name: `${name}-dowel-${index + 1}`,
@@ -286,11 +315,15 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
       smoothShading: true,
       part: 'dowel',
       newFaces,
+      ...(joint === undefined ? {} : { joint }),
     };
   });
   return {
     kind: shape.kind,
-    name: `${name}-${sectionNames[built.type]}${plateGeometry === undefined ? '' : '-plate'}`,
+    name:
+      pair === undefined
+        ? `${name}-${sectionNames[built.type]}${plateGeometry === undefined ? '' : '-plate'}`
+        : `${name}-parallel-horizontal-sections`,
     spec,
     solids: [...parts, ...plates, ...dowels],
     bounds,
@@ -300,8 +333,83 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
       plane: built.plane,
       ...(connector === undefined ? {} : { connector }),
       ...(plateGeometry === undefined ? {} : { plate: plateGeometry }),
+      ...(pair === undefined
+        ? {}
+        : {
+            secondInterface: {
+              plane: pair.upper.plane,
+              ...(pair.upper.connector === undefined ? {} : { connector: pair.upper.connector }),
+            },
+          }),
     },
   };
+}
+
+/** Both parts of a cut and its connector as built, with any separate dowels. */
+interface JoinedParts {
+  readonly lower: Manifold;
+  readonly upper: Manifold;
+  readonly dowels: readonly Manifold[];
+}
+
+/**
+ * Builds a connector without a section plate on the two parts on either side of one plane and verifies it on them in three
+ * dimensions; every object is tracked. Beside a second parallel plane the parts are those already cut by it, so that the
+ * connector is verified on the final parts.
+ */
+function joinParts(
+  kernel: GeometryKernel,
+  track: Track,
+  solid: Manifold,
+  parts: { readonly lower: Manifold; readonly upper: Manifold },
+  connector: ConnectorPlan | undefined,
+  longest: number,
+): JoinedParts {
+  if (connector === undefined) return { ...parts, dowels: [] };
+  if (connector.type === 'dovetail') {
+    const joined = buildDovetail(kernel, track, parts, connector);
+    verifyDovetail(kernel, track, { whole: solid, upper: parts.upper }, joined, connector, longest);
+    return { lower: checked(joined.lower), upper: checked(joined.upper), dowels: [] };
+  }
+  if (connector.type === 'magnet') {
+    const joined = buildMagnetPockets(kernel, track, parts, connector);
+    verifyMagnetPockets(kernel, track, solid, joined, connector, longest);
+    return { lower: checked(joined.lower), upper: checked(joined.upper), dowels: [] };
+  }
+  if (connector.type === 'twist') {
+    const joined = buildTwist(kernel, track, parts, connector);
+    verifyTwist(kernel, track, solid, joined, connector);
+    return { lower: checked(joined.lower), upper: checked(joined.upper), dowels: [] };
+  }
+  const joined = buildRoundConnectors(kernel, track, parts, connector);
+  verifyRoundConnectors(kernel, track, solid, joined, connector, longest);
+  return { lower: checked(joined.lower), upper: checked(joined.upper), dowels: joined.pins.map(checked) };
+}
+
+/** A plane of two parallel ones, and the connector planned for its own section. */
+interface ParallelPlane {
+  readonly plane: Plane;
+  readonly connector?: ConnectorPlan;
+}
+
+/**
+ * A ball's two parallel planes, the lower and the upper one along their shared normal, each with the connector planned on its
+ * own section, which knows the other plane; undefined for a single cut. The specification's first and second plane keep their
+ * identity; only the order of building follows their offsets.
+ */
+function parallelPair(spec: ModelSpec): { readonly lower: ParallelPlane; readonly upper: ParallelPlane } | undefined {
+  const { section, scale } = spec;
+  if (section?.type !== 'horizontal' || section.secondOffsetPercent === undefined) return undefined;
+  const views = [section, atSecondPlane(section)].map((view): ParallelPlane & { readonly offset: number } => {
+    const plan = planConnector({ ...spec, section: view });
+    return {
+      offset: view.offsetPercent,
+      plane: ballSection(scale, view.offsetPercent).plane,
+      ...(plan === undefined ? {} : { connector: plan }),
+    };
+  });
+  const [lower, upper] = [...views].sort((a, b) => a.offset - b.offset) as unknown as [ParallelPlane, ParallelPlane];
+  return { lower, upper };
 }
 
 function plateSolid(name: string, mesh: TriangleMesh): Solid {
@@ -386,10 +494,22 @@ function cutPlaneOf({ shape, scale, section }: ModelSpec): Plane {
 function assertVerticalOffset({ shape, scale, section }: ModelSpec): void {
   if (section?.type === 'horizontal') {
     const limit = ballOffsetLimitPercent(scale);
-    if (Math.abs(section.offsetPercent) > limit + CONSTRAINT_ROUNDOFF_MM) {
-      throw new InvalidModelSpecError([
-        `section.offsetPercent: ${section.offsetPercent} % is beyond the ${limit} % that leave two usable parts.`,
-      ]);
+    for (const [field, offset] of [
+      ['offsetPercent', section.offsetPercent],
+      ['secondOffsetPercent', section.secondOffsetPercent],
+    ] as const) {
+      if (offset !== undefined && Math.abs(offset) > limit + CONSTRAINT_ROUNDOFF_MM) {
+        throw new InvalidModelSpecError([`section.${field}: ${offset} % is beyond the ${limit} % that leave usable parts.`]);
+      }
+    }
+    if (section.secondOffsetPercent !== undefined) {
+      const thickness = sectionOffsetMm(Math.abs(section.secondOffsetPercent - section.offsetPercent), ballRadiusMm(scale));
+      const least = ballSliceMinimumMm(scale);
+      if (thickness < least - CONSTRAINT_ROUNDOFF_MM) {
+        throw new InvalidModelSpecError([
+          `section.secondOffsetPercent: the part between the planes is ${thickness} mm thick, less than the ${least} mm of a usable part.`,
+        ]);
+      }
     }
     return;
   }

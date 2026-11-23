@@ -5,7 +5,7 @@ import type { MagnetPlan } from '../connectors/magnet.ts';
 import { dowelLength, plugHeight, type RoundConnectorPlan } from '../connectors/round.ts';
 import { type TwistPlan, twistTrialDimensions } from '../connectors/twist.ts';
 import { GeometryError } from '../errors.ts';
-import type { GeneratedModel } from '../model.ts';
+import type { ConnectorPlan, GeneratedModel } from '../model.ts';
 import { ballRadiusMm } from '../shapes/ball.ts';
 import { type BaseShape, baseSidesMm } from '../shapes/base.ts';
 import { boxEdgeLengthsMm } from '../shapes/box.ts';
@@ -217,20 +217,30 @@ const magnetConnector = (plan: MagnetPlan) => ({
   },
 });
 
-/** The connector's settings as generated, after any automatic correction, with its physical dimensions. */
+/** A connector plan's conventions and physical dimensions. */
+const resolvedConnector = (plan: ConnectorPlan) =>
+  plan.type === 'dovetail'
+    ? dovetailConnector(plan)
+    : plan.type === 'twist'
+      ? twistConnector(plan)
+      : plan.type === 'magnet'
+        ? magnetConnector(plan)
+        : roundConnector(plan);
+
+/**
+ * The connector's settings as generated, after any automatic correction, with its physical dimensions; beside two parallel
+ * planes, those at the lower plane, and the upper plane's own as fitted to its section.
+ */
 function connectorSettings(model: GeneratedModel) {
   const settings: Connector | undefined = model.spec.section?.connector;
   const plan = model.section?.connector;
   if (settings === undefined || plan === undefined) return undefined;
-  const resolved =
-    plan.type === 'dovetail'
-      ? dovetailConnector(plan)
-      : plan.type === 'twist'
-        ? twistConnector(plan)
-        : plan.type === 'magnet'
-          ? magnetConnector(plan)
-          : roundConnector(plan);
-  return { settings, ...resolved };
+  const upper = model.section?.secondInterface?.connector;
+  return {
+    settings,
+    ...resolvedConnector(plan),
+    ...(upper === undefined ? {} : { atUpperPlane: resolvedConnector(upper).dimensions }),
+  };
 }
 
 /** A section plate's outline as built; its thickness and margin are among the section's settings. */
