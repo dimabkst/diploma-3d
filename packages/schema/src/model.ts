@@ -12,7 +12,9 @@ import {
   BOX_SECTION_TYPES,
   type BoxSectionSpec,
   boxSectionIssues,
+  type PrismTopology,
   prismTopology,
+  pyramidTopology,
   type SectionType,
   sectionSchema,
 } from './section.ts';
@@ -57,23 +59,32 @@ export const SECTIONS_BY_SHAPE: Readonly<Partial<Record<ShapeKind, readonly Sect
   cuboid: ['face-parallel', 'longitudinal', 'through-line', 'inclined'],
   parallelepiped: ['face-parallel', 'longitudinal', 'through-line', 'inclined'],
   prism: ['face-parallel', 'longitudinal', 'through-line', 'inclined'],
+  pyramid: ['face-parallel', 'through-apex', 'through-line', 'inclined'],
+  tetrahedron: ['face-parallel', 'through-apex', 'through-line', 'inclined'],
 };
 
-/** The number of base vertices of a solid whose sections name its vertices: four for a cube and the parallelepipeds. */
-export function prismSidesOf(shape: Shape): number | undefined {
+export const supportsSection = (kind: ShapeKind, type: SectionType): boolean => SECTIONS_BY_SHAPE[kind]?.includes(type) ?? false;
+
+/**
+ * The vertices, faces and edges of a solid whose sections name them: a prism over four vertices for a cube and the
+ * parallelepipeds, over its base for a prism; a pyramid over its base, over a triangle for the tetrahedron.
+ */
+export function boxTopologyOfShape(shape: Shape): PrismTopology | undefined {
   switch (shape.kind) {
     case 'cube':
     case 'cuboid':
     case 'parallelepiped':
-      return 4;
+      return prismTopology(4);
     case 'prism':
-      return shape.baseType === 'regular' ? shape.baseSides : shape.baseType === 'triangle' ? 3 : 4;
+      return prismTopology(shape.baseType === 'regular' ? shape.baseSides : shape.baseType === 'triangle' ? 3 : 4);
+    case 'pyramid':
+      return pyramidTopology(shape.baseType === 'regular' ? shape.baseSides : shape.baseType === 'triangle' ? 3 : 4);
+    case 'tetrahedron':
+      return pyramidTopology(3);
     default:
       return undefined;
   }
 }
-
-export const supportsSection = (kind: ShapeKind, type: SectionType): boolean => SECTIONS_BY_SHAPE[kind]?.includes(type) ?? false;
 
 /**
  * The shape, its physical scale and, optionally, a plane section that splits it into two parts. The scale describes the
@@ -95,10 +106,11 @@ export const modelSpecSchema = z
       return;
     }
     // A face, an edge or a vertex of a box section must be the solid's own.
-    const sides = prismSidesOf(spec.shape);
+    const topology = boxTopologyOfShape(spec.shape);
     const section = spec.section;
-    if (sides === undefined || section === undefined || !(BOX_SECTION_TYPES as readonly string[]).includes(section.type)) return;
-    for (const { path, message } of boxSectionIssues(prismTopology(sides), section as BoxSectionSpec)) {
+    if (topology === undefined || section === undefined || !(BOX_SECTION_TYPES as readonly string[]).includes(section.type))
+      return;
+    for (const { path, message } of boxSectionIssues(topology, section as BoxSectionSpec)) {
       context.addIssue({ code: 'custom', path: ['section', path], message });
     }
   });

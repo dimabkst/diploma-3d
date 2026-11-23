@@ -94,7 +94,7 @@ describe('a plane parallel to a cylinder’s axis', () => {
 });
 
 describe('the axial section of a cone', () => {
-  const apex = { coneSection: 'oblique', coneObliqueThrough: 'apex', coneApexStarted: true } as const;
+  const apex = { coneSection: 'oblique-apex', coneApexStarted: true } as const;
   const leaning = { coneOffsetRatio: '0,7', coneApexInclinationDeg: '80', coneApexDirectionDeg: '30' };
 
   it('is a switch in the plane through the apex: the angle follows from the cone, the direction stays the user’s', () => {

@@ -268,9 +268,8 @@ for (const [name, oblique] of [
     await turnCamera(page);
     const direction = await orbit(page);
     const field = (label: string) => page.getByLabel(label, { exact: true });
-    const through = (label: string) => field('Площина проходить через').selectOption({ label });
     expectSteadyTransition(await framesOf(page, () => cut(page, 'Похилий')), direction);
-    expectSteadyTransition(await framesOf(page, () => through('Вершину')), direction);
+    expectSteadyTransition(await framesOf(page, () => cut(page, 'Через вершину')), direction);
     expectSteadyTransition(await framesOf(page, () => field('Кут до площини основи').fill('85')), direction);
     expectSteadyTransition(await framesOf(page, () => field('Напрям нахилу').fill('60')), direction);
     for (const label of ['Ластівчин хвіст', 'Виступ і отвір', 'Знімні штифти', 'Без кріплення']) {
@@ -279,7 +278,7 @@ for (const [name, oblique] of [
     const separation = page.getByRole('checkbox', { name: 'Розсунути частини', exact: true });
     expectSteadyTransition(await framesOf(page, () => separation.uncheck()), direction);
     expectSteadyTransition(await framesOf(page, () => separation.check()), direction);
-    expectSteadyTransition(await framesOf(page, () => through('Точку на осі')), direction);
+    expectSteadyTransition(await framesOf(page, () => cut(page, 'Похилий')), direction);
     expectSteadyTransition(await framesOf(page, () => cut(page, 'Вертикальний')), direction);
   });
 }

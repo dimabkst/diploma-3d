@@ -14,6 +14,8 @@ import { describe, expect, it } from 'vitest';
 import { buildModelArtifacts, SECTION_PREVIEW_GAP_RELATIVE } from './artifacts.ts';
 import {
   type BoxPointRange,
+  boxApexPointRange,
+  boxApexPositionBounds,
   boxFaceLines,
   boxFaceOrientations,
   boxFaceParallelPercent,
@@ -57,7 +59,10 @@ const OBLIQUE = {
   offsetXRatio: 0.3,
   offsetYRatio: 0.2,
 } as const;
-type BoxShapeInput = Extract<ModelSpecInput['shape'], { kind: 'cube' | 'cuboid' | 'parallelepiped' | 'prism' }>;
+type BoxShapeInput = Extract<
+  ModelSpecInput['shape'],
+  { kind: 'cube' | 'cuboid' | 'parallelepiped' | 'prism' | 'pyramid' | 'tetrahedron' }
+>;
 type Connector = NonNullable<Section['connector']>;
 
 const spec = (shape: BoxShapeInput, section: object, connector?: Connector): ModelSpecInput => ({
@@ -728,6 +733,18 @@ describe('vertex labels on the preview’s own geometry', () => {
       undefined,
     ],
     [
+      'the tetrahedron through its apex and the median from C, which holds S and C',
+      { kind: 'tetrahedron' },
+      { type: 'through-apex', trace: 'median', traceVertex: 'C', traceAngleDeg: 0, positionPercent: 50 },
+      undefined,
+    ],
+    [
+      'an oblique square pyramid by two planes parallel to its base, with magnets',
+      { kind: 'pyramid', baseType: 'regular', baseSides: 4, heightRatio: 1.2, apexXRatio: 0.3, apexYRatio: -0.2 },
+      { type: 'face-parallel', positionPercent: 20, secondPositionPercent: 50 },
+      { type: 'magnet', ...DEFAULT_MAGNET, count: 1 },
+    ],
+    [
       'the cube’s diagonal section through four of its vertices',
       CUBE,
       { type: 'longitudinal', trace: 'AC', traceAngleDeg: 0, positionPercent: 50 },
@@ -1223,5 +1240,286 @@ describe('sections of the prisms, by the same modes', () => {
     expect(() => generateModel(kernel, spec(regular(6), longitudinal({ trace: 'median', traceVertex: 'A' })))).toThrow(
       InvalidModelSpecError,
     );
+  });
+});
+
+describe('sections of the pyramids and the tetrahedron, by the same modes', () => {
+  const TETRAHEDRON = { kind: 'tetrahedron' } as const;
+  const pyramid = (baseSides: 3 | 4 | 5 | 6 | 8, heightRatio = 1, apexXRatio = 0, apexYRatio = 0) =>
+    ({ kind: 'pyramid', baseType: 'regular', baseSides, heightRatio, apexXRatio, apexYRatio }) as const;
+  // A scalene base, obtuse at A, and an apex off the base's centroid: its height's foot H is neither the centroid nor a vertex.
+  const SCALENE = {
+    kind: 'pyramid',
+    baseType: 'triangle',
+    baseSideRatio: 1.4,
+    baseAngleDeg: 115,
+    heightRatio: 1.1,
+    apexXRatio: 0.25,
+    apexYRatio: 0.15,
+  } as const;
+  const volumeOf = (shape: BoxShapeInput) =>
+    generateModel(kernel, { shape, scale: SCALE }).solids[0]?.measurements.volume as number;
+  const shares = (model: GeneratedModel) =>
+    model.solids
+      .filter((solid) => solid.part !== 'dowel')
+      .map((solid) => solid.measurements.volume / volumeOf(model.spec.shape as BoxShapeInput))
+      .sort();
+  const apex = (fields: object) => ({ type: 'through-apex', traceAngleDeg: 0, positionPercent: 50, ...fields });
+  const near = (points: readonly Vec3[], point: Vec3) =>
+    Math.min(...points.map((other) => distance(other, point))) < POSITION_TOLERANCE_MM;
+  const mix = (a: Vec3, b: Vec3, t: number): Vec3 =>
+    [0, 1, 2].map((axis) => (1 - t) * (a[axis] as number) + t * (b[axis] as number)) as unknown as Vec3;
+  const holds = (plane: { normal: Vec3; offset: number }, point: Vec3) =>
+    Math.abs(plane.normal[0] * point[0] + plane.normal[1] * point[1] + plane.normal[2] * point[2] - plane.offset) < 1e-7;
+
+  it.each([
+    ['the tetrahedron', TETRAHEDRON, 3],
+    ['a square pyramid', pyramid(4), 4],
+    ['a hexagonal pyramid', pyramid(6), 6],
+  ] as const)('%s: n + 1 vertices, 2n edges, n + 1 faces, none of them parallel', (_, shape, sides) => {
+    const topology = boxTopologyOf(shape as never);
+    expect(topology.kind).toBe('pyramid');
+    expect(topology.vertices).toHaveLength(sides + 1);
+    expect(topology.vertices.at(-1)).toBe('S');
+    expect(topology.edges).toHaveLength(2 * sides);
+    expect(topology.faceNames).toHaveLength(sides + 1);
+    expect(boxParallelFaces(boxVertices(shape as never, SCALE))).toEqual(topology.faceNames);
+  });
+
+  it.each([
+    ['a square pyramid', pyramid(4)],
+    ['an oblique pentagonal pyramid', pyramid(5, 1.2, 0.4, -0.3)],
+    ['a scalene triangular pyramid', SCALENE],
+  ] as const)(
+    '%s, parallel to the base at half height: Pᵢ = (Vᵢ + S)/2, a quarter of the base, the apex’s part an eighth',
+    (_, shape) => {
+      const vertices = boxVertices(shape as never, SCALE);
+      const topology = boxTopologyOf(shape as never);
+      const { model, section } = sectionOf(shape, { type: 'face-parallel', positionPercent: 50 });
+      const base = topology.faces[topology.lowerBase] as BoxVertex[];
+      expect(section.contour).toHaveLength(base.length);
+      for (const vertex of base) expect(near(section.contour, mix(vertices[vertex], vertices.S, 0.5))).toBe(true);
+      const baseArea = sectionOf(shape, { type: 'face-parallel', positionPercent: 0.0 + 10 }).section.area / 0.81;
+      expect(section.area / baseArea).toBeCloseTo(0.25, 6);
+      expect(shares(model)).toEqual([expect.closeTo(1 / 8, 6), expect.closeTo(7 / 8, 6)]);
+      expectPartsOfWhole(model);
+    },
+  );
+
+  it('parallel to the face SAB of the tetrahedron at half way: through the midpoints of CS, CA and CB', () => {
+    const vertices = boxVertices(TETRAHEDRON, SCALE);
+    const { model, section } = sectionOf(TETRAHEDRON, { type: 'face-parallel', face: 'SAB', positionPercent: 50 });
+    expect(section.contour).toHaveLength(3);
+    for (const other of ['S', 'A', 'B'] as const) expect(near(section.contour, mix(vertices.C, vertices[other], 0.5))).toBe(true);
+    expectPartsOfWhole(model);
+  });
+
+  it('through the apex and a median or a midline of a triangular base: triangles of S, halving the solid or cutting off a quarter', () => {
+    for (const shape of [TETRAHEDRON, SCALENE]) {
+      const vertices = boxVertices(shape as never, SCALE);
+      const median = sectionOf(shape, apex({ trace: 'median', traceVertex: 'C' }));
+      expect(median.section.contour).toHaveLength(3);
+      for (const point of [vertices.S, vertices.C, mix(vertices.A, vertices.B, 0.5)])
+        expect(near(median.section.contour, point)).toBe(true);
+      expect(shares(median.model)).toEqual([expect.closeTo(0.5, 6), expect.closeTo(0.5, 6)]);
+      const midline = sectionOf(shape, apex({ trace: 'midline', traceSegment: ['A', 'B'] }));
+      expect(midline.section.contour).toHaveLength(3);
+      expect(near(midline.section.contour, vertices.S)).toBe(true);
+      expect(shares(midline.model)).toEqual([expect.closeTo(0.25, 6), expect.closeTo(0.75, 6)]);
+      expectPartsOfWhole(median.model);
+      expectPartsOfWhole(midline.model);
+    }
+    // The tetrahedron's median, altitude and bisector from a vertex coincide; the scalene base's do not.
+    expect(boxTraceChoices(TETRAHEDRON).sameLines.C).toEqual(['median', 'height', 'bisector']);
+    expect(boxTraceChoices(SCALENE).sameLines.C).toEqual([]);
+    // Obtuse at A: the altitudes from B and C leave the base, and their planes only touch the pyramid.
+    expect(boxTraceChoices(SCALENE).height).toEqual(['A']);
+  });
+
+  it('through the apex and a diagonal of the base: the triangle SAC, halving a regular square pyramid; a hexagon’s longer and shorter', () => {
+    const square = sectionOf(pyramid(4), apex({ trace: 'diagonal', traceSegment: ['A', 'C'] }));
+    const vertices = boxVertices(pyramid(4), SCALE);
+    expect(square.section.contour).toHaveLength(3);
+    for (const point of [vertices.S, vertices.A, vertices.C]) expect(near(square.section.contour, point)).toBe(true);
+    expect(shares(square.model)).toEqual([expect.closeTo(0.5, 6), expect.closeTo(0.5, 6)]);
+    expect(boxTraceChoices(pyramid(6)).diagonal).toHaveLength(9);
+    const short = sectionOf(pyramid(6), apex({ trace: 'diagonal', traceSegment: ['A', 'C'] }));
+    expect(shares(short.model)).toEqual([expect.closeTo(1 / 6, 6), expect.closeTo(5 / 6, 6)]);
+    expectPartsOfWhole(square.model);
+  });
+
+  it('through the lateral edge SC and the midpoint of AB: the triangle SCM; AB’s ends and the edges at C give faces', () => {
+    const vertices = boxVertices(TETRAHEDRON, SCALE);
+    const { model, section } = sectionOf(
+      TETRAHEDRON,
+      apex({ trace: 'edge-point', traceVertex: 'C', traceSegment: ['A', 'B'], tracePointPercent: 50 }),
+    );
+    expect(section.contour).toHaveLength(3);
+    for (const point of [vertices.S, vertices.C, mix(vertices.A, vertices.B, 0.5)])
+      expect(near(section.contour, point)).toBe(true);
+    expect(shares(model)).toEqual([expect.closeTo(0.5, 6), expect.closeTo(0.5, 6)]);
+    expect(boxTraceChoices(TETRAHEDRON).edgePoint.C).toEqual([['A', 'B']]);
+    const range = boxApexPointRange(TETRAHEDRON, SCALE, 'C', ['A', 'B']) as BoxPointRange;
+    expect(range.min).toBeGreaterThan(0);
+    expect(range.max).toBeLessThan(100);
+  });
+
+  it('through the base edge AB and the midpoint of SC: the triangle ABM, half of SABC; SA and SB give the face SAB', () => {
+    const vertices = boxVertices(TETRAHEDRON, SCALE);
+    const section = {
+      type: 'through-line',
+      face: 'ABC',
+      line: ['A', 'B'],
+      method: 'point',
+      pointEdge: ['S', 'C'],
+      pointPercent: 50,
+    };
+    const smooth = sectionOf(TETRAHEDRON, section);
+    expect(smooth.section.contour).toHaveLength(3);
+    for (const point of [vertices.A, vertices.B, mix(vertices.S, vertices.C, 0.5)])
+      expect(near(smooth.section.contour, point)).toBe(true);
+    expect(shares(smooth.model)).toEqual([expect.closeTo(0.5, 6), expect.closeTo(0.5, 6)]);
+    expectPartsOfWhole(smooth.model);
+    const lines = boxThroughLineChoices(TETRAHEDRON).ABC ?? [];
+    expect(lines.find(({ line }) => line.join('') === 'AB')?.pointEdges.map((edge) => edge.join(''))).toEqual(['SC']);
+    // S and C, the ends, give the faces SAB and ABC: the usable points lie strictly between them.
+    const range = boxPointRange(TETRAHEDRON, SCALE, 'ABC', ['A', 'B'], ['S', 'C']) as BoxPointRange;
+    expect(range.min).toBeGreaterThan(0);
+    expect(range.max).toBeLessThan(100);
+    expectPartsOfWhole(generateModel(kernel, spec(TETRAHEDRON, section, { type: 'magnet', ...DEFAULT_MAGNET, count: 1 })));
+  });
+
+  it('through the pyramid’s height SH and a lateral edge SV of an oblique pyramid, H being the apex’s own foot', () => {
+    const shape = pyramid(4, 1.2, 0.35, -0.2);
+    const vertices = boxVertices(shape, SCALE);
+    const foot: Vec3 = [vertices.S[0], vertices.S[1], 0];
+    expect(Math.hypot(foot[0], foot[1])).toBeGreaterThan(1);
+    const plane = boxPlane(vertices, apex({ trace: 'height-edge', traceVertex: 'B' }) as BoxSectionSpec);
+    for (const point of [vertices.S, vertices.B, foot]) expect(holds(plane, point)).toBe(true);
+    // Not the centre of the base: the plane misses it.
+    expect(holds(plane, [0, 0, 0])).toBe(false);
+    expectPartsOfWhole(generateModel(kernel, spec(shape, apex({ trace: 'height-edge', traceVertex: 'B' }))));
+  });
+
+  it('through the apex at an angle: a triangle of S and the trace’s ends, wherever the trace crosses the base', () => {
+    const shape = pyramid(5, 1, 0.3, 0.2);
+    const bounds = boxApexPositionBounds(shape, SCALE, 30) as { min: number; max: number };
+    for (const positionPercent of [bounds.min + 1, 50, bounds.max - 1]) {
+      const { model, section } = sectionOf(shape, apex({ trace: 'angle', traceAngleDeg: 30, positionPercent }));
+      expect(section.contour).toHaveLength(3);
+      expect(near(section.contour, boxVertices(shape, SCALE).S)).toBe(true);
+      expectPartsOfWhole(model);
+    }
+  });
+
+  it('parallel to opposite edges at half way: a square of side a/2 in the tetrahedron, a parallelogram in a scalene pyramid', () => {
+    const half = {
+      type: 'inclined',
+      inclinationDeg: 0,
+      directionDeg: 0,
+      parallelTo: [
+        ['S', 'C'],
+        ['A', 'B'],
+      ],
+      positionPercent: 50,
+    };
+    const regular = sectionOf(TETRAHEDRON, half);
+    const edge = distance(boxVertices(TETRAHEDRON, SCALE).A, boxVertices(TETRAHEDRON, SCALE).B);
+    const sides = (contour: readonly Vec3[]) =>
+      contour.map((point, index) => distance(point, contour[(index + 1) % contour.length] as Vec3));
+    expect(regular.section.contour).toHaveLength(4);
+    for (const side of sides(regular.section.contour)) expect(side).toBeCloseTo(edge / 2, 6);
+    const [p, q, r] = regular.section.contour as [Vec3, Vec3, Vec3];
+    const angle = [0, 1, 2].reduce(
+      (sum, axis) => sum + ((p[axis] as number) - (q[axis] as number)) * ((r[axis] as number) - (q[axis] as number)),
+      0,
+    );
+    expect(angle).toBeCloseTo(0, 6);
+    expectPartsOfWhole(regular.model);
+    // In general a parallelogram: opposite sides equal and parallel, adjacent ones neither equal nor perpendicular.
+    const general = sectionOf(SCALENE, half);
+    expect(general.section.contour).toHaveLength(4);
+    const [a, b, c, d] = sides(general.section.contour) as [number, number, number, number];
+    expect(a).toBeCloseTo(c, 6);
+    expect(b).toBeCloseTo(d, 6);
+    expect(Math.abs(a - b)).toBeGreaterThan(1);
+    // The plane stays parallel to both edges as the pyramid changes.
+    for (const shape of [SCALENE, { ...SCALENE, heightRatio: 2, apexXRatio: -0.4 }]) {
+      const vertices = boxVertices(shape as never, SCALE);
+      const plane = boxPlane(vertices, half as BoxSectionSpec);
+      for (const [from, to] of [
+        ['S', 'C'],
+        ['A', 'B'],
+      ] as const) {
+        const direction = [0, 1, 2].map((axis) => (vertices[to][axis] as number) - (vertices[from][axis] as number));
+        expect(plane.normal.reduce((sum, value, axis) => sum + value * (direction[axis] as number), 0)).toBeCloseTo(0, 9);
+      }
+    }
+  });
+
+  it('cuts a tetrahedron in triangles or quadrilaterals only', () => {
+    for (const inclinationDeg of [0, 20, 45, 70, 90]) {
+      for (const directionDeg of [0, 50, 100, 200, 300]) {
+        for (const positionPercent of [20, 50, 80]) {
+          const { section } = sectionOf(TETRAHEDRON, { type: 'inclined', inclinationDeg, directionDeg, positionPercent });
+          expect([3, 4]).toContain(section.contour.length);
+        }
+      }
+    }
+  });
+
+  it('two parallel planes of a pyramid with magnets: three closed parts of the whole, both interfaces fitted', () => {
+    const model = generateModel(
+      kernel,
+      spec(
+        pyramid(4, 1.3, 0.2, 0.1),
+        { type: 'face-parallel', positionPercent: 20, secondPositionPercent: 50 },
+        {
+          type: 'magnet',
+          ...DEFAULT_MAGNET,
+          count: 1,
+        },
+      ),
+    );
+    expect(model.solids.map((solid) => solid.part)).toEqual(['lower', 'middle', 'upper']);
+    expect(model.section?.secondInterface?.connector).toBeDefined();
+    expectPartsOfWhole(model);
+  });
+
+  it('keeps every plane through the apex through S and its line as the pyramid changes', () => {
+    for (const shape of [pyramid(4), pyramid(4, 2, -0.3, 0.4), pyramid(4, 0.6, 0.5, 0)]) {
+      const vertices = boxVertices(shape, SCALE);
+      const plane = boxPlane(vertices, apex({ trace: 'diagonal', traceSegment: ['B', 'D'] }) as BoxSectionSpec);
+      for (const point of [vertices.S, vertices.B, vertices.D]) expect(holds(plane, point)).toBe(true);
+    }
+  });
+
+  it('refuses what a pyramid does not have, and a pyramid’s own sections on a prism', () => {
+    for (const section of [
+      { type: 'face-parallel', face: 'A1B1C1', positionPercent: 50 },
+      apex({ trace: 'diagonal', traceSegment: ['A', 'C'] }),
+      { type: 'longitudinal', trace: 'angle', traceAngleDeg: 0, positionPercent: 50 },
+      {
+        type: 'inclined',
+        inclinationDeg: 0,
+        directionDeg: 0,
+        parallelTo: [
+          ['S', 'A'],
+          ['S', 'B'],
+        ],
+        positionPercent: 50,
+      },
+    ]) {
+      expect(() => generateModel(kernel, spec(TETRAHEDRON, section))).toThrow(InvalidModelSpecError);
+    }
+    expect(() =>
+      generateModel(
+        kernel,
+        spec(
+          { kind: 'prism', baseType: 'regular', baseSides: 3, heightRatio: 1, offsetXRatio: 0, offsetYRatio: 0 },
+          apex({ trace: 'angle' }),
+        ),
+      ),
+    ).toThrow(InvalidModelSpecError);
   });
 });

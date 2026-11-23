@@ -302,13 +302,6 @@ describe('releases Manifold objects', () => {
       scale: { longestDimensionMm: 80 },
     },
   } as const satisfies Record<string, ModelSpecInput>;
-  // Pyramids: extrude, scale; with a displaced apex, extrude, shear, scale.
-  const polyhedra: readonly (readonly [string, ModelSpecInput, number])[] = [
-    ['triangle pyramid', pyramids.triangle, 2],
-    ['pyramid with a displaced apex', pyramids.displaced, 3],
-    ['pyramid', defaultModelSpecs.pyramid, 2],
-    ['tetrahedron', defaultModelSpecs.tetrahedron, 2],
-  ];
   // Built by manifold-3d at their physical size: cylinders and cones in one step, the ball as sphere and translate.
   const obliqueRound = {
     cylinder: { shape: { kind: 'cylinder', heightRatio: 1, offsetRatio: 1.5 }, scale: { longestDimensionMm: 80 } },
@@ -324,6 +317,10 @@ describe('releases Manifold objects', () => {
   ];
   // The convex hull of their vertices in millimetres, in one step.
   const hulls: readonly (readonly [string, ModelSpecInput, number])[] = [
+    ['triangle pyramid', pyramids.triangle, 1],
+    ['pyramid with a displaced apex', pyramids.displaced, 1],
+    ['pyramid', defaultModelSpecs.pyramid, 1],
+    ['tetrahedron', defaultModelSpecs.tetrahedron, 1],
     ['prism', defaultModelSpecs.prism, 1],
     ['oblique prism', oblique.prism, 1],
     ['triangle prism', triangle.right, 1],
@@ -338,7 +335,7 @@ describe('releases Manifold objects', () => {
     ['icosahedron', defaultModelSpecs.icosahedron, 1],
     ['dodecahedron', defaultModelSpecs.dodecahedron, 1],
   ];
-  const solids = [...polyhedra, ...curvedSolids, ...hulls];
+  const solids = [...curvedSolids, ...hulls];
 
   it.each(solids)('after successful generation of a %s', (_, spec, objects) => {
     const { created } = trackCreatedManifolds();
@@ -355,19 +352,19 @@ describe('releases Manifold objects', () => {
     expect(created.every(isDeleted)).toBe(true);
   });
 
-  it.each(polyhedra)('when a kernel operation throws midway through a %s', (_, spec, objects) => {
+  it('when a kernel operation throws midway through a ball, after its sphere', () => {
     const { created, prototype } = trackCreatedManifolds();
-    vi.spyOn(prototype, 'scale').mockImplementation(() => {
+    vi.spyOn(prototype, 'translate').mockImplementation(() => {
       throw new Error('out of memory');
     });
-    expect(() => generateModel(kernel, spec)).toThrow('out of memory');
-    expect(created).toHaveLength(objects - 1);
+    expect(() => generateModel(kernel, defaultModelSpecs.ball)).toThrow('out of memory');
+    expect(created).toHaveLength(1);
     expect(created.every(isDeleted)).toBe(true);
   });
 
   it.each([
     ['an oblique cone', obliqueRound.cone],
-    ['a pyramid with a displaced apex', pyramids.displaced],
+    ['an oblique cylinder', obliqueRound.cylinder],
   ])('when the shear of %s throws', (_, spec) => {
     const { created, prototype } = trackCreatedManifolds();
     vi.spyOn(prototype, 'transform').mockImplementation(() => {

@@ -246,7 +246,7 @@ test('reset: one click recovers from an invalid draft in a prism field and leave
 
 test('reset: solids without parameters of their own offer no reset, whatever the size', async ({ page }) => {
   await page.goto('/');
-  for (const label of ['Додекаедр', 'Правильний тетраедр']) {
+  for (const label of ['Додекаедр', 'Ікосаедр']) {
     await shapeSelect(page).selectOption({ label });
     await expect(sizeField(page)).toBeVisible();
     await expect(resetButton(page)).toHaveCount(0);
@@ -255,9 +255,11 @@ test('reset: solids without parameters of their own offer no reset, whatever the
   await expect(sizeField(page)).toHaveValue('40');
   await expect(resetButton(page)).toHaveCount(0);
   await expect(page.getByRole('button', { name: /Скинути/ })).toHaveCount(0);
-  // The cube has a section of its own to reset, but a new size alone is nothing to reset.
+  // The cube and the tetrahedron have a section of their own to reset, but a new size alone is nothing to reset.
   await shapeSelect(page).selectOption({ label: 'Куб' });
   await expectPreviewOf(page, 'Куб · 40 × 40 × 40 мм');
+  await expect(resetButton(page)).toBeDisabled();
+  await shapeSelect(page).selectOption({ label: 'Правильний тетраедр' });
   await expect(resetButton(page)).toBeDisabled();
 });
 

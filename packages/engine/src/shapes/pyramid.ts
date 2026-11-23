@@ -1,9 +1,6 @@
 import { type PhysicalScale, type PyramidShape, TETRAHEDRON_HEIGHT_RATIO, type TetrahedronShape } from '@diploma-3d/schema';
-import type { Manifold } from 'manifold-3d';
-import type { GeometryKernel } from '../kernel.ts';
-import type { Track } from '../scope.ts';
 import { type BaseSides, baseSidesMm, baseVertices } from './base.ts';
-import { buildPyramid, type PyramidDimensions, type PyramidProportions, pyramidDimensionsMm } from './pyramid-geometry.ts';
+import { type PyramidDimensions, type PyramidProportions, pyramidDimensionsMm } from './pyramid-geometry.ts';
 
 /**
  * The regular tetrahedron as a pyramid: the equilateral triangle with the apex above its centroid at h = a·√(2/3), so
@@ -33,14 +30,4 @@ export interface PyramidShapeDimensions extends PyramidDimensions {
 export function pyramidShapeDimensionsMm(shape: PyramidShape | TetrahedronShape, scale: PhysicalScale): PyramidShapeDimensions {
   const dimensions = pyramidDimensionsMm(pyramidShapeProportions(shape), scale);
   return { ...dimensions, sides: baseSidesMm(asPyramid(shape), dimensions.edge) };
-}
-
-/** The pyramid in millimetres, with the base centroid at the origin and the base in z = 0. */
-export function buildPyramidShape(
-  kernel: GeometryKernel,
-  track: Track,
-  shape: PyramidShape | TetrahedronShape,
-  scale: PhysicalScale,
-): Manifold {
-  return buildPyramid(kernel, track, pyramidShapeProportions(shape), scale);
 }

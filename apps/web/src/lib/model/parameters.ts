@@ -8,6 +8,8 @@ import {
   ballOffsetLimitPercent,
   ballRadiusMm,
   ballSliceMinimumMm,
+  boxApexPointRange,
+  boxApexPositionBounds,
   boxFaceParallelPercent,
   boxLineAngleBounds,
   boxPartMinimumMm,
@@ -65,8 +67,10 @@ import {
   BALL_OFFSET_LIMITS,
   BASE_ANGLE_LIMITS,
   BASE_SHIFT_LIMITS,
+  BOX_SECTION_TYPES,
   type BoxSectionSpec,
   type BoxSegment,
+  type BoxVertex,
   baseAngleSchema,
   baseShiftSchema,
   type ConeShape,
@@ -109,6 +113,7 @@ import {
   offsetRatioSchema,
   type PrismBaseSides,
   type PrismBaseType,
+  PYRAMID_APEX,
   type PyramidBaseSides,
   type PyramidBaseType,
   RATIO_LIMITS,
@@ -148,6 +153,8 @@ import {
   initialBoxChoices,
   isBoxSolid,
   normalSelection,
+  pairOf,
+  pairSelection,
   segmentKey,
   segmentName,
   throughLineSelection,
@@ -317,10 +324,9 @@ const magnetTexts = (solid: MagnetSolid) =>
 export type ParameterTexts = Record<ParameterKey, string>;
 
 /** A plane section of the solid, or none; a plane through a cone's apex is an oblique one, with its own further choice. */
-export type SectionChoice = 'none' | Exclude<SectionType, 'oblique-apex'>;
+export type SectionChoice = 'none' | SectionType;
 
 /** What a cone's oblique plane passes through. */
-export type ObliqueThrough = 'axis' | 'apex';
 
 /** A connector joining the parts of the section, or flat cut faces. */
 export type ConnectorChoice = 'none' | ConnectorType;
@@ -350,7 +356,6 @@ export type ParameterChoices = {
   conePartsSeparated: boolean;
   /** Whether a cut parallel to the base removes a section plate, printed as a third object between the parts. */
   conePlate: boolean;
-  coneObliqueThrough: ObliqueThrough;
   /** Whether a plane through the apex has its first valid angle yet, which depends on the cone when it is first chosen. */
   coneApexStarted: boolean;
   /** Whether a plane through the apex is held to the cone's axis, its angle following from the cone and the direction. */
@@ -570,6 +575,7 @@ const boxTexts = (solid: BoxSolid): Record<BoxNumberKey, string> => {
     TraceAngleDeg: 0,
     LineAngleDeg: BOX_LINE_ANGLE_PLACEHOLDER_DEG,
     PointPercent: 50,
+    TracePointPercent: 50,
     PlaneInclinationDeg: DEFAULT_OBLIQUE_SECTION.inclinationDeg,
     PlaneDirectionDeg: DEFAULT_OBLIQUE_SECTION.directionDeg,
     DovetailSize: DEFAULT_DOVETAIL.sizeFactor,
@@ -613,7 +619,6 @@ export const initialParameterChoices = (): ParameterChoices => ({
   coneRoundProfile: DEFAULT_CONNECTOR_PROFILE,
   conePartsSeparated: true,
   conePlate: false,
-  coneObliqueThrough: 'axis',
   coneApexStarted: false,
   coneApexAxial: false,
   ballSection: 'none',
@@ -793,6 +798,8 @@ const boxValidators = (solid: BoxSolid): Record<BoxNumberKey, (text: string, exa
     TraceAngleDeg: angleWithin({ min: 0, max: 180 }, '30'),
     LineAngleDeg: validateLineAngle,
     PointPercent: (text, exact) =>
+      validateNumber(text, inclusiveRange({ min: 0, max: 100 }), { min: 0, max: 100 }, '50', ' %', exact),
+    TracePointPercent: (text, exact) =>
       validateNumber(text, inclusiveRange({ min: 0, max: 100 }), { min: 0, max: 100 }, '50', ' %', exact),
     PlaneInclinationDeg: angleWithin({ min: 0, max: 90 }, '45'),
     PlaneDirectionDeg: validateObliqueDirection,
@@ -1171,7 +1178,7 @@ function boxFirstPercent(kind: BoxSolid, choices: ParameterChoices, values: Para
   const keys = boxKeysOf(kind);
   const type = activeSection(kind, choices);
   if (type === undefined || !isBoxSectionType(type)) return undefined;
-  if (type !== 'through-line') return values[keys.SectionPercent];
+  if (type === 'face-parallel' || type === 'longitudinal' || type === 'inclined') return values[keys.SectionPercent];
   const context = boxContextFrom(kind, values, choices);
   const { shape } = context;
   const fields = boxModeKeys(keys, type, choices, context);
@@ -1187,7 +1194,7 @@ function boxFirstPercent(kind: BoxSolid, choices: ParameterChoices, values: Para
 
 /** Whether a section is one of a cube's or parallelepiped's modes. */
 export const isBoxSectionType = (type: SectionType): type is BoxSectionSpec['type'] =>
-  type === 'face-parallel' || type === 'longitudinal' || type === 'through-line' || type === 'inclined';
+  (BOX_SECTION_TYPES as readonly string[]).includes(type);
 
 /** The state with the longitudinal plane through its trace's line again, after its position was moved off it. */
 export function traceThrough(kind: ShapeKind, state: ParameterState): ParameterState {
@@ -1248,15 +1255,16 @@ export function normalAlongLateral(kind: ShapeKind, state: ParameterState): Para
 /** The state with an inclined plane given by its angles again; `followNormal` sets them to the plane it was. */
 export function normalAlongManual(kind: ShapeKind, state: ParameterState): ParameterState {
   if (!isBoxSolid(kind)) return state;
-  return { ...state, choices: { ...state.choices, [boxKeysOf(kind).NormalAlong]: 'none' } };
+  const keys = boxKeysOf(kind);
+  return { ...state, choices: { ...state.choices, [keys.NormalAlong]: 'none', [keys.ParallelEdges]: 'none' } };
 }
 
 // A normal this close to vertical makes the plane horizontal, whose direction of rise does not exist.
 const VERTICAL_NORMAL_ROUNDOFF = 1e-12;
 
 /**
- * An inclined plane perpendicular to a segment that is given by its angles again stays the very plane it was, both planes of a
- * second cut with it: its angles are read off its current normal n, from `obliqueAxes`, n = (−sin α cos φ, −sin α sin φ, cos α)
+ * An inclined plane perpendicular to a segment, or parallel to a pair of opposite edges, that is given by its angles again stays
+ * the very plane it was, both planes of a second cut with it: its angles are read off its current normal n, from `obliqueAxes`, n = (−sin α cos φ, −sin α sin φ, cos α)
  * with n turned upwards, so that α = arccos n_z ≤ 90° and φ = atan2(−n_y, −n_x); the positions are kept along n, or measured
  * from the other side, 100 − p, where n had to turn, as the extent along −n is the same one reversed. A horizontal plane, α = 0,
  * rises in no direction: the direction field keeps its value, which does not change the plane. The angles' full values are kept
@@ -1270,17 +1278,21 @@ export function followNormal(kind: ShapeKind, state: ParameterState, values: Par
   const { choices } = state;
   if (activeSection(kind, choices) !== 'inclined') return undefined;
   const context = boxContextFrom(kind, values, choices);
-  const along = normalSelection(keys, choices, context);
+  const pair = pairSelection(keys, choices, context);
+  const along = pair === 'none' ? normalSelection(keys, choices, context) : pair;
   const from = choices[keys.NormalFrom];
   if (along !== 'none') return from === along ? undefined : { ...state, choices: { ...choices, [keys.NormalFrom]: along } };
   if (from === '') return undefined;
   const { shape } = context;
   const position = values[keys.SectionPercent];
   if (shape === undefined || values.printSizeMm === undefined || position === undefined) return undefined;
+  const constraint = from.includes('|')
+    ? { [keys.NormalAlong]: 'none', [keys.ParallelEdges]: from }
+    : { [keys.NormalAlong]: from, [keys.ParallelEdges]: 'none' };
   const spec = boxSectionOf(
     keys,
     'inclined',
-    { ...choices, [keys.NormalAlong]: from },
+    { ...choices, ...constraint } as ParameterChoices,
     (key) => values[key] as number,
     false,
     context,
@@ -1309,6 +1321,77 @@ export function followNormal(kind: ShapeKind, state: ParameterState, values: Par
     if (second !== undefined) show(keys.SectionSecondPercent, 100 - second);
   }
   return { ...state, texts, exact, choices: { ...choices, [keys.NormalFrom]: '' } };
+}
+
+/**
+ * The position of a plane parallel to a pair of opposite edges through H, the foot of the pyramid's height, d = n·H: for the
+ * fields, in percent of the extent along the plane's normal; undefined while the plane is not valid.
+ */
+export function heightFootPercent(kind: ShapeKind, choices: ParameterChoices, values: ParameterValues): number | undefined {
+  if (!isBoxSolid(kind) || activeSection(kind, choices) !== 'inclined') return undefined;
+  const keys = boxKeysOf(kind);
+  const context = boxContextFrom(kind, values, choices);
+  const pair = pairSelection(keys, choices, context);
+  if (pair === 'none' || context.shape === undefined || values.printSizeMm === undefined) return undefined;
+  const vertices = boxVertices(context.shape, { longestDimensionMm: values.printSizeMm });
+  const plane = boxPlane(vertices, {
+    type: 'inclined',
+    inclinationDeg: 0,
+    directionDeg: 0,
+    parallelTo: pairOf(pair),
+    positionPercent: 50,
+  });
+  const [x, y] = vertices[PYRAMID_APEX];
+  const foot = plane.normal[0] * x + plane.normal[1] * y;
+  return (100 * (foot - plane.extent.min)) / (plane.extent.max - plane.extent.min);
+}
+
+/** The state with the plane parallel to the pair of opposite edges through the foot of the pyramid's height, see above. */
+export function throughHeightFoot(kind: ShapeKind, state: ParameterState, values: ParameterValues): ParameterState {
+  const percent = heightFootPercent(kind, state.choices, values);
+  if (percent === undefined || !isBoxSolid(kind)) return state;
+  const key = boxKeysOf(kind).SectionPercent;
+  return { ...state, texts: { ...state.texts, [key]: formatDecimal(percent) }, exact: { ...state.exact, [key]: percent } };
+}
+
+/** The state with the point of a plane through a pyramid's lateral edge at the middle of its base edge. */
+export function tracePointAtMidpoint(kind: ShapeKind, state: ParameterState): ParameterState {
+  if (!isBoxSolid(kind)) return state;
+  const keys = boxKeysOf(kind);
+  const exact = { ...state.exact };
+  delete exact[keys.TracePointPercent];
+  return { ...state, texts: { ...state.texts, [keys.TracePointPercent]: '50' }, exact };
+}
+
+/**
+ * A point of a base edge for a plane through a pyramid's lateral edge, on a newly chosen edge, stays where it is when it gives a
+ * usable plane there, and otherwise moves to the edge's midpoint or the middle of its usable positions, as `startPoint` does.
+ */
+export function startTracePoint(kind: ShapeKind, state: ParameterState, values: ParameterValues): ParameterState | undefined {
+  if (!isBoxSolid(kind)) return undefined;
+  const keys = boxKeysOf(kind);
+  const { choices } = state;
+  if (activeSection(kind, choices) !== 'through-apex') return undefined;
+  const context = boxContextFrom(kind, values, choices);
+  const { kind: trace, vertex, segment } = traceSelection(keys, choices, context);
+  if (trace !== 'edge-point' || vertex === undefined || segment === undefined) return undefined;
+  const marker = `apex:${vertex}:${segmentKey(segment)}`;
+  if (choices[keys.PointFor] === marker) return undefined;
+  const { shape } = context;
+  if (shape === undefined || values.printSizeMm === undefined) return undefined;
+  const range = boxApexPointRange(shape, { longestDimensionMm: values.printSizeMm }, vertex, segment);
+  const next = { ...state, choices: { ...choices, [keys.PointFor]: marker } };
+  if (range === null) return next;
+  const allowed = pointInterval(range);
+  const current = values[keys.TracePointPercent];
+  const within = (percent: number) =>
+    percent >= allowed.min - CONSTRAINT_ROUNDOFF_MM && percent <= allowed.max + CONSTRAINT_ROUNDOFF_MM;
+  if (current !== undefined && within(current)) return next;
+  const grid = planeAngleRange(allowed, POINT_PERCENT_INCREMENT);
+  const start = within(50) ? 50 : snapDecimal((grid.min + grid.max) / 2, grid);
+  const exact = { ...state.exact };
+  delete exact[keys.TracePointPercent];
+  return { ...next, texts: { ...state.texts, [keys.TracePointPercent]: formatSteppedDecimal(start) }, exact };
 }
 
 /** The state with the point of a plane through a line at the middle of its edge. */
@@ -1366,6 +1449,22 @@ function representFace(kind: BoxSolid, state: ParameterState, values: ParameterV
 }
 
 /**
+ * An inclined plane is perpendicular to a segment or parallel to a pair of opposite edges, not both: of two chosen at once, the
+ * one just chosen, unlike the constraint remembered in NormalFrom, stays, and the other is cleared; one the solid does not have
+ * is cleared too, see `normalSelection` and `pairSelection`.
+ */
+function constraintSettled(keys: BoxKeysOf, choices: ParameterChoices, context: ReturnType<typeof boxContextFrom>) {
+  const along = normalSelection(keys, choices, context);
+  const pair = pairSelection(keys, choices, context);
+  if (along !== 'none' && pair !== 'none') {
+    return choices[keys.NormalFrom] === pair
+      ? { [keys.NormalAlong]: along, [keys.ParallelEdges]: 'none' as const }
+      : { [keys.NormalAlong]: 'none' as const, [keys.ParallelEdges]: pair };
+  }
+  return { [keys.NormalAlong]: along, [keys.ParallelEdges]: pair };
+}
+
+/**
  * The choices of a box's planes that the fields offer, for the solid's current base, all replaced together before any model is
  * made of them; undefined when they are all offered. A face, a line, a vertex or a segment that the solid no longer has, as when
  * a prism's base changes, gives way as the fields' own lists do, see `faceSelection`, `traceSelection` and
@@ -1390,7 +1489,7 @@ export function settleBoxChoices(kind: ShapeKind, state: ParameterState, values:
     [keys.Trace]: trace.kind,
     ...(trace.segment === undefined ? {} : { [keys.TraceSegment]: segmentKey(trace.segment) }),
     ...(trace.vertex === undefined ? {} : { [keys.TraceVertex]: trace.vertex }),
-    [keys.NormalAlong]: normalSelection(keys, choices, context),
+    ...constraintSettled(keys, choices, context),
   };
   if (Object.entries(settled).every(([key, value]) => choices[key as keyof typeof choices] === value)) return undefined;
   return { ...state, choices: { ...choices, ...settled } };
@@ -1844,8 +1943,25 @@ function sectionChecks(
 type BoxSection = Extract<Section, { type: BoxSectionSpec['type'] }>;
 
 /** The field that moves a box's plane: its position, or for a plane through a line its angle or its point. */
-const boxPlaneField = (box: BoxKeysOf, section: BoxSection) =>
-  section.type !== 'through-line' ? box.SectionPercent : section.method === 'angle' ? box.LineAngleDeg : box.PointPercent;
+/**
+ * The field that moves a box's plane: its position, for a plane through a line its angle or its point, for one through a
+ * pyramid's apex its trace's position or point; a plane through the apex and a line of the base has no field of its own, and
+ * only the model's size can make it fit.
+ */
+const boxPlaneField = (box: BoxKeysOf, section: BoxSection): ParameterKey => {
+  switch (section.type) {
+    case 'through-line':
+      return section.method === 'angle' ? box.LineAngleDeg : box.PointPercent;
+    case 'through-apex':
+      return section.trace === 'angle'
+        ? box.SectionPercent
+        : section.trace === 'edge-point'
+          ? box.TracePointPercent
+          : 'printSizeMm';
+    default:
+      return box.SectionPercent;
+  }
+};
 
 /**
  * A cube's or parallelepiped's plane: an angle about a line within those that leave both parts usable, a point off the line,
@@ -1885,6 +2001,55 @@ function boxChecks(
           [field]:
             `За цього кута одна з частин була б надто тонкою. Для прямої ${name} допустимо від ${formatDecimal(shown.min)}° ` +
             `до ${formatDecimal(shown.max)}°.`,
+        },
+        ranges,
+      };
+    }
+  }
+  if (section.type === 'through-apex' && section.trace === 'angle') {
+    // The trace's position across the base, which keeps the plane through the apex: its own range, not the extent along n.
+    const bounds = boxApexPositionBounds(shape, scale, section.traceAngleDeg);
+    ranges[box.SectionPercent] = bounds;
+    const percent = section.positionPercent;
+    if (bounds === null || percent < bounds.min - CONSTRAINT_ROUNDOFF_MM || percent > bounds.max + CONSTRAINT_ROUNDOFF_MM) {
+      return {
+        errors: {
+          [field]:
+            bounds === null
+              ? 'За жодного положення сліду площина через вершину не лишає обом частинам придатної товщини: збільште модель.'
+              : `За цього положення сліду одна з частин була б надто тонкою. Допустимо від ${formatDecimal(Math.ceil(bounds.min * 10) / 10)} % ` +
+                `до ${formatDecimal(Math.floor(bounds.max * 10) / 10)} %.`,
+        },
+        ranges,
+      };
+    }
+  }
+  if (section.type === 'through-apex' && section.trace === 'edge-point') {
+    const vertex = section.traceVertex as BoxVertex;
+    const edge = section.traceSegment as BoxSegment;
+    const range = boxApexPointRange(shape, scale, vertex, edge);
+    const interval = range === null ? null : pointInterval(range);
+    ranges[box.TracePointPercent] = interval;
+    const percent = section.tracePointPercent as number;
+    const lateral = segmentName([PYRAMID_APEX, vertex]);
+    if (range === null || interval === null) {
+      return {
+        errors: {
+          [field]: `Жодна точка ребра ${segmentName(edge)} не дає з ${lateral} площини, що лишає обом частинам придатну товщину. Збільште модель.`,
+        },
+        ranges,
+      };
+    }
+    if (percent < interval.min - CONSTRAINT_ROUNDOFF_MM || percent > interval.max + CONSTRAINT_ROUNDOFF_MM) {
+      const end =
+        (range.minOpen && percent <= range.min + CONSTRAINT_ROUNDOFF_MM) ||
+        (range.maxOpen && percent >= range.max - CONSTRAINT_ROUNDOFF_MM);
+      return {
+        errors: {
+          [field]: end
+            ? `Ця точка лежить на прямій ${lateral} або дає грань піраміди, тож перерізу немає. Пересуньте точку.`
+            : `За цього положення точки одна з частин була б надто тонкою. На ребрі ${segmentName(edge)} допустимо від ` +
+              `${formatDecimal(Math.ceil(interval.min * 10) / 10)} % до ${formatDecimal(Math.floor(interval.max * 10) / 10)} %.`,
         },
         ranges,
       };
@@ -1937,7 +2102,8 @@ function boxChecks(
   const least = boxPartMinimumMm(plane.extent);
   const edge = Math.max(SECTION_POSITION_LIMITS.min, (100 * least) / span);
   const allowed = edge <= 50 ? { min: edge, max: 100 - edge } : null;
-  if (section.type !== 'through-line') ranges[box.SectionPercent] = allowed;
+  // A plane through a line or through the apex is placed by its own fields; the others by their position along n.
+  if (section.type !== 'through-line' && section.type !== 'through-apex') ranges[box.SectionPercent] = allowed;
   const allowedText = (shown: Interval | null) =>
     shown === null
       ? 'Модель замала для двох придатних частин уздовж цього напряму: збільште її.'
@@ -1948,9 +2114,9 @@ function boxChecks(
     return {
       errors: {
         [field]:
-          section.type === 'through-line'
+          section.type === 'through-line' || section.type === 'through-apex'
             ? `Тонша частина сягає від площини лише ${millimetres(reach.valueMm)}, потрібно щонайменше ` +
-              `${millimetres(reach.minimumMm)}. Пересуньте точку, виберіть інше ребро або збільште модель.`
+              `${millimetres(reach.minimumMm)}. Змініть побудову або збільште модель.`
             : allowedText(allowed),
       },
       ranges,
@@ -2461,8 +2627,8 @@ function apexChecks(
  * not valid yet, and for a state that has its plane already; a cone too small for any plane keeps the default.
  */
 export function startApexSection(state: ParameterState, values: ParameterValues): ParameterState | undefined {
-  const { coneSection, coneObliqueThrough, coneApexStarted } = state.choices;
-  if (coneSection !== 'oblique' || coneObliqueThrough !== 'apex' || coneApexStarted) return undefined;
+  const { coneSection, coneApexStarted } = state.choices;
+  if (coneSection !== 'oblique-apex' || coneApexStarted) return undefined;
   const { printSizeMm, coneHeightRatio, coneOffsetRatio } = values;
   if (printSizeMm === undefined || coneHeightRatio === undefined || coneOffsetRatio === undefined) return undefined;
   const directionDeg = DEFAULT_OBLIQUE_SECTION.directionDeg;
@@ -2572,6 +2738,8 @@ function jointChecks(
       'face-parallel': keys.offset,
       longitudinal: keys.offset,
       inclined: keys.offset,
+      'through-apex':
+        keys.box !== undefined && section.type === 'through-apex' ? boxPlaneField(keys.box, section as BoxSection) : keys.offset,
       'through-line':
         keys.box !== undefined && section.type === 'through-line' ? boxPlaneField(keys.box, section as BoxSection) : keys.offset,
     };
@@ -2616,7 +2784,7 @@ const wordingOf = (cut: CutWording): 'vertical' | 'oblique' | 'parallel-to-bases
 
 /** A box's own cut type, which its messages read as an oblique cut's; see `cutWordingOf` for its horizontal planes. */
 const isBoxCutWording = (cut: CutWording): cut is BoxSectionSpec['type'] =>
-  cut === 'face-parallel' || cut === 'longitudinal' || cut === 'through-line' || cut === 'inclined';
+  (BOX_SECTION_TYPES as readonly string[]).includes(cut);
 
 /** A part as the messages name it: by its place in a parallel cut, by its number in the others, where it has no place. */
 function partInMessage(part: 'lower' | 'upper', cut: CutWording): string {
@@ -2991,6 +3159,8 @@ export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys | Plana
   cuboid: boxSectionKeys('cuboid'),
   parallelepiped: boxSectionKeys('parallelepiped'),
   prism: boxSectionKeys('prism'),
+  pyramid: boxSectionKeys('pyramid'),
+  tetrahedron: boxSectionKeys('tetrahedron'),
   ball: {
     choice: 'ballSection',
     offset: 'ballSectionOffsetPercent',
@@ -3131,8 +3301,7 @@ export function activeConnector(kind: ShapeKind, choices: ParameterChoices): Con
 export function activeSection(kind: ShapeKind, choices: ParameterChoices): SectionType | undefined {
   const keys = sectionKeys[kind];
   const choice = keys === undefined ? 'none' : choices[keys.choice];
-  if (choice === 'none') return undefined;
-  return kind === 'cone' && choice === 'oblique' && choices.coneObliqueThrough === 'apex' ? 'oblique-apex' : choice;
+  return choice === 'none' ? undefined : choice;
 }
 
 /**
@@ -3190,6 +3359,7 @@ function resolveSection(
     'axis-parallel': planar?.axisParallel === undefined ? [] : [...Object.values(planar.axisParallel), ...plateFields],
     'face-parallel': boxFields('face-parallel'),
     longitudinal: boxFields('longitudinal'),
+    'through-apex': boxFields('through-apex'),
     'through-line': boxFields('through-line'),
     inclined: boxFields('inclined'),
   };
@@ -3519,10 +3689,11 @@ export const shapeParameterKeys: Readonly<
       ...pyramidBaseKeys.triangle,
       ...(pyramidBaseKeys.parallelogram ?? []),
       ...pyramidBaseKeys.trapezoid,
+      ...boxParameterTexts('pyramid'),
     ],
-    choices: ['pyramidBaseType', 'pyramidBaseSides'],
+    choices: ['pyramidBaseType', 'pyramidBaseSides', ...boxParameterChoices('pyramid')],
   },
-  tetrahedron: { texts: [], choices: [] },
+  tetrahedron: { texts: boxParameterTexts('tetrahedron'), choices: boxParameterChoices('tetrahedron') },
   octahedron: { texts: [], choices: [] },
   icosahedron: { texts: [], choices: [] },
   dodecahedron: { texts: [], choices: [] },
@@ -3589,7 +3760,6 @@ export const shapeParameterKeys: Readonly<
     ],
     choices: [
       'coneSection',
-      'coneObliqueThrough',
       'coneApexStarted',
       'coneApexAxial',
       'conePartsSeparated',
@@ -3728,19 +3898,29 @@ function inactiveSectionKeys(kind: ShapeKind, choices: ParameterChoices): (keyof
     'parallel-to-bases': planar === undefined ? [] : [planar.position, ...plateFields],
     vertical: [keys.offset, ...plateFields],
     horizontal: [keys.offset, ...secondFields, ...plateFields],
-    oblique: [...obliqueFields, 'coneObliqueThrough', ...plateFields],
-    'oblique-apex': [
-      ...(choices.coneApexAxial ? [coneApexKeys.direction] : apexFields),
-      'coneObliqueThrough',
-      'coneApexAxial',
-      ...plateFields,
-    ],
+    oblique: [...obliqueFields, ...plateFields],
+    'oblique-apex': [...(choices.coneApexAxial ? [coneApexKeys.direction] : apexFields), 'coneApexAxial', ...plateFields],
     'axis-parallel': [...(planar?.axisParallel === undefined ? [] : Object.values(planar.axisParallel)), ...plateFields],
     'face-parallel': box === undefined ? [] : [box.Face, box.SectionPercent, ...secondFields],
     longitudinal:
       box === undefined
         ? []
-        : [box.Trace, ...(choices[box.Trace] === 'angle' ? [box.TraceAngleDeg] : []), box.SectionPercent, ...secondFields],
+        : [
+            box.Trace,
+            ...(choices[box.Trace] === 'angle' ? [box.TraceAngleDeg] : [box.TraceSegment, box.TraceVertex]),
+            box.SectionPercent,
+            ...secondFields,
+          ],
+    'through-apex':
+      box === undefined
+        ? []
+        : [
+            box.Trace,
+            ...(choices[box.Trace] === 'angle'
+              ? [box.TraceAngleDeg, box.SectionPercent]
+              : [box.TraceSegment, box.TraceVertex, ...(choices[box.Trace] === 'edge-point' ? [box.TracePointPercent] : [])]),
+            ...secondFields,
+          ],
     'through-line':
       box === undefined
         ? []
@@ -3756,7 +3936,10 @@ function inactiveSectionKeys(kind: ShapeKind, choices: ParameterChoices): (keyof
         ? []
         : [
             box.NormalAlong,
-            ...(choices[box.NormalAlong] === 'none' ? [box.PlaneInclinationDeg, box.PlaneDirectionDeg] : []),
+            box.ParallelEdges,
+            ...(choices[box.NormalAlong] === 'none' && choices[box.ParallelEdges] === 'none'
+              ? [box.PlaneInclinationDeg, box.PlaneDirectionDeg]
+              : []),
             box.SectionPercent,
             ...secondFields,
           ],

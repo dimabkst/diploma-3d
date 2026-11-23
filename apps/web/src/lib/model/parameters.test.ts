@@ -77,6 +77,7 @@ const boxInitialTexts = (solid: string) => ({
   [`${solid}TraceAngleDeg`]: '0',
   [`${solid}LineAngleDeg`]: '45',
   [`${solid}PointPercent`]: '50',
+  [`${solid}TracePointPercent`]: '50',
   [`${solid}PlaneInclinationDeg`]: '45',
   [`${solid}PlaneDirectionDeg`]: '0',
   [`${solid}DovetailSize`]: '1',
@@ -96,20 +97,21 @@ const boxInitialTexts = (solid: string) => ({
 });
 
 /** Its choices as they start: no section, a plane through the lower base's edge AB by its angle when one is chosen. */
-const boxInitialChoices = (solid: string, base = 'ABCD') => ({
+const boxInitialChoices = (solid: string, base = 'ABCD', pyramid = false) => ({
   [`${solid}Section`]: 'none',
   [`${solid}Face`]: base,
   [`${solid}Trace`]: 'angle',
   [`${solid}TraceSegment`]: 'A-C',
-  [`${solid}TraceVertex`]: 'A',
+  [`${solid}TraceVertex`]: pyramid ? 'C' : 'A',
   [`${solid}TraceThrough`]: false,
   [`${solid}TraceThroughText`]: '',
   [`${solid}TraceFor`]: '',
   [`${solid}LineFace`]: base,
   [`${solid}Line`]: 'A-B',
   [`${solid}LineMethod`]: 'angle',
-  [`${solid}PointEdge`]: 'C-C1',
+  [`${solid}PointEdge`]: pyramid ? 'S-C' : 'C-C1',
   [`${solid}NormalAlong`]: 'none',
+  [`${solid}ParallelEdges`]: 'none',
   [`${solid}NormalFrom`]: '',
   [`${solid}Connector`]: 'none',
   [`${solid}DovetailEntrance`]: 'standard',
@@ -329,6 +331,8 @@ describe('resolveModelRequest', () => {
       ...boxInitialTexts('cuboid'),
       ...boxInitialTexts('parallelepiped'),
       ...boxInitialTexts('prism'),
+      ...boxInitialTexts('pyramid'),
+      ...boxInitialTexts('tetrahedron'),
     });
     expect(initialParameterChoices()).toEqual({
       prismBaseType: 'regular',
@@ -349,7 +353,6 @@ describe('resolveModelRequest', () => {
       coneDovetailEntrance: 'standard',
       coneRoundCount: 1,
       coneRoundProfile: 'flatted-circle',
-      coneObliqueThrough: 'axis',
       coneApexStarted: false,
       coneApexAxial: false,
       ballSection: 'none',
@@ -365,6 +368,9 @@ describe('resolveModelRequest', () => {
       ...boxInitialChoices('parallelepiped'),
       // The initial prism is triangular: its lower base is ABC.
       ...boxInitialChoices('prism', 'ABC'),
+      // The initial pyramid has a square base, the tetrahedron a triangle; a plane through either's apex starts along SC.
+      ...boxInitialChoices('pyramid', 'ABCD', true),
+      ...boxInitialChoices('tetrahedron', 'ABC', true),
     });
     expect(resolveModelRequest('cuboid', initialParameterTexts(), triangle).spec).toEqual({
       shape: { kind: 'cuboid', widthRatio: 1.5, heightRatio: 2 },
@@ -1467,11 +1473,11 @@ describe('a cylinder section parallel to the bases', () => {
   });
 
   it('is chosen per solid, and not offered by solids without sections', () => {
-    for (const kind of ['cone', 'prism', 'pyramid', 'cube'] as const) {
+    for (const kind of ['cone', 'prism', 'pyramid', 'octahedron', 'cube'] as const) {
       expect(resolveModelRequest(kind, texts({}), parallel).spec).not.toHaveProperty('section');
       expect(activeSection(kind, parallel)).toBeUndefined();
     }
-    for (const kind of ['pyramid', 'tetrahedron'] as const) expect(partsSeparated(kind, parallel)).toBe(false);
+    for (const kind of ['octahedron', 'icosahedron'] as const) expect(partsSeparated(kind, parallel)).toBe(false);
     const cone = shapePanel('cone', parallel);
     // The cone's own choice is still "no section": no connector group.
     expect(cone.type === 'parameters' && cone.sections.map((part) => part.title)).toEqual(['Висота', 'Нахил', 'Переріз']);
@@ -2489,6 +2495,7 @@ describe('a section of the cone parallel to its base', () => {
         { value: 'parallel-to-bases', label: 'Паралельно основі' },
         { value: 'vertical', label: 'Вертикальний' },
         { value: 'oblique', label: 'Похилий' },
+        { value: 'oblique-apex', label: 'Через вершину' },
       ],
     });
     expect(sectionNumberFields(cut)).toMatchObject([
@@ -2650,6 +2657,7 @@ describe('a vertical section of the cone', () => {
         { value: 'parallel-to-bases', label: 'Паралельно основі' },
         { value: 'vertical', label: 'Вертикальний' },
         { value: 'oblique', label: 'Похилий' },
+        { value: 'oblique-apex', label: 'Через вершину' },
       ],
     });
     expect(sectionNumberFields(cut)).toMatchObject([
@@ -2777,7 +2785,7 @@ describe('a vertical section of the cone', () => {
 
 describe('an oblique section of the cone', () => {
   const sectioned = { ...triangle, coneSection: 'oblique' } as const;
-  const throughApex = { ...sectioned, coneObliqueThrough: 'apex', coneApexStarted: true } as const;
+  const throughApex = { ...triangle, coneSection: 'oblique-apex', coneApexStarted: true } as const;
   const choose = (coneConnector: 'dovetail' | 'plug' | 'dowel', base: typeof triangle = throughApex, coneRoundCount: 1 | 2 = 1) =>
     ({ ...base, coneConnector, coneRoundCount }) as const;
   const request = (overrides: Partial<ParameterTexts> = {}, choices: typeof triangle = sectioned) =>
@@ -2790,21 +2798,24 @@ describe('an oblique section of the cone', () => {
     return found;
   };
 
-  it('starts through a point on the axis, with the oblique cylinder’s fields, and offers the apex alongside', () => {
+  it('passes through a point on the axis, with the oblique cylinder’s fields; the apex is a section type of its own', () => {
     const result = request();
     expect(result.errors).toEqual({});
     expect(result.spec?.section).toEqual({ type: 'oblique', positionPercent: 50, inclinationDeg: 45, directionDeg: 0 });
     const cut = group(sectioned, 'Переріз');
     expect(cut.status).toEqual({ text: 'похилий', highlighted: true });
-    expect(cut.fields[1]).toMatchObject({
-      type: 'choice',
-      key: 'coneObliqueThrough',
-      label: 'Площина проходить через',
-      options: [
-        { value: 'axis', label: 'Точку на осі' },
-        { value: 'apex', label: 'Вершину' },
-      ],
-    });
+    // No nested choice of what the plane passes through: the point on the axis is all this type has.
+    expect(cut.fields.map((field) => field.key)).not.toContain('coneObliqueThrough');
+    expect((cut.fields[0] as unknown as { options: { label: string }[] }).options.map((option) => option.label)).toEqual([
+      'Без перерізу',
+      'Паралельно основі',
+      'Вертикальний',
+      'Похилий',
+      'Через вершину',
+    ]);
+    const apex = group(throughApex, 'Переріз');
+    expect(apex.status).toEqual({ text: 'через вершину', highlighted: true });
+    expect(apex.fields.map((field) => field.key)).not.toContain('coneObliquePositionPercent');
     expect(sectionNumberFields(cut)).toMatchObject([
       { key: 'coneObliquePositionPercent', suffix: '% h', range: { min: 10, max: 90, increment: 5 } },
       { key: 'coneObliqueInclinationDeg', label: 'Кут до площини основи', suffix: '°', range: { min: 5, max: 85, increment: 5 } },
@@ -2852,13 +2863,13 @@ describe('an oblique section of the cone', () => {
     // A hidden draft of the other placement blocks nothing, and neither does the cylinder's choice.
     expect(request({ coneObliquePositionPercent: '' }, throughApex).errors).toEqual({});
     expect(request({ coneApexInclinationDeg: '' }, sectioned).errors).toEqual({});
-    expect(activeSection('cylinder', { ...triangle, cylinderSection: 'oblique', coneObliqueThrough: 'apex' })).toBe('oblique');
+    expect(activeSection('cylinder', { ...triangle, cylinderSection: 'oblique', coneSection: 'oblique-apex' })).toBe('oblique');
   });
 
   describe('on first entry through the apex', () => {
     const state = (
       overrides: Partial<ParameterTexts> = {},
-      choices: typeof triangle = { ...sectioned, coneObliqueThrough: 'apex' },
+      choices: typeof triangle = { ...triangle, coneSection: 'oblique-apex' },
     ) => ({ texts: texts(overrides), choices }) as ParameterState;
     const values = (heightRatio: number, offsetRatio = 0) => ({
       printSizeMm: 80,
@@ -2933,8 +2944,8 @@ describe('an oblique section of the cone', () => {
     const edited = { coneOffsetRatio: '2', coneObliquePositionPercent: '30' };
     expect(request(edited).errors).toEqual({});
     const fields = group(sectioned, 'Переріз', edited).fields;
-    expect(fields[2]).toMatchObject({ key: 'coneObliquePositionPercent', disabled: true });
-    expect(fields[3]).toMatchObject({
+    expect(fields[1]).toMatchObject({ key: 'coneObliquePositionPercent', disabled: true });
+    expect(fields[2]).toMatchObject({
       type: 'note',
       text: 'Площина містить усю вісь конуса, тому положення точки за висотою не змінює переріз.',
     });
@@ -2992,7 +3003,7 @@ describe('an oblique section of the cone', () => {
     expect(canResetShapeParameters('cone', edited)).toBe(true);
     const reset = resetShapeParameters('cone', edited);
     expect(reset.texts).toEqual(resetTexts('cone', { printSizeMm: '120' }));
-    expect(reset.choices).toMatchObject({ coneSection: 'none', coneObliqueThrough: 'axis', coneApexStarted: false });
+    expect(reset.choices).toMatchObject({ coneSection: 'none', coneApexStarted: false });
     // Having once entered the mode is no setting of its own.
     expect(canResetShapeParameters('cone', { texts: texts({}), choices: { ...triangle, coneApexStarted: true } })).toBe(false);
     expect(canResetShapeParameters('cone', { texts: edited.texts, choices: triangle })).toBe(false);
@@ -3564,11 +3575,7 @@ describe('the dovetail’s entrance', () => {
       'Зверху',
       'Знизу',
     ]);
-    expect(labelsOf(groupOf('cone', { ...base, coneSection: 'oblique', coneObliqueThrough: 'apex' }).group)).toEqual([
-      'Вхід у паз',
-      'Зверху',
-      'Знизу',
-    ]);
+    expect(labelsOf(groupOf('cone', { ...base, coneSection: 'oblique-apex' }).group)).toEqual(['Вхід у паз', 'Зверху', 'Знизу']);
     expect(labelsOf(groupOf('cylinder', { ...base, cylinderSection: 'parallel-to-bases' }).group)).toEqual([
       'Вхід у паз',
       'З одного боку',
@@ -3611,8 +3618,7 @@ describe('the dovetail’s entrance', () => {
     expect(bottom).not.toMatch(/виїмка для входу в паз/);
     const apex = {
       ...initialParameterChoices(),
-      coneSection: 'oblique',
-      coneObliqueThrough: 'apex',
+      coneSection: 'oblique-apex',
       coneConnector: 'dovetail',
     } as const;
     expect(groupOf('cone', { ...apex, coneDovetailEntrance: 'opposite' }).group?.help?.text).toMatch(

@@ -69,7 +69,7 @@ test('cone: a section parallel to the base gives a frustum on its base and a sma
   await chooseCut(page);
   await expectReady(page);
   const options = await entry(page, 'Тип перерізу').locator('option').allTextContents();
-  expect(options).toEqual(['Без перерізу', 'Паралельно основі', 'Вертикальний', 'Похилий']);
+  expect(options).toEqual(['Без перерізу', 'Паралельно основі', 'Вертикальний', 'Похилий', 'Через вершину']);
   await expect(entry(page, POSITION)).toHaveValue('50');
   await expect(parameterSection(page, 'Переріз').locator('summary')).toContainText('паралельно основі');
   const { names, objects, meshes } = await download(page);

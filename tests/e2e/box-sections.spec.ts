@@ -26,7 +26,7 @@ test('a cube’s diagonal section, then a plane through an edge and a midpoint, 
   await shapeSelect(page).selectOption({ label: 'Куб' });
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Поздовжній' });
-  await entry(page, 'Слід на основі').selectOption({ label: 'Через діагональ основи' });
+  await entry(page, 'Слід на основі').selectOption({ label: 'Через діагональ' });
   await expect(entry(page, 'Діагональ основи')).toHaveValue('A-C');
   await expect(page.getByText('Діагональний переріз: площина проходить через діагональ AC')).toBeVisible();
   const diagonal = await download(page);
@@ -328,7 +328,7 @@ test('vertex labels on a parallelepiped leaning both ways, cut through four vert
   } as const;
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Поздовжній' });
-  await entry(page, 'Слід на основі').selectOption({ label: 'Через діагональ основи' });
+  await entry(page, 'Слід на основі').selectOption({ label: 'Через діагональ' });
   // Apart, A, C, A1 and C1 on the plane are each shown on both parts, under the same name; assembled, once.
   const apart = await expectLabelsOnVertices(page, shape);
   expect(apart.filter((label) => label.name === 'A').map((label) => label.parts)).toEqual([['part-1'], ['part-2']]);
@@ -396,7 +396,7 @@ test('three parts of the cube by two diagonal planes through BD: both interfaces
   await shapeSelect(page).selectOption({ label: 'Куб' });
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Поздовжній' });
-  await entry(page, 'Слід на основі').selectOption({ label: 'Через діагональ основи' });
+  await entry(page, 'Слід на основі').selectOption({ label: 'Через діагональ' });
   await entry(page, 'Діагональ основи').selectOption({ label: 'Діагональ BD' });
   await expect(entry(page, 'Положення')).toHaveValue('50');
   await page.getByRole('button', { name: 'Додати паралельний переріз', exact: true }).click();
@@ -586,10 +586,10 @@ test('a triangular prism: through a median and a midline of its base, then throu
   // An equilateral base: its median, altitude and bisector from a vertex are one line, offered once; no diagonals.
   expect(await options(page, 'Слід на основі')).toEqual([
     'Під кутом до ребра AB',
-    'Через медіану, висоту й бісектрису основи',
-    'Через середню лінію основи',
+    'Через медіану (= висоту)',
+    'Через середню лінію',
   ]);
-  await entry(page, 'Слід на основі').selectOption({ label: 'Через медіану, висоту й бісектрису основи' });
+  await entry(page, 'Слід на основі').selectOption({ label: 'Через медіану (= висоту)' });
   await entry(page, 'З вершини').selectOption({ label: 'C' });
   await expect(
     page.getByText('В основі рівносторонній трикутник: медіана, висота й бісектриса з однієї вершини збігаються.'),
@@ -599,7 +599,7 @@ test('a triangular prism: through a median and a midline of its base, then throu
   expect(median.fileName).toBe('prism-3-sided-longitudinal-section.3mf');
   expect(median.section).toMatchObject({ type: 'longitudinal', trace: 'median', traceVertex: 'C', through: true });
   await expectLabelsOnVertices(page, shape);
-  await entry(page, 'Слід на основі').selectOption({ label: 'Через середню лінію основи' });
+  await entry(page, 'Слід на основі').selectOption({ label: 'Через середню лінію' });
   await entry(page, 'Паралельно стороні').selectOption({ label: 'Стороні AB' });
   const midline = await download(page);
   expect(midline.section).toMatchObject({ trace: 'midline', traceSegment: ['A', 'B'], through: true });
@@ -634,7 +634,7 @@ test('a hexagonal prism: its shorter and longer base diagonals, each a section t
   await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно грані' });
   expect(await options(page, 'Паралельно грані')).toHaveLength(4);
   await entry(page, 'Тип перерізу').selectOption({ label: 'Поздовжній' });
-  await entry(page, 'Слід на основі').selectOption({ label: 'Через діагональ основи' });
+  await entry(page, 'Слід на основі').selectOption({ label: 'Через діагональ' });
   const diagonals = await options(page, 'Діагональ основи');
   expect(diagonals).toHaveLength(9);
   expect(diagonals).toContain('Діагональ AC (коротша)');
@@ -752,5 +752,93 @@ test('a plane perpendicular to the lateral edges goes back to its angles where i
     await entry(page, 'Кут до площини основи').fill('25');
     expect((await partVolumes(page)).section).toMatchObject({ inclinationDeg: 25 });
   }
+  expect(errors).toEqual([]);
+});
+
+test('a tetrahedron through its apex, through a base edge and a lateral edge’s midpoint, and parallel to opposite edges', async ({
+  page,
+}) => {
+  const errors = collectErrors(page);
+  await page.goto('/');
+  await shapeSelect(page).selectOption({ label: 'Правильний тетраедр' });
+  await openSection(page, 'Переріз');
+  await entry(page, 'Тип перерізу').selectOption({ label: 'Через вершину піраміди' });
+  await entry(page, 'Слід на основі').selectOption({ label: 'Через медіану (= висоту)' });
+  await entry(page, 'З вершини').selectOption({ label: 'C' });
+  const median = await download(page);
+  expect(median.fileName).toBe('tetrahedron-apex-section.3mf');
+  expect(median.section).toMatchObject({ type: 'through-apex', trace: 'median', traceVertex: 'C' });
+  // S and C lie on the plane: each is shown on both parts apart.
+  const labels = await expectLabelsOnVertices(page, { kind: 'tetrahedron' });
+  expect(labels.filter((label) => label.name === 'S')).toHaveLength(2);
+
+  await entry(page, 'Слід на основі').selectOption({ label: 'Через бічне ребро й точку' });
+  await entry(page, 'Бічне ребро').selectOption({ label: 'SC' });
+  expect(await options(page, 'Ребро основи з точкою')).toEqual(['Ребро AB']);
+  await expect(entry(page, 'Точка на AB від A')).toHaveValue('50');
+  expect((await download(page)).section).toMatchObject({
+    trace: 'edge-point',
+    traceVertex: 'C',
+    traceSegment: ['A', 'B'],
+    tracePointPercent: 50,
+  });
+
+  await entry(page, 'Тип перерізу').selectOption({ label: 'Через ребро основи' });
+  await entry(page, 'Спосіб').selectOption({ label: 'Через точку ребра' });
+  // SA and SB give the face SAB with AB: only SC is offered.
+  expect(await options(page, 'Ребро з точкою')).toEqual(['Ребро SC']);
+  await expect(entry(page, 'Точка на SC від S')).toHaveValue('50');
+  expect((await download(page)).section).toEqual({
+    type: 'through-line',
+    face: 'ABC',
+    line: ['A', 'B'],
+    method: 'point',
+    pointEdge: ['S', 'C'],
+    pointPercent: 50,
+  });
+  await expectLabelsOnVertices(page, { kind: 'tetrahedron' });
+
+  await entry(page, 'Тип перерізу').selectOption({ label: 'Похилий' });
+  await page.getByRole('button', { name: 'Паралельно двом ребрам' }).click();
+  await entry(page, 'Паралельно ребрам').selectOption({ label: 'SC і AB' });
+  await page.getByRole('button', { name: 'Через основу висоти', exact: true }).click();
+  const pair = await partVolumes(page);
+  expect(pair.section).toMatchObject({
+    parallelTo: [
+      ['S', 'C'],
+      ['A', 'B'],
+    ],
+  });
+  await page.getByRole('button', { name: 'Змінити нахил', exact: true }).click();
+  await expect(entry(page, 'Кут до площини основи')).toBeVisible();
+  const angles = await partVolumes(page);
+  expect(angles.section).not.toHaveProperty('parallelTo');
+  angles.volumes.forEach((volume, index) => {
+    expect(Math.abs(volume / (pair.volumes[index] as number) - 1)).toBeLessThan(1e-6);
+  });
+  expect(errors).toEqual([]);
+});
+
+test('an oblique square pyramid at half its height, and through its apex and a diagonal of its base', async ({ page }) => {
+  const errors = collectErrors(page);
+  await page.goto('/');
+  await shapeSelect(page).selectOption({ label: 'Піраміда' });
+  await openSection(page, 'Вершина');
+  await entry(page, 'Зміщення X').fill('0,3');
+  const shape = { kind: 'pyramid', baseType: 'regular', baseSides: 4, heightRatio: 1, apexXRatio: 0.3, apexYRatio: 0 } as const;
+  await openSection(page, 'Переріз');
+  await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно грані' });
+  expect(await options(page, 'Паралельно грані')).toHaveLength(5);
+  const half = await partVolumes(page);
+  // The apex's part at half height is an eighth of the pyramid.
+  const [lower, upper] = half.volumes as [number, number];
+  expect(upper / (lower + upper)).toBeCloseTo(1 / 8, 5);
+  await expectLabelsOnVertices(page, shape);
+  await entry(page, 'Тип перерізу').selectOption({ label: 'Через вершину піраміди' });
+  await entry(page, 'Слід на основі').selectOption({ label: 'Через діагональ' });
+  await expect(page.getByText(/Діагональний переріз: площина проходить через вершину S і діагональ AC/)).toBeVisible();
+  const diagonal = await partVolumes(page);
+  expect(diagonal.section).toMatchObject({ type: 'through-apex', trace: 'diagonal', traceSegment: ['A', 'C'] });
+  await expectLabelsOnVertices(page, shape);
   expect(errors).toEqual([]);
 });

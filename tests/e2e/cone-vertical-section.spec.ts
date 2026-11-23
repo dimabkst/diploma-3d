@@ -66,6 +66,7 @@ test('cone: a vertical section starts axial, gives two equal halves standing on 
     'Паралельно основі',
     'Вертикальний',
     'Похилий',
+    'Через вершину',
   ]);
   await expect(entry(page, OFFSET)).toHaveValue('0');
   const { names, objects } = await download(page);

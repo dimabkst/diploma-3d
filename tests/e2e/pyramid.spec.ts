@@ -85,7 +85,7 @@ test('pyramid: base and height drive the preview and the downloaded 3MF', async 
   await expect(baseSelect(page).locator('option:checked')).toHaveText(baseNames[4]);
   await expect(heightRatio(page)).toHaveValue('1');
   await expectPreviewOf(page, `${PYRAMID} · 80 × 80 × 80 мм`);
-  await expect(page.locator('summary')).toHaveText([/^Основа/, /^Висота/, /^Вершина\s*над центром/]);
+  await expect(page.locator('summary')).toHaveText([/^Основа/, /^Висота/, /^Вершина\s*над центром/, /^Переріз\s*немає/]);
   await expectDownloadedPyramid(page, 4, 1);
 
   // The hexagon is two edges wide; h/a = 1 is kept, so a = h = 40 mm.
@@ -124,7 +124,7 @@ test('pyramid: base and height drive the preview and the downloaded 3MF', async 
   expect(errors).toEqual([]);
 });
 
-test('tetrahedron: a fixed preset with six equal edges and no adjustable parameters', async ({ page }) => {
+test('tetrahedron: a fixed preset with six equal edges, no adjustable proportions, and its sections', async ({ page }) => {
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: TETRAHEDRON });
@@ -133,7 +133,8 @@ test('tetrahedron: a fixed preset with six equal edges and no adjustable paramet
   await expect(heightRatio(page)).toHaveCount(0);
   await expect(page.getByRole('slider')).toHaveCount(0);
   await expect(page.getByText('Усі ребра рівні, грані — рівносторонні трикутники. Пропорції фіксовані.')).toBeVisible();
-  await expect(page.locator('details')).toHaveCount(0);
+  // Its only group is its sections, as the cube's.
+  await expect(page.locator('summary')).toHaveText([/^Переріз\s*немає/]);
 
   // The base edge is the longest dimension: a = 80 mm, h = a·√(2/3) ≈ 65,3 mm and the base is √3/2·a ≈ 69,3 mm deep.
   const a = 80;

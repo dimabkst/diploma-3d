@@ -50,8 +50,7 @@ test('a cone’s plane through the apex held to its axis follows the cone, and d
   await openSection(page, 'Нахил');
   await entry(page, 'Зміщення вершини').fill('0,7');
   await openSection(page, 'Переріз');
-  await entry(page, 'Тип перерізу').selectOption({ label: 'Похилий' });
-  await entry(page, 'Площина проходить через').selectOption({ label: 'Вершину' });
+  await entry(page, 'Тип перерізу').selectOption({ label: 'Через вершину' });
   await page.getByRole('checkbox', { name: 'Осьовий переріз' }).check();
   await expect(entry(page, 'Кут до площини основи')).toHaveCount(0);
   await expect(page.getByText(/^Площина проходить через вершину й центр основи/)).toBeVisible();

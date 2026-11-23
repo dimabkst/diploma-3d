@@ -2,6 +2,7 @@ import {
   APEX_INCLINATION_MAX_DEG,
   BALL_OFFSET_LIMITS,
   type BallShape,
+  BOX_SECTION_TYPES,
   type BoxSectionSpec,
   type ConeShape,
   type CylinderShape,
@@ -140,7 +141,7 @@ export interface AxisParallelCylinderSection extends FacetedSection {
  */
 export interface BoxSection extends FacetedSection {
   readonly type: 'box-section';
-  readonly cutType: 'face-parallel' | 'longitudinal' | 'through-line' | 'inclined';
+  readonly cutType: BoxSectionSpec['type'];
   readonly middle?: { readonly side: 'negative' | 'positive'; readonly thickness: number };
 }
 
@@ -1112,10 +1113,7 @@ export function atSecondPlane<S extends Section>(section: S): S {
 
 /** Whether the section is one of a cube's or parallelepiped's. */
 export const isBoxSectionSpec = (section: Section): section is Extract<Section, { type: BoxSectionSpec['type'] }> =>
-  section.type === 'face-parallel' ||
-  section.type === 'longitudinal' ||
-  section.type === 'through-line' ||
-  section.type === 'inclined';
+  (BOX_SECTION_TYPES as readonly string[]).includes(section.type);
 
 /** Whether the section has a second parallel plane, of a ball or a cube or parallelepiped. */
 export const hasSecondPlane = (section: Section): boolean =>
@@ -1256,9 +1254,10 @@ const planeCutOf = (section: Section): PlaneCut => {
       return section.positionPercent;
     case 'face-parallel':
     case 'longitudinal':
+    case 'through-apex':
     case 'through-line':
     case 'inclined':
-      throw new GeometryError('A cube or parallelepiped section has no plane of a round solid.');
+      throw new GeometryError('A section of a solid with named vertices has no plane of a round solid.');
   }
 };
 

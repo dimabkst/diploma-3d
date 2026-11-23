@@ -259,7 +259,7 @@ describe('the plate on every cut of the cone', () => {
   const modes = [
     ['vertical', { coneSection: 'vertical' }, 'type: vertical'],
     ['oblique', { coneSection: 'oblique' }, 'type: oblique'],
-    ['through the apex', { coneSection: 'oblique', coneObliqueThrough: 'apex' }, 'type: oblique-apex'],
+    ['through the apex', { coneSection: 'oblique-apex' }, 'type: oblique-apex'],
   ] as const;
 
   it.each(modes)('a %s cut offers the same switch and fields after its own, and carries the plate', (_, chosen) => {

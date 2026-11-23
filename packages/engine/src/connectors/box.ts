@@ -4,16 +4,20 @@ import {
   type BoxSegment,
   type BoxVertex,
   boxFaceSegmentKind,
+  boxTopologyOfShape,
   type CubeShape,
   type CuboidShape,
   type ParallelepipedShape,
   type PhysicalScale,
   type PrismShape,
   type PrismTopology,
-  prismSidesOf,
+  PYRAMID_APEX,
+  type PyramidShape,
   prismTopology,
+  pyramidTopology,
   SECTION_POSITION_LIMITS,
   type Shape,
+  type TetrahedronShape,
 } from '@diploma-3d/schema';
 import { GeometryError } from '../errors.ts';
 import { cross, dot, length, type Vec3 } from '../mesh.ts';
@@ -22,6 +26,8 @@ import { boxEdgeLengthsMm } from '../shapes/box.ts';
 import { parallelepipedProportions } from '../shapes/parallelepiped.ts';
 import { prismShapeProportions } from '../shapes/prism.ts';
 import { type PrismProportions, prismScaleMm, prismVertices } from '../shapes/prism-geometry.ts';
+import { pyramidShapeProportions } from '../shapes/pyramid.ts';
+import { pyramidScaleMm, pyramidVertices } from '../shapes/pyramid-geometry.ts';
 import {
   type BoxSection,
   CONNECTOR_MIN_WALL_MM,
@@ -33,21 +39,25 @@ import {
 
 /**
  * The solids whose sections are planes through their named vertices: a cube, the parallelepipeds and the prisms, each a prism
- * over its base polygon, with 2n vertices, 3n edges and n + 2 faces; see `PrismTopology`.
+ * over its base polygon with 2n vertices, 3n edges and n + 2 faces; the pyramids and the tetrahedron, each a pyramid over its
+ * base with n + 1 vertices, 2n edges and n + 1 faces; see `PrismTopology`.
  */
-export type BoxLikeShape = CubeShape | CuboidShape | ParallelepipedShape | PrismShape;
+export type BoxLikeShape = CubeShape | CuboidShape | ParallelepipedShape | PrismShape | PyramidShape | TetrahedronShape;
 
 export const isBoxShape = (shape: { readonly kind: string }): shape is BoxLikeShape =>
-  shape.kind === 'cube' || shape.kind === 'cuboid' || shape.kind === 'parallelepiped' || shape.kind === 'prism';
+  ['cube', 'cuboid', 'parallelepiped', 'prism', 'pyramid', 'tetrahedron'].includes(shape.kind);
 
 /** The solid's vertices, faces and edges by name. */
-export const boxTopologyOf = (shape: BoxLikeShape): PrismTopology => prismTopology(prismSidesOf(shape as Shape) as number);
+export const boxTopologyOf = (shape: BoxLikeShape): PrismTopology => boxTopologyOfShape(shape as Shape) as PrismTopology;
 
 /** Vertices by name: those of one topology, the 2n names of its prism. */
 export type BoxVertices = Readonly<Record<BoxVertex, Vec3>>;
 
-/** The topology of a set of vertices: half of them are a base's. */
-export const topologyOf = (vertices: BoxVertices): PrismTopology => prismTopology(Object.keys(vertices).length / 2);
+/** The topology of a set of vertices: a pyramid's has its apex S and n base vertices, a prism's two bases of n. */
+export const topologyOf = (vertices: BoxVertices): PrismTopology => {
+  const count = Object.keys(vertices).length;
+  return PYRAMID_APEX in vertices ? pyramidTopology(count - 1) : prismTopology(count / 2);
+};
 
 /**
  * A box section's cut: the section without its connector, and whether it is seen from its second plane, for that plane's own
@@ -65,6 +75,14 @@ export interface BoxCut {
  * by the scaled displacement (dx, dy, h).
  */
 export function boxVertices(shape: BoxLikeShape, scale: PhysicalScale): BoxVertices {
+  if (shape.kind === 'pyramid' || shape.kind === 'tetrahedron') {
+    // The base in z = 0 around its area centroid and the apex S where the generator puts it, at its height, wherever above.
+    const proportions = pyramidShapeProportions(shape);
+    const s = pyramidScaleMm(proportions, scale);
+    const points = pyramidVertices(proportions).map(([x, y, z]): Vec3 => [x * s, y * s, z * s]);
+    const { vertices } = pyramidTopology(points.length - 1);
+    return Object.fromEntries(vertices.map((name, index) => [name, points[index] as Vec3])) as Record<BoxVertex, Vec3>;
+  }
   let points: Vec3[];
   if (shape.kind === 'parallelepiped' || shape.kind === 'prism') {
     const proportions: PrismProportions =
@@ -170,6 +188,17 @@ export function boxPlane(vertices: BoxVertices, spec: BoxSectionSpec): BoxPlane 
       const centre = mean(pointsOf(vertices));
       return measured(times(faceNormal(vertices, cornersOf(topology, spec.face ?? topology.lowerBase), centre), -1));
     }
+    case 'through-apex': {
+      // The plane through S and the line Q + λu of the base plane: n ∝ (Q − S) × u, d = n·S.
+      const apex = vertices[PYRAMID_APEX];
+      const line = boxTraceLine(vertices, spec) ?? apexAngleTrace(vertices, spec.traceAngleDeg, spec.positionPercent);
+      const raw = cross(minus(line.point, apex), line.direction);
+      if (length(raw) <= COLLINEAR_RELATIVE * length(minus(line.point, apex)) * length(line.direction)) {
+        throw new GeometryError('The apex lies on the line: they do not fix one plane.');
+      }
+      const normal = unit(raw);
+      return measured(normal, dot(normal, apex));
+    }
     case 'longitudinal': {
       const lateral = minus(vertices.A1, vertices.A);
       const line = boxTraceLine(vertices, spec);
@@ -193,10 +222,13 @@ export function boxPlane(vertices: BoxVertices, spec: BoxSectionSpec): BoxPlane 
       return measured(normal, dot(normal, p));
     }
     case 'inclined': {
+      const direction = (segment: readonly [BoxVertex, BoxVertex]) => minus(vertices[segment[1]], vertices[segment[0]]);
       const normal =
-        spec.normalAlong === undefined
-          ? obliqueAxes(spec.inclinationDeg, spec.directionDeg).n
-          : unit(minus(vertices[spec.normalAlong[1]], vertices[spec.normalAlong[0]]));
+        spec.parallelTo !== undefined
+          ? unit(cross(direction(spec.parallelTo[0]), direction(spec.parallelTo[1])))
+          : spec.normalAlong === undefined
+            ? obliqueAxes(spec.inclinationDeg, spec.directionDeg).n
+            : unit(direction(spec.normalAlong));
       return measured(normal);
     }
   }
@@ -211,7 +243,7 @@ export function boxPlane(vertices: BoxVertices, spec: BoxSectionSpec): BoxPlane 
  */
 export function boxTraceLine(
   vertices: BoxVertices,
-  spec: Extract<BoxSectionSpec, { type: 'longitudinal' }>,
+  spec: Extract<BoxSectionSpec, { type: 'longitudinal' | 'through-apex' }>,
 ): { readonly point: Vec3; readonly direction: Vec3 } | undefined {
   const segment = (first: BoxVertex, second: BoxVertex) => ({
     point: vertices[first],
@@ -249,7 +281,35 @@ export function boxTraceLine(
             : plus(unit(minus(left, point)), unit(minus(right, point)));
       return { point, direction };
     }
+    case 'edge-point': {
+      // From V, the foot of the lateral edge SV, through the point of a base edge: the plane holds SV and that point.
+      const vertex = vertices[spec.traceVertex as BoxVertex];
+      return {
+        point: vertex,
+        direction: minus(pointOnEdge(vertices, spec.traceSegment as BoxSegment, spec.tracePointPercent as number), vertex),
+      };
+    }
+    case 'height-edge': {
+      // From V through H, the apex's projection on the base plane, z = 0: the plane holds SV and the height SH.
+      const vertex = vertices[spec.traceVertex as BoxVertex];
+      const [x, y] = vertices[PYRAMID_APEX];
+      return { point: vertex, direction: minus([x, y, 0], vertex) };
+    }
   }
+}
+
+/**
+ * A trace of a plane through a pyramid's apex at an angle to AB: the direction u turned from AB in the base plane, and the line
+ * across the base at the percentage of the base's extent along w, the base plane's direction perpendicular to u, so that 0 %
+ * and 100 % only touch the base.
+ */
+function apexAngleTrace(vertices: BoxVertices, angleDeg: number, percent: number): { point: Vec3; direction: Vec3 } {
+  const topology = topologyOf(vertices);
+  const direction = unit(rotatedInBase(minus(vertices.B, vertices.A), angleDeg));
+  const across: Vec3 = [-direction[1], direction[0], 0];
+  const along = cornersOf(topology, topology.lowerBase).map((name) => dot(across, vertices[name]));
+  const offset = Math.min(...along) + (percent / 100) * (Math.max(...along) - Math.min(...along));
+  return { point: times(across, offset), direction };
 }
 
 // Relative to the lengths involved: far below any edge a print could show, far above roundoff of vertex coordinates.
@@ -396,13 +456,15 @@ export function boxSplitReach(shape: BoxLikeShape, scale: PhysicalScale, cut: Bo
  * direction, and two of them are parallel exactly when their base edges are, a pair of opposite edges of a parallelogram, a
  * trapezoid's bases or a regular polygon with an even number of sides; their edges are compared in the base, not by face
  * normals, which a strong lean makes nearly parallel without making them so. The representative is the first face of its group
- * in the faces' order: the lower base, then lateral faces from AB on.
+ * in the faces' order: the lower base, then lateral faces from AB on. A pyramid's faces are each a group of their own.
  */
 export function boxFaceOrientations(vertices: BoxVertices): Readonly<Record<BoxFace, BoxFace>> {
   const topology = topologyOf(vertices);
+  // A pyramid's faces all meet at its apex or its base: no two of them are parallel.
+  if (topology.kind === 'pyramid') return Object.fromEntries(topology.faceNames.map((face) => [face, face]));
   const representatives: Record<BoxFace, BoxFace> = {
     [topology.lowerBase]: topology.lowerBase,
-    [topology.upperBase]: topology.lowerBase,
+    [topology.upperBase as BoxFace]: topology.lowerBase,
   };
   const laterals = topology.faceNames.slice(2);
   const edgeOf = (face: BoxFace) => {
@@ -488,13 +550,22 @@ function lineAngleBounds(
     const extent = { min: Math.min(...along), max: Math.max(...along) };
     return Math.min(-extent.min, extent.max) - partMinimum(rule, extent);
   };
+  return usableInterval(margin, 0, 180);
+}
+
+/**
+ * The interval of (low, high) where a margin that rises and then falls is not negative, or null: its best value is found on a
+ * fine grid and refined between the neighbouring samples, so that a narrow interval is not missed between them, and its ends
+ * are refined by bisection, to a thousandth of a unit.
+ */
+function usableInterval(margin: (value: number) => number, low: number, high: number): FrameExtent | null {
   const step = 0.5;
-  let best = { angle: step, margin: margin(step) };
-  for (let angle = 2 * step; angle < 180; angle += step) {
+  let best = { angle: low + step, margin: margin(low + step) };
+  for (let angle = low + 2 * step; angle < high; angle += step) {
     const value = margin(angle);
     if (value > best.margin) best = { angle, margin: value };
   }
-  if (best.margin < 0) best = goldenMaximum(margin, Math.max(best.angle - step, 0), Math.min(best.angle + step, 180));
+  if (best.margin < 0) best = goldenMaximum(margin, Math.max(best.angle - step, low), Math.min(best.angle + step, high));
   if (best.margin < 0) return null;
   const refine = (inside: number, outside: number) => {
     let [good, bad] = [inside, outside];
@@ -507,11 +578,11 @@ function lineAngleBounds(
   };
   const edge = (direction: -1 | 1) => {
     let inside = best.angle;
-    for (let next = inside + direction * step; next > 0 && next < 180; next += direction * step) {
+    for (let next = inside + direction * step; next > low && next < high; next += direction * step) {
       if (margin(next) < 0) return refine(inside, next);
       inside = next;
     }
-    return refine(inside, direction < 0 ? 0 : 180);
+    return refine(inside, direction < 0 ? low : high);
   };
   return { min: edge(-1), max: edge(1) };
 }
@@ -663,10 +734,13 @@ export function boxThroughLineChoices(shape: BoxLikeShape): Readonly<Record<BoxF
 export type BoxVertexTrace = 'median' | 'height' | 'bisector';
 
 /**
- * The longitudinal planes through a line of the base that leave both parts usable by the proportional rule, see `BoxPartRule`:
- * the base's diagonals; for a triangle, the vertices whose median, altitude or bisector does so, and the sides whose midline
- * does. An altitude from a vertex at whose neighbour the triangle is obtuse leaves it, and its plane only touches the solid
- * along a lateral edge. `sameLines` names, per vertex, the lines from it that coincide, all three in an equilateral triangle.
+ * The planes through a line of the base that leave both parts usable by the proportional rule, see `BoxPartRule`: a prism's
+ * longitudinal planes, along its lateral edges, and a pyramid's planes through its apex. The base's diagonals; for a triangle,
+ * the vertices whose median, altitude or bisector does so, and the sides whose midline does; an altitude from a vertex at whose
+ * neighbour the triangle is obtuse leaves the base, and its plane only touches the solid along a lateral edge or at the apex.
+ * `sameLines` names, per vertex, the lines from it that coincide, all three in an equilateral triangle. A pyramid's own: per
+ * lateral edge SV, the base edges some point of which gives a usable plane with it, see `boxPointRange`, and the vertices V whose
+ * plane through SV and the height SH does, which a height through V itself, or one in a face, does not fix or leaves.
  */
 export interface BoxTraceChoices {
   readonly diagonal: readonly BoxSegment[];
@@ -675,20 +749,56 @@ export interface BoxTraceChoices {
   readonly bisector: readonly BoxVertex[];
   readonly midline: readonly BoxSegment[];
   readonly sameLines: Readonly<Partial<Record<BoxVertex, readonly BoxVertexTrace[]>>>;
+  readonly edgePoint: Readonly<Partial<Record<BoxVertex, readonly BoxSegment[]>>>;
+  readonly heightEdge: readonly BoxVertex[];
 }
+
+type LineSpec = Extract<BoxSectionSpec, { type: 'longitudinal' | 'through-apex' }>;
 
 export function boxTraceChoices(shape: BoxLikeShape): BoxTraceChoices {
   const vertices = boxVertices(shape, { longestDimensionMm: 100 });
   const topology = topologyOf(vertices);
-  const usable = (spec: Extract<BoxSectionSpec, { type: 'longitudinal' }>) => {
-    const plane = boxPlane(vertices, spec);
+  const pyramid = topology.kind === 'pyramid';
+  const usable = (spec: LineSpec) => {
+    let plane: BoxPlane;
+    try {
+      plane = boxPlane(vertices, spec);
+    } catch {
+      return false;
+    }
     const reach = Math.min(plane.offset - plane.extent.min, plane.extent.max - plane.offset);
     return reach >= partMinimum('proportional', plane.extent);
   };
-  const through = (fields: Partial<Extract<BoxSectionSpec, { type: 'longitudinal' }>>) =>
-    usable({ type: 'longitudinal', trace: 'angle', traceAngleDeg: 0, positionPercent: 50, through: true, ...fields });
+  const lineSpec = (fields: Partial<LineSpec>): LineSpec =>
+    (pyramid
+      ? { type: 'through-apex', trace: 'angle', traceAngleDeg: 0, positionPercent: 50, ...fields }
+      : { type: 'longitudinal', trace: 'angle', traceAngleDeg: 0, positionPercent: 50, through: true, ...fields }) as LineSpec;
+  const through = (fields: Partial<LineSpec>) => usable(lineSpec(fields));
   const lines = boxFaceLines(topology, topology.lowerBase);
+  const baseEdges = lines.filter((line) => boxFaceSegmentKind(topology, topology.lowerBase, line) === 'edge');
   const diagonal = lines.filter((line) => boxFaceSegmentKind(topology, topology.lowerBase, line) === 'diagonal');
+  const corners = cornersOf(topology, topology.lowerBase);
+  const own = pyramid
+    ? {
+        edgePoint: Object.fromEntries(
+          corners.map((vertex) => {
+            const line: BoxSegment = [PYRAMID_APEX, vertex];
+            const face = topology.faceNames.find(
+              (name) => cornersOf(topology, name).includes(vertex) && name !== topology.lowerBase,
+            );
+            const bounds = lineAngleBounds(vertices, face as BoxFace, line, 'proportional');
+            return [vertex, baseEdges.filter((edge) => pointRange(vertices, face as BoxFace, line, edge, bounds) !== null)];
+          }),
+        ),
+        heightEdge: corners.filter((vertex) => {
+          const foot = vertices[PYRAMID_APEX];
+          const size = Math.max(...pointsOf(vertices).map((point) => length(minus(point, vertices.A))));
+          // The height through V itself fixes no plane with SV.
+          if (Math.hypot(foot[0] - vertices[vertex][0], foot[1] - vertices[vertex][1]) <= COLLINEAR_RELATIVE * size) return false;
+          return through({ trace: 'height-edge', traceVertex: vertex });
+        }),
+      }
+    : { edgePoint: {}, heightEdge: [] };
   if (topology.sides !== 3) {
     return {
       diagonal: diagonal.filter((segment) => through({ trace: 'diagonal', traceSegment: segment })),
@@ -697,21 +807,15 @@ export function boxTraceChoices(shape: BoxLikeShape): BoxTraceChoices {
       bisector: [],
       midline: [],
       sameLines: {},
+      ...own,
     };
   }
-  const corners = cornersOf(topology, topology.lowerBase);
   const kinds: readonly BoxVertexTrace[] = ['median', 'height', 'bisector'];
   const byKind = (kind: BoxVertexTrace) => corners.filter((vertex) => through({ trace: kind, traceVertex: vertex }));
   const sameLines = Object.fromEntries(
     corners.map((vertex) => {
       const directions = kinds.map((kind) => {
-        const line = boxTraceLine(vertices, {
-          type: 'longitudinal',
-          trace: kind,
-          traceAngleDeg: 0,
-          positionPercent: 50,
-          traceVertex: vertex,
-        });
+        const line = boxTraceLine(vertices, lineSpec({ trace: kind, traceVertex: vertex }));
         return unit((line as { direction: Vec3 }).direction);
       });
       const same = kinds.filter((_, index) =>
@@ -730,5 +834,45 @@ export function boxTraceChoices(shape: BoxLikeShape): BoxTraceChoices {
     bisector: byKind('bisector'),
     midline: lines.filter((side) => through({ trace: 'midline', traceSegment: side })),
     sameLines,
+    ...own,
   };
+}
+
+/**
+ * The usable positions of a point P of a base edge, for the plane through a pyramid's lateral edge SV and P, by the rule: the
+ * plane through the line SV and the point, see `boxPointRange`, as a lateral face holds SV.
+ */
+export function boxApexPointRange(
+  shape: BoxLikeShape,
+  scale: PhysicalScale,
+  vertex: BoxVertex,
+  edge: BoxSegment,
+  rule: BoxPartRule = 'printed',
+): BoxPointRange | null {
+  const vertices = boxVertices(shape, scale);
+  const topology = topologyOf(vertices);
+  const face = topology.faceNames.find((name) => name !== topology.lowerBase && cornersOf(topology, name).includes(vertex));
+  if (face === undefined) return null;
+  const line: BoxSegment = [PYRAMID_APEX, vertex];
+  return pointRange(vertices, face, line, edge, lineAngleBounds(vertices, face, line, rule));
+}
+
+/**
+ * The positions of a trace at an angle across a pyramid's base, in percent of the base's extent across it, at which the plane
+ * through the apex leaves both parts usable by the rule: as the trace crosses the base, the plane turns about the apex's line
+ * parallel to it, and the thinner part grows and then shrinks, so the usable positions are one interval; found as the angles
+ * about a line are, see `boxLineAngleBounds`. Null when none are.
+ */
+export function boxApexPositionBounds(
+  shape: BoxLikeShape,
+  scale: PhysicalScale,
+  traceAngleDeg: number,
+  rule: BoxPartRule = 'printed',
+): FrameExtent | null {
+  const vertices = boxVertices(shape, scale);
+  const margin = (percent: number) => {
+    const plane = boxPlane(vertices, { type: 'through-apex', trace: 'angle', traceAngleDeg, positionPercent: percent });
+    return Math.min(plane.offset - plane.extent.min, plane.extent.max - plane.offset) - partMinimum(rule, plane.extent);
+  };
+  return usableInterval(margin, 0, 100);
 }

@@ -53,7 +53,7 @@ const cuts: readonly (readonly [ShapeKind, Partial<ParameterChoices>])[] = [
   ['cone', { coneSection: 'parallel-to-bases', coneConnector: 'magnet' }],
   ['cone', { coneSection: 'vertical', coneConnector: 'magnet' }],
   ['cone', { coneSection: 'oblique', coneConnector: 'magnet' }],
-  ['cone', { coneSection: 'oblique', coneObliqueThrough: 'apex', coneApexStarted: true, coneConnector: 'magnet' }],
+  ['cone', { coneSection: 'oblique-apex', coneApexStarted: true, coneConnector: 'magnet' }],
   ['ball', { ballSection: 'horizontal', ballConnector: 'magnet' }],
 ];
 
@@ -106,8 +106,8 @@ describe('magnet pockets in the panel', () => {
   it('keeps no removed placement setting anywhere, which could override the automatic placement', () => {
     const keys = Object.keys(initialParameterTexts()).filter((key) => key.includes('Magnet'));
     expect(keys.filter((key) => /EdgeClearance|Wall|Spacing|Chamfer/.test(key))).toEqual([]);
-    // Five fields for each of the seven solids with sections.
-    expect(keys).toHaveLength(35);
+    // Five fields for each of the nine solids with sections.
+    expect(keys).toHaveLength(45);
   });
 
   it('shows the hole the allowances give, and restores those two alone', () => {

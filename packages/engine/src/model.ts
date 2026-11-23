@@ -1,4 +1,5 @@
 import {
+  BOX_SECTION_TYPES,
   type BoxSectionSpec,
   type BoxVertex,
   type ModelSpec,
@@ -81,7 +82,6 @@ import { type Track, withScope } from './scope.ts';
 import { type Plane, sectionPlane, splitByParallelPlanes, splitByPlane } from './section.ts';
 import { ballRadiusMm, buildBall } from './shapes/ball.ts';
 import { checkNumericalFeasibility } from './shapes/feasibility.ts';
-import { buildPyramidShape } from './shapes/pyramid.ts';
 import { buildRegularPolyhedron } from './shapes/regular-polyhedron.ts';
 import { buildRoundSolid, roundDimensionsMm, roundShear } from './shapes/round.ts';
 
@@ -177,6 +177,7 @@ const sectionNames: Readonly<Record<SectionType, string>> = {
   'axis-parallel': 'axis-parallel-section',
   'face-parallel': 'face-parallel-section',
   longitudinal: 'longitudinal-section',
+  'through-apex': 'apex-section',
   'through-line': 'edge-section',
   inclined: 'inclined-section',
 };
@@ -191,6 +192,7 @@ const partNames: Readonly<Record<SectionType, readonly [SectionPart, SectionPart
   'axis-parallel': ['part-1', 'part-2'],
   'face-parallel': ['part-1', 'part-2'],
   longitudinal: ['part-1', 'part-2'],
+  'through-apex': ['part-1', 'part-2'],
   'through-line': ['part-1', 'part-2'],
   inclined: ['part-1', 'part-2'],
 };
@@ -200,7 +202,7 @@ const partNamesOf = (type: SectionType, plane: Plane): readonly [SectionPart, Se
   isBoxSectionType(type) && Math.abs(plane.normal[2]) > 1 - HORIZONTAL_ROUNDOFF ? ['lower', 'upper'] : partNames[type];
 const HORIZONTAL_ROUNDOFF = 1e-9;
 const isBoxSectionType = (type: SectionType): type is BoxSectionSpec['type'] =>
-  type === 'face-parallel' || type === 'longitudinal' || type === 'through-line' || type === 'inclined';
+  (BOX_SECTION_TYPES as readonly string[]).includes(type);
 const partObjectName = (name: string, part: SectionPart): string =>
   part === 'lower' || part === 'middle' || part === 'upper' ? `${name}-${part}-part` : `${name}-${part}`;
 
@@ -715,16 +717,17 @@ export function modelName(shape: Shape): string {
 }
 
 /**
- * The solid in millimetres: pyramids are scaled once after their complete unnormalised construction, including a displaced
- * apex; curved solids are built at size; regular polyhedra, a cube, the parallelepipeds and the prisms as the convex hull of
- * their vertices in millimetres.
+ * The solid in millimetres: curved solids are built at size; regular polyhedra, a cube, the parallelepipeds, the prisms, the
+ * pyramids and the tetrahedron as the convex hull of their vertices in millimetres.
  */
 function buildShape(kernel: GeometryKernel, track: Track, shape: Shape, scale: PhysicalScale): Manifold {
   switch (shape.kind) {
     case 'cube':
     case 'cuboid':
     case 'parallelepiped':
-    case 'prism': {
+    case 'prism':
+    case 'pyramid':
+    case 'tetrahedron': {
       // The very vertices that its sections' planes are constructed through and its preview labels name: an extruded base is
       // rounded to the cross-section's grid, a fraction of a micrometre off them, and a plane through a vertex then left a
       // sliver beside it that no longer passed as a closed solid once turned to its print orientation. Every base is convex.
@@ -733,9 +736,6 @@ function buildShape(kernel: GeometryKernel, track: Track, shape: Shape, scale: P
         kernel.Manifold.hull(boxTopologyOf(shape).vertices.map((name): [number, number, number] => [...vertices[name]])),
       );
     }
-    case 'pyramid':
-    case 'tetrahedron':
-      return buildPyramidShape(kernel, track, shape, scale);
     case 'cylinder':
     case 'cone':
       return buildRoundSolid(kernel, track, shape, scale);

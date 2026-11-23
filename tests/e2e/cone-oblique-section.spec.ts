@@ -16,7 +16,7 @@ import {
 const POSITION = 'Точка на осі від основи';
 const ANGLE = 'Кут до площини основи';
 const DIRECTION = 'Напрям нахилу';
-const THROUGH = 'Площина проходить через';
+const CUT = 'Тип перерізу';
 
 const partsButton = (page: Page) => page.getByRole('button', { name: 'Завантажити частини · 3MF', exact: true });
 const entry = (page: Page, label: string) => page.getByLabel(label, { exact: true });
@@ -33,7 +33,7 @@ async function chooseCut(page: Page): Promise<void> {
 
 async function chooseApex(page: Page): Promise<void> {
   await chooseCut(page);
-  await entry(page, THROUGH).selectOption({ label: 'Вершину' });
+  await entry(page, CUT).selectOption({ label: 'Через вершину' });
 }
 
 async function expectReady(page: Page, size = '80 × 80 × 80 мм'): Promise<void> {
@@ -59,12 +59,21 @@ async function download(page: Page, fileName: string): Promise<{ names: string[]
   return { names: model.objects.map(({ name }) => name), objects };
 }
 
-test('cone: an oblique section starts through a point on the axis, with the apex offered next to it', async ({ page }) => {
+test('cone: an oblique section passes through a point on the axis; through the apex is a section type of its own', async ({
+  page,
+}) => {
   const errors = collectErrors(page);
   await chooseCut(page);
   await expectReady(page);
-  await expect(entry(page, THROUGH)).toHaveValue('axis');
-  expect(await entry(page, THROUGH).locator('option').allTextContents()).toEqual(['Точку на осі', 'Вершину']);
+  // No nested choice of what the plane passes through.
+  await expect(entry(page, 'Площина проходить через')).toHaveCount(0);
+  expect(await entry(page, CUT).locator('option').allTextContents()).toEqual([
+    'Без перерізу',
+    'Паралельно основі',
+    'Вертикальний',
+    'Похилий',
+    'Через вершину',
+  ]);
   await expect(entry(page, POSITION)).toHaveValue('50');
   await expect(entry(page, ANGLE)).toHaveValue('45');
   await expect(entry(page, DIRECTION)).toHaveValue('0');
@@ -128,7 +137,7 @@ test('first entry on an oblique cone takes a valid angle for that cone', async (
   await chooseCut(page);
   await openSection(page, 'Нахил');
   await entry(page, 'Зміщення вершини').fill('1');
-  await entry(page, THROUGH).selectOption({ label: 'Вершину' });
+  await entry(page, CUT).selectOption({ label: 'Через вершину' });
   await expect(entry(page, ANGLE)).toHaveValue('65');
   await expect(entry(page, DIRECTION)).toHaveValue('0');
   await expectReady(page);
@@ -154,19 +163,19 @@ test('a direction against a strong lean has no angle at all: the slider is off, 
   await expect(entry(page, ANGLE)).toHaveValue('80');
 });
 
-test('switching between the placements destroys neither’s settings, and a reset starts over with the size kept', async ({
+test('switching between the inclined and the apex section destroys neither’s settings, and a reset starts over with the size kept', async ({
   page,
 }) => {
   await chooseCut(page);
   await entry(page, POSITION).fill('30');
   await entry(page, ANGLE).fill('20');
-  await entry(page, THROUGH).selectOption({ label: 'Вершину' });
+  await entry(page, CUT).selectOption({ label: 'Через вершину' });
   await expect(entry(page, ANGLE)).toHaveValue('80');
   await entry(page, ANGLE).fill('85');
-  await entry(page, THROUGH).selectOption({ label: 'Точку на осі' });
+  await entry(page, CUT).selectOption({ label: 'Похилий' });
   await expect(entry(page, POSITION)).toHaveValue('30');
   await expect(entry(page, ANGLE)).toHaveValue('20');
-  await entry(page, THROUGH).selectOption({ label: 'Вершину' });
+  await entry(page, CUT).selectOption({ label: 'Через вершину' });
   await expect(entry(page, ANGLE)).toHaveValue('85');
   await entry(page, 'Найбільший габарит').fill('160');
   await expectReady(page, '160 × 160 × 160 мм');
@@ -175,9 +184,8 @@ test('switching between the placements destroys neither’s settings, and a rese
   await expect(entry(page, 'Найбільший габарит')).toHaveValue('160');
   await expect(entry(page, 'Тип перерізу')).toHaveValue('none');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Похилий' });
-  await expect(entry(page, THROUGH)).toHaveValue('axis');
   await expect(entry(page, POSITION)).toHaveValue('50');
-  await entry(page, THROUGH).selectOption({ label: 'Вершину' });
+  await entry(page, CUT).selectOption({ label: 'Через вершину' });
   await expect(entry(page, ANGLE)).toHaveValue('80');
 });
 
@@ -214,7 +222,7 @@ for (const [connector, count, objectCount] of [
     if (count !== undefined) await entry(page, 'Кількість').selectOption({ label: count });
     await expectReady(page);
     expect((await download(page, 'cone-apex-section.3mf')).objects).toHaveLength(objectCount);
-    await entry(page, THROUGH).selectOption({ label: 'Точку на осі' });
+    await entry(page, CUT).selectOption({ label: 'Похилий' });
     await entry(page, POSITION).fill('40');
     await entry(page, ANGLE).fill('30');
     await expectReady(page);
@@ -278,8 +286,8 @@ test('on a narrow phone every field is reachable and the page fits', async ({ pa
   await entry(page, ANGLE).fill('85');
   await entry(page, 'Тип кріплення').selectOption({ label: 'Знімні штифти' });
   await entry(page, 'Кількість').selectOption({ label: '2' });
-  await entry(page, THROUGH).scrollIntoViewIfNeeded();
-  await expect(entry(page, THROUGH)).toBeInViewport();
+  await entry(page, CUT).scrollIntoViewIfNeeded();
+  await expect(entry(page, CUT)).toBeInViewport();
   for (const label of [
     ANGLE,
     DIRECTION,
@@ -292,4 +300,38 @@ test('on a narrow phone every field is reachable and the page fits', async ({ pa
     await expect(entry(page, label)).toBeVisible();
   }
   expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(0);
+});
+
+test('through the apex from the main selector: the plane keeps the apex as the cone grows and leans, with its connector and view', async ({
+  page,
+}) => {
+  const errors = collectErrors(page);
+  await chooseApex(page);
+  await expect(entry(page, 'Площина проходить через')).toHaveCount(0);
+  await expect(page.getByRole('checkbox', { name: 'Осьовий переріз' })).toBeVisible();
+  await expect(entry(page, POSITION)).toHaveCount(0);
+  await expect(entry(page, ANGLE)).toHaveValue('80');
+  await entry(page, 'Тип кріплення').selectOption({ label: 'Виступ і отвір' });
+  await expectReady(page);
+  const right = await download(page, 'cone-apex-section.3mf');
+  expect(right.objects).toHaveLength(2);
+  // Taller and leaning: the same kind of plane, through the apex wherever it now is, the connector and separation kept.
+  await openSection(page, 'Висота');
+  await entry(page, 'Висота h').fill('3');
+  await openSection(page, 'Нахил');
+  await entry(page, 'Зміщення вершини').fill('0,5');
+  await expectReady(page, '53,3 × 53,3 × 80 мм');
+  await expect(entry(page, 'Тип перерізу')).toHaveValue('oblique-apex');
+  await expect(entry(page, 'Тип кріплення')).toHaveValue('plug');
+  await expect(page.getByRole('checkbox', { name: 'Розсунути частини', exact: true })).toBeChecked();
+  expect((await download(page, 'cone-apex-section.3mf')).objects).toHaveLength(2);
+  // Back and forth: each type keeps its own fields, and the inclined one has no apex left in it.
+  for (let round = 0; round < 2; round += 1) {
+    await entry(page, 'Тип перерізу').selectOption({ label: 'Похилий' });
+    await expect(entry(page, POSITION)).toHaveValue('50');
+    await expect(page.getByRole('checkbox', { name: 'Осьовий переріз' })).toHaveCount(0);
+    await entry(page, 'Тип перерізу').selectOption({ label: 'Через вершину' });
+    await expect(entry(page, ANGLE)).toBeVisible();
+  }
+  expect(errors).toEqual([]);
 });

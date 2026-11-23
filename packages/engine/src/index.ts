@@ -24,6 +24,8 @@ export {
   type BoxTraceChoices,
   type BoxVertexTrace,
   type BoxVertices,
+  boxApexPointRange,
+  boxApexPositionBounds,
   boxExtent,
   boxFaceLines,
   boxFaceOrientations,
@@ -351,7 +353,6 @@ export {
   prismScaleMm,
 } from './shapes/prism-geometry.ts';
 export {
-  buildPyramidShape,
   type PyramidShapeDimensions,
   pyramidShapeDimensionsMm,
   pyramidShapeProportions,

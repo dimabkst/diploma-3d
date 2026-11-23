@@ -18,7 +18,14 @@ import {
   roundDimensionsMm,
   verticalOffsetLimitPercent,
 } from '@diploma-3d/engine';
-import type { ConeShape, PhysicalScale, SectionType, ShapeKind } from '@diploma-3d/schema';
+import {
+  BOX_SECTION_TYPES,
+  type BoxSectionSpec,
+  type ConeShape,
+  type PhysicalScale,
+  type SectionType,
+  type ShapeKind,
+} from '@diploma-3d/schema';
 import { formatDecimal, formatSteppedDecimal, parseDecimal, type StepRange } from '../decimal.ts';
 import { BOX_SOLIDS, type BoxSolid, boxContextOf, boxKeysOf, boxModeKeys, boxSectionOf, boxShapeOf, isBoxSolid } from './box.ts';
 import type { ParameterChoices, ParameterValues } from './parameters.ts';
@@ -279,7 +286,8 @@ export function boxConnectorScale(
   if (shape === undefined || printSizeMm === undefined) return undefined;
   const scale = { longestDimensionMm: printSizeMm };
   const solid = shape as BoxLikeShape;
-  const heightMm = boxVertices(solid, scale).A1[2];
+  // The solid's height: its upper base's, or a pyramid's apex's.
+  const heightMm = Math.max(...Object.values(boxVertices(solid, scale)).map(([, , z]) => z));
   const keys = boxKeysOf(kind);
   const type = choices?.[keys.Section];
   let boxSpanMm = previous?.boxSpanMm;
@@ -299,8 +307,7 @@ export function boxConnectorScale(
   return { longestDimensionMm: printSizeMm, radiusMm: printSizeMm / 2, heightMm, boxSpanMm };
 }
 
-const isBoxCut = (type: SectionType): type is 'face-parallel' | 'longitudinal' | 'through-line' | 'inclined' =>
-  type === 'face-parallel' || type === 'longitudinal' || type === 'through-line' || type === 'inclined';
+const isBoxCut = (type: SectionType): type is BoxSectionSpec['type'] => (BOX_SECTION_TYPES as readonly string[]).includes(type);
 
 /**
  * The scale of the solid's connector settings; undefined for a solid without them, or while a value it needs is invalid. A

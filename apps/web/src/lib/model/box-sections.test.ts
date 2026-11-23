@@ -22,6 +22,7 @@ import {
   settleBoxChoices,
   startLineAngle,
   startPoint,
+  throughHeightFoot,
   traceThrough,
 } from './parameters.ts';
 
@@ -783,5 +784,161 @@ describe('leaving a plane perpendicular to the lateral edges for its angles', ()
     // Choosing «Не вибрано» in the list is the same way out.
     const listed = settled('cube', { ...down, choices: { ...down.choices, cubeNormalAlong: 'none' } });
     expectSamePlanes(before, planesOf('cube', listed));
+  });
+});
+
+describe('the sections of the pyramids and the tetrahedron', () => {
+  const chosen = (overrides: Partial<ParameterChoices>) =>
+    ({
+      pyramidSection: 'face-parallel',
+      pyramidBaseType: 'regular',
+      pyramidBaseSides: 4,
+      ...overrides,
+    }) as Partial<ParameterChoices>;
+
+  it('offer their four modes, every face for a parallel plane, as no two of a pyramid’s faces are parallel', () => {
+    for (const kind of ['pyramid', 'tetrahedron'] as const) {
+      const group = groupOf(kind, 'Переріз', {}, {});
+      expect(optionsOf(group, `${kind}Section`).map((option) => option.label)).toEqual([
+        'Без перерізу',
+        'Паралельно грані',
+        'Через вершину піраміди',
+        'Через ребро основи',
+        'Похилий',
+      ]);
+    }
+    expect(optionsOf(groupOf('pyramid', 'Переріз', {}, chosen({})), 'pyramidFace').map((option) => option.label)).toEqual([
+      'ABCD — основа',
+      'SAB — бічна грань',
+      'SBC — бічна грань',
+      'SCD — бічна грань',
+      'SDA — бічна грань',
+    ]);
+    expect(
+      optionsOf(groupOf('tetrahedron', 'Переріз', {}, { tetrahedronSection: 'face-parallel' }), 'tetrahedronFace'),
+    ).toHaveLength(4);
+  });
+
+  it('through the apex: the base’s lines, the lateral edge with a point, and the pyramid’s height', () => {
+    const tetrahedron = groupOf('tetrahedron', 'Переріз', {}, { tetrahedronSection: 'through-apex' });
+    expect(optionsOf(tetrahedron, 'tetrahedronTrace').map((option) => option.value)).toEqual([
+      'angle',
+      'median',
+      'midline',
+      'edge-point',
+      'height-edge',
+    ]);
+    const square = groupOf('pyramid', 'Переріз', {}, chosen({ pyramidSection: 'through-apex' }));
+    expect(optionsOf(square, 'pyramidTrace').map((option) => option.value)).toEqual([
+      'angle',
+      'diagonal',
+      'edge-point',
+      'height-edge',
+    ]);
+    // SC and the midpoint of AB, a choice away.
+    const sc = { tetrahedronSection: 'through-apex', tetrahedronTrace: 'edge-point', tetrahedronTraceSegment: 'A-B' } as const;
+    expect(request('tetrahedron', {}, sc).spec?.section).toEqual({
+      type: 'through-apex',
+      trace: 'edge-point',
+      traceAngleDeg: 0,
+      traceVertex: 'C',
+      traceSegment: ['A', 'B'],
+      tracePointPercent: 50,
+      positionPercent: 50,
+    });
+    const group = groupOf('tetrahedron', 'Переріз', {}, sc);
+    expect(optionsOf(group, 'tetrahedronTraceVertex').map((option) => option.label)).toEqual(['SA', 'SB', 'SC']);
+    expect(optionsOf(group, 'tetrahedronTraceSegment').map((option) => option.label)).toEqual(['Ребро AB']);
+    expect(labels(group)).toContain('Площина проходить через бічне ребро SC і точку ребра AB.');
+  });
+
+  it('through a base edge: only the base’s edges, and of the lateral edges those that do not meet it', () => {
+    const group = groupOf('tetrahedron', 'Переріз', {}, { tetrahedronSection: 'through-line', tetrahedronLineMethod: 'point' });
+    expect(group.fields.some((field) => field.key === 'tetrahedronLineFace')).toBe(false);
+    expect(optionsOf(group, 'tetrahedronLine').map((option) => option.label)).toEqual(['Ребро AB', 'Ребро BC', 'Ребро CA']);
+    expect(optionsOf(group, 'tetrahedronPointEdge').map((option) => option.label)).toEqual(['Ребро SC']);
+    const result = request('tetrahedron', {}, { tetrahedronSection: 'through-line', tetrahedronLineMethod: 'point' });
+    expect(result.spec?.section).toEqual({
+      type: 'through-line',
+      face: 'ABC',
+      line: ['A', 'B'],
+      method: 'point',
+      pointEdge: ['S', 'C'],
+      pointPercent: 50,
+    });
+    // S and C give the faces SAB and ABC: the field stops short of both.
+    const point = sectionNumberFields(group).find((field) => field.key === 'tetrahedronPointPercent');
+    expect(point?.range?.min).toBeGreaterThan(0);
+    expect(point?.range?.max).toBeLessThan(100);
+  });
+
+  it('parallel to a pair of opposite edges, through the height’s foot, and back to its angles where it is', () => {
+    const start = settled('tetrahedron', {
+      texts: texts({ tetrahedronSectionSecondPercent: '88' }),
+      choices: choices({ tetrahedronSection: 'inclined', tetrahedronParallelEdges: 'S-C|A-B', tetrahedronSecondCut: true }),
+    });
+    const result = request('tetrahedron', start.texts, start.choices);
+    expect(result.spec?.section).toMatchObject({
+      type: 'inclined',
+      parallelTo: [
+        ['S', 'C'],
+        ['A', 'B'],
+      ],
+      secondPositionPercent: 88,
+    });
+    const group = groupOf('tetrahedron', 'Переріз', start.texts, start.choices);
+    const pairs = group.fields.find((field) => field.key === 'tetrahedron-parallel-edges') as unknown as {
+      fields: { options?: { label: string }[] }[];
+    };
+    expect((pairs.fields[0]?.options ?? []).map((option) => option.label)).toEqual([
+      'Не вибрано — задати кутами',
+      'SA і BC',
+      'SB і AC',
+      'SC і AB',
+    ]);
+    expect(group.fields.map((field) => field.key)).toEqual(
+      expect.arrayContaining(['tetrahedron-height-foot', 'tetrahedron-normal-manual']),
+    );
+    expect(group.fields.map((field) => field.key)).not.toContain('tetrahedron-normal-lateral');
+    // Through H: in the regular tetrahedron, H is the centroid of ABC, a third of the way from AB to SC.
+    const foot = throughHeightFoot('tetrahedron', start, result.values);
+    const percent = Number.parseFloat((foot.texts.tetrahedronSectionPercent as string).replace(',', '.'));
+    expect(percent).not.toBe(50);
+    // Back to the angles: the same planes, the second cut kept.
+    const back = settled('tetrahedron', normalAlongManual('tetrahedron', foot));
+    expect(back.choices.tetrahedronParallelEdges).toBe('none');
+    expect(back.choices.tetrahedronSecondCut).toBe(true);
+    const before = resolveModelRequest('tetrahedron', foot.texts, foot.choices, { exact: foot.exact ?? {}, connectorEdits: {} });
+    const after = resolveModelRequest('tetrahedron', back.texts, back.choices, { exact: back.exact ?? {}, connectorEdits: {} });
+    expect(before.errors).toEqual({});
+    expect(after.errors).toEqual({});
+    const vertices = boxVertices({ kind: 'tetrahedron' }, { longestDimensionMm: 80 });
+    const [p, q] = [
+      boxPlane(vertices, before.spec?.section as BoxSectionSpec),
+      boxPlane(vertices, after.spec?.section as BoxSectionSpec),
+    ];
+    const sign = Math.sign(p.normal.reduce((sum, value, axis) => sum + value * (q.normal[axis] as number), 0));
+    p.normal.forEach((value, axis) => {
+      expect(sign * (q.normal[axis] as number)).toBeCloseTo(value, 9);
+    });
+    expect(sign * q.offset).toBeCloseTo(p.offset, 6);
+  });
+
+  it('replaces what a new base does not have before any model is made: a diagonal, a pair of opposite edges', () => {
+    const square = chosen({
+      pyramidSection: 'through-apex',
+      pyramidTrace: 'diagonal',
+      pyramidTraceSegment: 'A-C',
+      pyramidParallelEdges: 'S-C|A-B',
+      pyramidNormalAlong: 'D-S',
+    });
+    const triangular = { ...square, pyramidBaseSides: 3 } as Partial<ParameterChoices>;
+    expect(request('pyramid', {}, triangular).spec?.section).toMatchObject({ type: 'through-apex', trace: 'angle' });
+    expect(request('pyramid', {}, { ...triangular, pyramidSection: 'inclined' }).spec?.section).not.toHaveProperty('normalAlong');
+    const after = settled('pyramid', { texts: texts(), choices: choices(triangular) });
+    expect(after.choices).toMatchObject({ pyramidTrace: 'angle', pyramidNormalAlong: 'none', pyramidParallelEdges: 'S-C|A-B' });
+    // Back to four sides: no pair of opposite edges there.
+    const four = settled('pyramid', { ...after, choices: { ...after.choices, pyramidBaseSides: 4 } });
+    expect(four.choices.pyramidParallelEdges).toBe('none');
   });
 });

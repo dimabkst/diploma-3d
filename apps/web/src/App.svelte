@@ -44,7 +44,10 @@ import {
   startApexSection,
   startLineAngle,
   startPoint,
+  startTracePoint,
   switchTiltMode,
+  throughHeightFoot,
+  tracePointAtMidpoint,
   traceThrough,
 } from './lib/model/parameters.ts';
 import { loadPrintSizeText, savePrintSize } from './lib/model/printSize.ts';
@@ -255,6 +258,14 @@ function runPanelAction(action: PanelAction) {
     if (selectedKind !== undefined) applyState(normalAlongLateral(selectedKind, parameterState));
     return;
   }
+  if (action === 'height-foot') {
+    if (selectedKind !== undefined) applyState(throughHeightFoot(selectedKind, parameterState, request?.values ?? {}));
+    return;
+  }
+  if (action === 'trace-midpoint') {
+    if (selectedKind !== undefined) applyState(tracePointAtMidpoint(selectedKind, parameterState));
+    return;
+  }
   if (action === 'normal-manual') {
     if (selectedKind !== undefined) applyState(normalAlongManual(selectedKind, parameterState));
     return;
@@ -304,6 +315,7 @@ $effect.pre(() => {
   const next =
     startLineAngle(selectedKind, parameterState, values) ??
     startPoint(selectedKind, parameterState, values) ??
+    startTracePoint(selectedKind, parameterState, values) ??
     followTrace(selectedKind, parameterState, values) ??
     followNormal(selectedKind, parameterState, values);
   if (next !== undefined) untrack(() => applyState(next));

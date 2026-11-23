@@ -569,7 +569,8 @@ function partsOrientation({ solids, section, spec }: GeneratedModel): readonly (
   if (isBoxShape(spec.shape) && section !== undefined && section.type !== 'parallel-to-bases') {
     // A box's part may keep a base, the other one, or only a corner or an edge of either: it rests on whichever flat face
     // carries it, see `restOnFlatFace`, or on its flat cut face; a plug or a tongue on the cut face leaves that face out.
-    const baseHeight = boxVertices(spec.shape, spec.scale).A1[2];
+    // The upper base's height, a prism's; the apex's for a pyramid, whose top is no face.
+    const baseHeight = Math.max(...Object.values(boxVertices(spec.shape, spec.scale)).map(([, , z]) => z));
     const { normal } = section.plane;
     const protrudes = connector?.type === 'plug' || connector?.type === 'dovetail';
     return solids.map((solid) => {

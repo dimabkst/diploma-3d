@@ -9,6 +9,7 @@ export const SECTION_TYPES = [
   'axis-parallel',
   'face-parallel',
   'longitudinal',
+  'through-apex',
   'through-line',
   'inclined',
 ] as const;
@@ -386,9 +387,16 @@ type PrismLetter = (typeof PRISM_LETTERS)[number];
  * A vertex of a cube, a parallelepiped or a prism as school notation names it: the lower base A, B, C, … counter-clockwise seen
  * from above, AB along +X, and the upper base A1, B1, C1, … above it, A1 joined to A by a lateral edge.
  */
-export type BoxVertex = PrismLetter | `${PrismLetter}1`;
+export type BoxVertex = PrismLetter | `${PrismLetter}1` | typeof PYRAMID_APEX;
 
-export const BOX_VERTEX_NAMES: readonly BoxVertex[] = [...PRISM_LETTERS, ...PRISM_LETTERS.map((letter) => `${letter}1` as const)];
+/** A pyramid's apex, as school notation names it: SABC, SABCD. */
+export const PYRAMID_APEX = 'S';
+
+export const BOX_VERTEX_NAMES: readonly BoxVertex[] = [
+  ...PRISM_LETTERS,
+  ...PRISM_LETTERS.map((letter) => `${letter}1` as const),
+  PYRAMID_APEX,
+];
 
 /** A face by its vertices' names in order around it, such as ABC, A1B1C1 or ABB1A1. */
 export type BoxFace = string;
@@ -401,28 +409,40 @@ export const boxSegmentSchema = z
 export type BoxSegment = z.infer<typeof boxSegmentSchema>;
 
 /**
- * The vertices, faces and edges of a prism over an n-gon, a cube and the parallelepipeds being those over a quadrilateral: 2n
- * vertices, the lower base, then the upper one, then the n lateral faces XYY1X1 from AB on, each face by its vertices in order
- * around it; the 3n edges, the lower base's, the upper base's, then the lateral ones.
+ * The vertices, faces and edges of a prism or a pyramid over an n-gon, a cube and the parallelepipeds being prisms over a
+ * quadrilateral and the tetrahedron a pyramid over a triangle, each face by its vertices in order around it.
+ * - A prism: 2n vertices, the lower base, then the upper one; n + 2 faces, both bases, then the lateral faces XYY1X1 from AB on;
+ *   3n edges, the lower base's, the upper base's, then the lateral ones XX1.
+ * - A pyramid: n + 1 vertices, the base, then the apex S; n + 1 faces, the base, then the lateral faces SXY from AB on; 2n
+ *   edges, the base's, then the lateral ones SX.
  */
 export interface PrismTopology {
+  readonly kind: 'prism' | 'pyramid';
   readonly sides: number;
   readonly vertices: readonly BoxVertex[];
   readonly faces: Readonly<Record<BoxFace, readonly BoxVertex[]>>;
   readonly faceNames: readonly BoxFace[];
   readonly lowerBase: BoxFace;
-  readonly upperBase: BoxFace;
+  /** A prism's; a pyramid has none. */
+  readonly upperBase: BoxFace | undefined;
+  /** A pyramid's; a prism has none. */
+  readonly apex: BoxVertex | undefined;
   readonly edges: readonly BoxSegment[];
+  readonly lateralEdges: readonly BoxSegment[];
 }
 
-const topologies = new Map<number, PrismTopology>();
+const topologies = new Map<string, PrismTopology>();
+
+const assertSides = (sides: number) => {
+  if (!Number.isInteger(sides) || sides < 3 || sides > PRISM_LETTERS.length) {
+    throw new RangeError(`A base needs from 3 to ${PRISM_LETTERS.length} vertices, not ${sides}.`);
+  }
+};
 
 export function prismTopology(sides: number): PrismTopology {
-  const known = topologies.get(sides);
+  const known = topologies.get(`prism${sides}`);
   if (known !== undefined) return known;
-  if (!Number.isInteger(sides) || sides < 3 || sides > PRISM_LETTERS.length) {
-    throw new RangeError(`A prism needs from 3 to ${PRISM_LETTERS.length} base vertices, not ${sides}.`);
-  }
+  assertSides(sides);
   const lower = PRISM_LETTERS.slice(0, sides) as PrismLetter[];
   const upper = lower.map((letter): BoxVertex => `${letter}1`);
   const next = (index: number) => (index + 1) % sides;
@@ -434,20 +454,52 @@ export function prismTopology(sides: number): PrismTopology {
   ]);
   const faceList: (readonly BoxVertex[])[] = [lower, upper, ...lateral];
   const faces = Object.fromEntries(faceList.map((corners) => [corners.join(''), corners]));
+  const lateralEdges = lower.map((letter, index): BoxSegment => [letter, upper[index] as BoxVertex]);
   const topology: PrismTopology = {
+    kind: 'prism',
     sides,
     vertices: [...lower, ...upper],
     faces,
     faceNames: Object.keys(faces),
     lowerBase: lower.join(''),
     upperBase: upper.join(''),
+    apex: undefined,
     edges: [
       ...lower.map((letter, index): BoxSegment => [letter, lower[next(index)] as BoxVertex]),
       ...upper.map((vertex, index): BoxSegment => [vertex, upper[next(index)] as BoxVertex]),
-      ...lower.map((letter, index): BoxSegment => [letter, upper[index] as BoxVertex]),
+      ...lateralEdges,
     ],
+    lateralEdges,
   };
-  topologies.set(sides, topology);
+  topologies.set(`prism${sides}`, topology);
+  return topology;
+}
+
+export function pyramidTopology(sides: number): PrismTopology {
+  const known = topologies.get(`pyramid${sides}`);
+  if (known !== undefined) return known;
+  assertSides(sides);
+  const base = PRISM_LETTERS.slice(0, sides) as PrismLetter[];
+  const next = (index: number) => (index + 1) % sides;
+  const faceList: (readonly BoxVertex[])[] = [
+    base,
+    ...base.map((letter, index): readonly BoxVertex[] => [PYRAMID_APEX, letter, base[next(index)] as BoxVertex]),
+  ];
+  const faces = Object.fromEntries(faceList.map((corners) => [corners.join(''), corners]));
+  const lateralEdges = base.map((letter): BoxSegment => [PYRAMID_APEX, letter]);
+  const topology: PrismTopology = {
+    kind: 'pyramid',
+    sides,
+    vertices: [...base, PYRAMID_APEX],
+    faces,
+    faceNames: Object.keys(faces),
+    lowerBase: base.join(''),
+    upperBase: undefined,
+    apex: PYRAMID_APEX,
+    edges: [...base.map((letter, index): BoxSegment => [letter, base[next(index)] as BoxVertex]), ...lateralEdges],
+    lateralEdges,
+  };
+  topologies.set(`pyramid${sides}`, topology);
   return topology;
 }
 
@@ -509,7 +561,36 @@ export const faceParallelSectionSchema = z.strictObject({
  */
 export const LONGITUDINAL_TRACES = ['angle', 'AC', 'BD', 'diagonal', 'median', 'height', 'bisector', 'midline'] as const;
 
+/**
+ * The lines of a pyramid's base plane that a plane through its apex may pass through, besides a trace at an angle to AB: those of
+ * a longitudinal plane, and two of the pyramid's own: from the base vertex V of the lateral edge SV through the point of a base
+ * edge, so that the plane holds SV and that point; from V through H, the foot of the pyramid's height, so that the plane holds
+ * SV and the height SH.
+ */
+export const APEX_TRACES = ['angle', 'diagonal', 'median', 'height', 'bisector', 'midline', 'edge-point', 'height-edge'] as const;
+
+export type ApexTrace = (typeof APEX_TRACES)[number];
+
 export type LongitudinalTrace = (typeof LONGITUDINAL_TRACES)[number];
+
+/**
+ * A plane of a pyramid through its apex S and a line of the base plane, whatever the pyramid becomes: a trace at traceAngleDeg
+ * to AB, counter-clockwise seen from above, at positionPercent of the base's extent across it; a diagonal traceSegment; the
+ * median, altitude or bisector of a triangular base from traceVertex, or its midline parallel to the side traceSegment; from
+ * traceVertex V through the point at tracePointPercent of the base edge traceSegment, from its first vertex; or from V through
+ * the foot of the pyramid's height.
+ */
+export const throughApexSectionSchema = z.strictObject({
+  type: z.literal('through-apex'),
+  trace: z.enum(APEX_TRACES).default('angle'),
+  traceAngleDeg: z.number().min(0).max(180).default(0),
+  traceVertex: z.enum(BOX_VERTEX_NAMES as [BoxVertex, ...BoxVertex[]]).optional(),
+  traceSegment: boxSegmentSchema.optional(),
+  tracePointPercent: z.number().min(0).max(100).optional(),
+  positionPercent: sectionPositionSchema.default(DEFAULT_SECTION_POSITION_PERCENT),
+  ...secondBoxPlane,
+  connector: connectorSchema.optional(),
+});
 
 /**
  * A plane parallel to the lateral edges, whose direction a = A1 − A is the solid's own: its trace on the base plane runs at
@@ -565,6 +646,8 @@ export const inclinedSectionSchema = z.strictObject({
   inclinationDeg: z.number().min(0).max(90).default(45),
   directionDeg: z.number().min(OBLIQUE_DIRECTION_LIMITS.min).max(OBLIQUE_DIRECTION_LIMITS.max).default(0),
   normalAlong: boxSegmentSchema.optional(),
+  /** Two skew edges whose directions the plane is parallel to, n ∝ u × v, as a pair of a tetrahedron's opposite edges is. */
+  parallelTo: z.tuple([boxSegmentSchema, boxSegmentSchema]).optional(),
   positionPercent: sectionPositionSchema.default(DEFAULT_SECTION_POSITION_PERCENT),
   ...secondBoxPlane,
   connector: connectorSchema.optional(),
@@ -574,7 +657,13 @@ export type FaceParallelSection = z.infer<typeof faceParallelSectionSchema>;
 export type LongitudinalSection = z.infer<typeof longitudinalSectionSchema>;
 export type ThroughLineSection = z.infer<typeof throughLineSectionSchema>;
 export type InclinedSection = z.infer<typeof inclinedSectionSchema>;
-export type BoxSectionSpec = FaceParallelSection | LongitudinalSection | ThroughLineSection | InclinedSection;
+export type ThroughApexSection = z.infer<typeof throughApexSectionSchema>;
+export type BoxSectionSpec =
+  | FaceParallelSection
+  | LongitudinalSection
+  | ThroughApexSection
+  | ThroughLineSection
+  | InclinedSection;
 
 /**
  * What a box section names that the solid does not have, by the solid's topology: a face, a line that is no edge or diagonal of
@@ -584,6 +673,21 @@ export function boxSectionIssues(topology: PrismTopology, section: BoxSectionSpe
   const issues: { path: string; message: string }[] = [];
   const has = (vertex: BoxVertex) => topology.vertices.includes(vertex);
   const lowerCorners = topology.faces[topology.lowerBase] ?? [];
+  const triangle = topology.sides === 3;
+  const inBase = (segment: readonly [BoxVertex, BoxVertex] | undefined) =>
+    segment === undefined ? undefined : boxFaceSegmentKind(topology, topology.lowerBase, segment);
+  const baseVertex = (vertex: BoxVertex | undefined) => vertex !== undefined && lowerCorners.includes(vertex);
+  const lineTrace = (
+    trace: string,
+    section: { traceSegment?: readonly [BoxVertex, BoxVertex] | undefined; traceVertex?: BoxVertex | undefined },
+  ) =>
+    trace === 'diagonal'
+      ? inBase(section.traceSegment) === 'diagonal'
+      : trace === 'midline'
+        ? triangle && inBase(section.traceSegment) === 'edge'
+        : trace === 'median' || trace === 'height' || trace === 'bisector'
+          ? triangle && baseVertex(section.traceVertex)
+          : undefined;
   switch (section.type) {
     case 'face-parallel':
       if (section.face !== undefined && topology.faces[section.face] === undefined) {
@@ -591,20 +695,25 @@ export function boxSectionIssues(topology: PrismTopology, section: BoxSectionSpe
       }
       break;
     case 'longitudinal': {
-      const kind = (segment: readonly [BoxVertex, BoxVertex] | undefined) =>
-        segment === undefined ? undefined : boxFaceSegmentKind(topology, topology.lowerBase, segment);
-      const triangle = topology.sides === 3;
       const valid =
-        section.trace === 'angle'
-          ? true
-          : section.trace === 'AC' || section.trace === 'BD'
-            ? topology.sides >= 4
-            : section.trace === 'diagonal'
-              ? kind(section.traceSegment) === 'diagonal'
-              : section.trace === 'midline'
-                ? triangle && kind(section.traceSegment) === 'edge'
-                : triangle && section.traceVertex !== undefined && lowerCorners.includes(section.traceVertex);
-      if (!valid) issues.push({ path: 'trace', message: `The base offers no such trace: ${section.trace}.` });
+        topology.kind === 'prism' &&
+        (section.trace === 'angle' ||
+          (section.trace === 'AC' || section.trace === 'BD' ? topology.sides >= 4 : lineTrace(section.trace, section) === true));
+      if (!valid) issues.push({ path: 'trace', message: `The solid offers no such longitudinal trace: ${section.trace}.` });
+      break;
+    }
+    case 'through-apex': {
+      const valid =
+        topology.kind === 'pyramid' &&
+        (section.trace === 'angle' ||
+          (section.trace === 'edge-point'
+            ? baseVertex(section.traceVertex) &&
+              inBase(section.traceSegment) === 'edge' &&
+              section.tracePointPercent !== undefined
+            : section.trace === 'height-edge'
+              ? baseVertex(section.traceVertex)
+              : lineTrace(section.trace, section) === true));
+      if (!valid) issues.push({ path: 'trace', message: `The pyramid offers no such trace through its apex: ${section.trace}.` });
       break;
     }
     case 'through-line':
@@ -621,12 +730,19 @@ export function boxSectionIssues(topology: PrismTopology, section: BoxSectionSpe
       if (section.normalAlong !== undefined && !section.normalAlong.every(has)) {
         issues.push({ path: 'normalAlong', message: 'The segment joins vertices the solid does not have.' });
       }
+      if (section.parallelTo !== undefined) {
+        const [first, second] = section.parallelTo;
+        const skew = first.every((vertex) => !second.includes(vertex));
+        if (!isEdgeOf(topology, first) || !isEdgeOf(topology, second) || !skew) {
+          issues.push({ path: 'parallelTo', message: 'The plane is parallel to two edges that do not share a vertex.' });
+        }
+      }
       break;
   }
   return issues;
 }
 
-export const BOX_SECTION_TYPES = ['face-parallel', 'longitudinal', 'through-line', 'inclined'] as const;
+export const BOX_SECTION_TYPES = ['face-parallel', 'longitudinal', 'through-apex', 'through-line', 'inclined'] as const;
 
 export const sectionSchema = z.discriminatedUnion('type', [
   parallelSectionSchema,
@@ -637,6 +753,7 @@ export const sectionSchema = z.discriminatedUnion('type', [
   axisParallelSectionSchema,
   faceParallelSectionSchema,
   longitudinalSectionSchema,
+  throughApexSectionSchema,
   throughLineSectionSchema,
   inclinedSectionSchema,
 ]);

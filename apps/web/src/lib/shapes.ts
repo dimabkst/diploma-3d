@@ -30,6 +30,7 @@ import {
   PRISM_BASE_TYPES,
   type PrismBaseSides,
   type PrismTopology,
+  PYRAMID_APEX,
   PYRAMID_BASE_TYPES,
   type PyramidBaseType,
   RATIO_LIMITS,
@@ -37,6 +38,7 @@ import {
   SECTION_PLATE_MARGIN_LIMITS,
   SECTION_PLATE_THICKNESS_LIMITS,
   SECTION_POSITION_LIMITS,
+  SECTIONS_BY_SHAPE,
   type SectionType,
   type ShapeKind,
   TWIST_AXIAL_CLEARANCE_LIMITS,
@@ -52,6 +54,11 @@ import {
   faceSelection,
   isBoxSolid,
   normalSelection,
+  oppositeEdgePairs,
+  type PairKey,
+  pairOf,
+  pairSelection,
+  type SegmentKey,
   segmentKey,
   segmentLabel,
   segmentName,
@@ -78,6 +85,7 @@ import {
   type ConnectorStatus,
   canSwitchTiltMode,
   coneApexKeys,
+  heightFootPercent,
   type ParameterChoices,
   type ParameterKey,
   type ParameterValues,
@@ -234,6 +242,8 @@ export type PanelAction =
   | 'trace-through'
   | 'normal-lateral'
   | 'normal-manual'
+  | 'height-foot'
+  | 'trace-midpoint'
   | 'line-midpoint';
 
 /**
@@ -655,8 +665,10 @@ const sectionNames: Readonly<Record<SectionChoice, string>> = {
   oblique: 'Похилий',
   horizontal: 'Горизонтальний',
   'axis-parallel': 'Паралельно осі',
+  'oblique-apex': 'Через вершину',
   'face-parallel': 'Паралельно грані',
   longitudinal: 'Поздовжній',
+  'through-apex': 'Через вершину піраміди',
   'through-line': 'Через ребро або діагональ',
   inclined: 'Похилий',
 };
@@ -1514,6 +1526,7 @@ function connectorSection(
     },
     'face-parallel': boxHelps(boxHorizontal, entrance),
     longitudinal: boxHelps(boxHorizontal, entrance),
+    'through-apex': boxHelps(boxHorizontal, entrance),
     'through-line': boxHelps(boxHorizontal, entrance),
     inclined: boxHelps(boxHorizontal, entrance),
   };
@@ -1768,9 +1781,10 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
     type: 'choice',
     key: keys.choice,
     label: 'Тип перерізу',
-    options: (['none', 'parallel-to-bases', 'vertical', 'oblique', 'axis-parallel'] as const)
-      // A right cylinder's planes parallel to its axis are its vertical ones; a cone has no other.
+    options: (['none', 'parallel-to-bases', 'vertical', 'oblique', 'oblique-apex', 'axis-parallel'] as const)
+      // A right cylinder's planes parallel to its axis are its vertical ones; a cone has no other. Only a cone has an apex.
       .filter((value) => value !== 'axis-parallel' || (kind === 'cylinder' && (leaning || chosen === value)))
+      .filter((value) => value !== 'oblique-apex' || kind === 'cone')
       .map((value) => ({ value, label: namesOf(value) })),
   };
   const { offset, oblique } = keys;
@@ -1778,17 +1792,7 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
   const toggle: ToggleField = { type: 'toggle', key: keys.separated, label: 'Розсунути частини' };
   const noteId = `${kind}-oblique-axis-note`;
   const containsAxis = obliqueContainsAxis(kind, context.values, oblique.inclination, oblique.direction);
-  const through: ChoiceField = {
-    type: 'choice',
-    key: 'coneObliqueThrough',
-    label: 'Площина проходить через',
-    options: [
-      { value: 'axis', label: 'Точку на осі' },
-      { value: 'apex', label: 'Вершину' },
-    ],
-  };
   const apexAngles = context.sectionRanges?.[coneApexKeys.inclination];
-  const throughApex = kind === 'cone' && choices.coneObliqueThrough === 'apex';
   const plate = keys.plate;
   const plateOn = plate !== undefined && choices[plate.toggle];
   const plateFields = plateFieldsOf(kind, keys, choices, context, chosen);
@@ -1797,6 +1801,7 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
     horizontal: [],
     'face-parallel': [],
     longitudinal: [],
+    'through-apex': [],
     'through-line': [],
     inclined: [],
     'axis-parallel':
@@ -1846,65 +1851,64 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
       toggle,
       ...plateFields,
     ],
-    oblique: throughApex
-      ? [
-          through,
-          { type: 'toggle', key: 'coneApexAxial', label: 'Осьовий переріз' },
-          // Held to the axis, the angle follows from the cone and the direction; the own angle waits for the switch to go off.
-          apexAxial
-            ? {
-                type: 'note' as const,
-                key: 'cone-apex-axial-angle',
-                text:
-                  `Площина проходить через вершину й центр основи, кут до площини основи — ` +
-                  `${axialAngle === undefined ? '—' : formatDecimal(Math.round(axialAngle * 10) / 10)}°.`,
-              }
-            : {
-                type: 'number',
-                key: coneApexKeys.inclination,
-                label: 'Кут до площини основи',
-                suffix: '°',
-                range:
-                  apexAngles === undefined || apexAngles === null ? undefined : planeAngleRange(apexAngles, ANGLE_INCREMENT_DEG),
-              },
-          { type: 'number', key: coneApexKeys.direction, label: 'Напрям нахилу', suffix: '°', range: obliqueDirectionRange },
-          toggle,
-          ...plateFields,
-        ]
-      : [
-          ...(kind === 'cone' ? [through] : []),
-          {
+    // A plane through the cone's apex, its own type: the apex stays on it whatever the cone becomes.
+    'oblique-apex': [
+      { type: 'toggle', key: 'coneApexAxial', label: 'Осьовий переріз' },
+      // Held to the axis, the angle follows from the cone and the direction; the own angle waits for the switch to go off.
+      apexAxial
+        ? {
+            type: 'note' as const,
+            key: 'cone-apex-axial-angle',
+            text:
+              `Площина проходить через вершину й центр основи, кут до площини основи — ` +
+              `${axialAngle === undefined ? '—' : formatDecimal(Math.round(axialAngle * 10) / 10)}°.`,
+          }
+        : {
             type: 'number',
-            key: oblique.position,
-            label: kind === 'cone' ? 'Точка на осі від основи' : 'Точка на осі від нижньої основи',
-            suffix: '% h',
-            range: sectionPositionRange,
-            ...(containsAxis ? { disabled: true, describedBy: noteId } : {}),
-          },
-          ...(containsAxis ? [{ type: 'note' as const, key: noteId, text: axisInPlaneNote(kind) }] : []),
-          {
-            type: 'number',
-            key: oblique.inclination,
+            key: coneApexKeys.inclination,
             label: 'Кут до площини основи',
             suffix: '°',
-            range: obliqueInclinationRange,
+            range: apexAngles === undefined || apexAngles === null ? undefined : planeAngleRange(apexAngles, ANGLE_INCREMENT_DEG),
           },
-          { type: 'number', key: oblique.direction, label: 'Напрям нахилу', suffix: '°', range: obliqueDirectionRange },
-          toggle,
-          ...plateFields,
-        ],
+      { type: 'number', key: coneApexKeys.direction, label: 'Напрям нахилу', suffix: '°', range: obliqueDirectionRange },
+      toggle,
+      ...plateFields,
+    ],
+    oblique: [
+      {
+        type: 'number',
+        key: oblique.position,
+        label: kind === 'cone' ? 'Точка на осі від основи' : 'Точка на осі від нижньої основи',
+        suffix: '% h',
+        range: sectionPositionRange,
+        ...(containsAxis ? { disabled: true, describedBy: noteId } : {}),
+      },
+      ...(containsAxis ? [{ type: 'note' as const, key: noteId, text: axisInPlaneNote(kind) }] : []),
+      {
+        type: 'number',
+        key: oblique.inclination,
+        label: 'Кут до площини основи',
+        suffix: '°',
+        range: obliqueInclinationRange,
+      },
+      { type: 'number', key: oblique.direction, label: 'Напрям нахилу', suffix: '°', range: obliqueDirectionRange },
+      toggle,
+      ...plateFields,
+    ],
   };
   const help: Record<SectionChoice, Help | undefined> = {
     none: undefined,
     horizontal: undefined,
     'face-parallel': undefined,
     longitudinal: undefined,
+    'through-apex': undefined,
     'through-line': undefined,
     inclined: undefined,
     'axis-parallel': axisParallelSectionHelp,
     'parallel-to-bases': kind === 'cone' ? coneSectionHelp : parallelSectionHelp,
     vertical: kind === 'cone' ? coneVerticalSectionHelp : verticalSectionHelp,
-    oblique: kind === 'cone' ? (throughApex ? coneApexSectionHelp : coneObliqueSectionHelp) : obliqueSectionHelp,
+    oblique: kind === 'cone' ? coneObliqueSectionHelp : obliqueSectionHelp,
+    'oblique-apex': coneApexSectionHelp,
   };
   const shownHelp = help[chosen];
   // Short enough for the summary line; the cut's type is the first thing its group shows.
@@ -1913,7 +1917,7 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
     initiallyOpen: false,
     help:
       withPlate && shownHelp !== undefined
-        ? withPlateHelp(shownHelp, throughApex && chosen === 'oblique', kind === 'cylinder' ? CYLINDER_PLATE_HELP : undefined)
+        ? withPlateHelp(shownHelp, chosen === 'oblique-apex', kind === 'cylinder' ? CYLINDER_PLATE_HELP : undefined)
         : shownHelp,
     status: {
       text:
@@ -1921,7 +1925,7 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
           ? 'немає'
           : withPlate
             ? 'з пластиною'
-            : axial || (throughApex && apexAxial && chosen === 'oblique')
+            : axial || (apexAxial && chosen === 'oblique-apex')
               ? 'осьовий'
               : namesOf(chosen).toLowerCase(),
       highlighted: chosen !== 'none',
@@ -1937,6 +1941,30 @@ const BOX_PARTS_TEXT =
   'Частини 1 і 2 лежать по різні боки площини, а горизонтальна площина ділить фігуру на нижню й верхню частини. Вони ' +
   'експортуються окремими об’єктами в одному масштабі; розсування змінює лише перегляд. Межі відсувають площину від ' +
   'вершин, ребер і граней, але не гарантують, що тонку частину вдасться надрукувати. Вершини позначено в перегляді.';
+
+/** A pyramid's planes through its apex, and through an edge of its base, which are another family. */
+const pyramidSectionHelps = {
+  'through-apex': {
+    label: 'Як задано переріз?',
+    text:
+      'Площина проходить через вершину S і пряму в площині основи — слід. Слід можна задати кутом до ребра AB і положенням ' +
+      'поперек основи або вибрати лінію основи: діагональ, у трикутника — медіану, висоту чи бісектрису основи або середню ' +
+      'лінію. Інші побудови: через бічне ребро SV і точку ребра основи; через висоту піраміди SH і бічне ребро SV, де H — ' +
+      'основа висоти, тобто проєкція S на площину основи, а не обов’язково центр основи. Висота основи й висота піраміди — ' +
+      'різні відрізки.\n\nПереріз через вершину й слід, що перетинає основу, — трикутник: S і два кінці сліду. Положення сліду — ' +
+      'у відсотках ширини основи поперек нього; площину це не зсуває з вершини.\n\n' +
+      BOX_PARTS_TEXT,
+  },
+  'through-line': {
+    label: 'Як задано переріз?',
+    text:
+      'Площина проходить через вибране ребро основи, але не обов’язково через вершину S.\n\n«За кутом»: площина повертається ' +
+      'навколо ребра від площини основи всередину піраміди, до бічної грані над цим ребром.\n\n«Через точку ребра»: площина ' +
+      'проходить через ребро основи й точку бічного ребра. Наприклад, у SABC через AB і середину SC переріз — трикутник. Кінці ' +
+      'ребра, що дають грань піраміди, а також бічні ребра з того ж кінця, не запропоновано.\n\n' +
+      BOX_PARTS_TEXT,
+  },
+} as const satisfies Record<string, Help>;
 
 const boxSectionHelps: Readonly<Record<'face-parallel' | 'longitudinal' | 'through-line' | 'inclined', Help>> = {
   'face-parallel': {
@@ -2041,12 +2069,17 @@ function traceTexts(selection: TraceSelection, topology: PrismTopology, regular:
 
 const TRACE_KIND_LABELS = {
   angle: 'Під кутом до ребра AB',
-  diagonal: 'Через діагональ основи',
-  median: 'Через медіану основи',
+  diagonal: 'Через діагональ',
+  median: 'Через медіану',
   height: 'Через висоту основи',
-  bisector: 'Через бісектрису основи',
-  midline: 'Через середню лінію основи',
+  bisector: 'Через бісектрису',
+  midline: 'Через середню лінію',
+  'edge-point': 'Через бічне ребро й точку',
+  'height-edge': 'Через висоту піраміди',
 } as const;
+
+/** The median of an equilateral base, which is also its altitude and bisector; the note beside it says so. */
+const EQUILATERAL_MEDIAN_LABEL = 'Через медіану (= висоту)';
 
 /**
  * "Переріз" of a cube or parallelepiped: the mode and its own fields, a second parallel plane, and the separation. The plane's
@@ -2125,8 +2158,10 @@ function boxPlaneSection(kind: BoxSolid, choices: ParameterChoices, context: Pan
               options: trace.vertices.map((vertex) => ({ value: vertex, label: vertexName(vertex) })),
             },
           ];
-  const sameNote: ParameterField[] =
-    trace.equilateral && trace.kind === 'median'
+  const throughVertex = trace.kind === 'median' || trace.kind === 'height' || trace.kind === 'bisector';
+  const sameNote: ParameterField[] = !throughVertex
+    ? []
+    : trace.equilateral && trace.kind === 'median'
       ? [
           note(
             'trace-equilateral',
@@ -2141,7 +2176,85 @@ function boxPlaneSection(kind: BoxSolid, choices: ParameterChoices, context: Pan
             ),
           ]
         : [];
-  const modeFields: Record<'face-parallel' | 'longitudinal' | 'through-line' | 'inclined', ParameterField[]> = {
+  const pyramid = topology.kind === 'pyramid';
+  const pair = pairSelection(box, choices, solid);
+  const pairs = oppositeEdgePairs(topology);
+  const constrained = along !== 'none' || pair !== 'none';
+  const pairName = (key: PairKey) => pairOf(key).map(segmentName).join(' і ');
+  const footPercent = heightFootPercent(kind, choices, values);
+  const apexPoint: ParameterField[] =
+    trace.kind === 'edge-point' && trace.segment !== undefined
+      ? [
+          {
+            type: 'number',
+            key: box.TracePointPercent,
+            label: `Точка на ${segmentName(trace.segment)} від ${vertexName(trace.segment[0])}`,
+            suffix: '%',
+            range: rangeOf(box.TracePointPercent, POINT_PERCENT_RANGE),
+          },
+          action(
+            'trace-midpoint',
+            'Середина ребра',
+            'trace-midpoint',
+            values[box.TracePointPercent] === 50 || !allows(context.sectionRanges?.[box.TracePointPercent], 50),
+          ),
+        ]
+      : [];
+  const modeFields: Record<'face-parallel' | 'longitudinal' | 'through-apex' | 'through-line' | 'inclined', ParameterField[]> = {
+    'through-apex': [
+      {
+        type: 'choice',
+        key: box.Trace,
+        label: 'Слід на основі',
+        options: trace.kinds.map((kindOption) => ({
+          value: kindOption,
+          label: kindOption === 'median' && trace.equilateral ? EQUILATERAL_MEDIAN_LABEL : TRACE_KIND_LABELS[kindOption],
+        })),
+      },
+      ...(trace.kind === 'edge-point' || trace.kind === 'height-edge'
+        ? [
+            {
+              type: 'choice' as const,
+              key: box.TraceVertex,
+              label: 'Бічне ребро',
+              options: trace.vertices.map((vertex) => ({ value: vertex, label: segmentName([PYRAMID_APEX, vertex]) })),
+            },
+            ...(trace.kind === 'edge-point'
+              ? [
+                  {
+                    type: 'choice' as const,
+                    key: box.TraceSegment,
+                    label: 'Ребро основи з точкою',
+                    options: trace.segments.map((segment) => ({
+                      value: segmentKey(segment),
+                      label: `Ребро ${segmentName(segment)}`,
+                    })),
+                  },
+                ]
+              : []),
+          ]
+        : traceReference),
+      ...sameNote,
+      ...apexPoint,
+      ...(trace.kind === 'angle'
+        ? [
+            percentField(box.SectionPercent, twoPlanes ? 'Перший переріз: слід' : 'Положення сліду'),
+            note('apex-angle', 'Слід перетинає основу; площина завжди проходить через вершину S.'),
+          ]
+        : [
+            note(
+              'apex-through',
+              trace.kind === 'edge-point' && trace.vertex !== undefined && trace.segment !== undefined
+                ? `Площина проходить через бічне ребро ${segmentName([PYRAMID_APEX, trace.vertex])} і точку ребра ${segmentName(trace.segment)}.`
+                : trace.kind === 'height-edge' && trace.vertex !== undefined
+                  ? `Площина проходить через висоту піраміди SH і бічне ребро ${segmentName([PYRAMID_APEX, trace.vertex])}; ` +
+                    'H — основа висоти, а не обов’язково центр основи.'
+                  : trace.kind === 'diagonal' && trace.segment !== undefined
+                    ? `Діагональний переріз: площина проходить через вершину S і діагональ ${traceText.through.replace('діагональ ', '')}.`
+                    : `Площина проходить через вершину S і ${traceText.through}.`,
+            ),
+          ]),
+    ],
     'face-parallel': [
       {
         type: 'choice',
@@ -2159,10 +2272,7 @@ function boxPlaneSection(kind: BoxSolid, choices: ParameterChoices, context: Pan
         label: 'Слід на основі',
         options: trace.kinds.map((kindOption) => ({
           value: kindOption,
-          label:
-            kindOption === 'median' && trace.equilateral
-              ? 'Через медіану, висоту й бісектрису основи'
-              : TRACE_KIND_LABELS[kindOption],
+          label: kindOption === 'median' && trace.equilateral ? EQUILATERAL_MEDIAN_LABEL : TRACE_KIND_LABELS[kindOption],
         })),
       },
       ...traceReference,
@@ -2187,16 +2297,20 @@ function boxPlaneSection(kind: BoxSolid, choices: ParameterChoices, context: Pan
             ]),
     ],
     'through-line': [
-      {
-        type: 'choice',
-        key: box.LineFace,
-        label: 'Грань',
-        options: lineSelection.faces.map((option) => faceOption(topology, option)),
-      },
+      ...(pyramid
+        ? []
+        : [
+            {
+              type: 'choice' as const,
+              key: box.LineFace,
+              label: 'Грань',
+              options: lineSelection.faces.map((option) => faceOption(topology, option)),
+            },
+          ]),
       {
         type: 'choice',
         key: box.Line,
-        label: 'Ребро або діагональ грані',
+        label: pyramid ? 'Ребро основи' : 'Ребро або діагональ грані',
         options: lineSelection.lines.map((segment) => ({
           value: segmentKey(segment),
           label: `${boxFaceSegmentKind(topology, face, segment) === 'edge' ? 'Ребро' : 'Діагональ'} ${segmentName(segment)}`,
@@ -2251,7 +2365,7 @@ function boxPlaneSection(kind: BoxSolid, choices: ParameterChoices, context: Pan
           ]),
     ],
     inclined: [
-      ...(along === 'none'
+      ...(!constrained
         ? [
             {
               type: 'number' as const,
@@ -2271,15 +2385,52 @@ function boxPlaneSection(kind: BoxSolid, choices: ParameterChoices, context: Pan
         : [
             note(
               'normal-along-note',
-              along === 'A-A1'
-                ? 'Площина перпендикулярна до бічних ребер.'
-                : `Площина перпендикулярна до відрізка ${segmentName(segmentOf(along))}.`,
+              pair !== 'none'
+                ? `Площина паралельна ребрам ${pairName(pair)}, але не обов’язково проходить через них.`
+                : along === 'A-A1' && !pyramid
+                  ? 'Площина перпендикулярна до бічних ребер.'
+                  : `Площина перпендикулярна до відрізка ${segmentName(segmentOf(along as SegmentKey))}.`,
             ),
           ]),
       position('положення'),
-      // Out of a plane perpendicular to a segment by its angles, which start where the plane is; into it by the lateral edges.
-      ...(along === 'none' ? [] : [action('normal-manual', 'Змінити нахил', 'normal-manual')]),
-      ...(along === 'A-A1' ? [] : [action('normal-lateral', 'Перпендикулярно бічним ребрам', 'normal-lateral')]),
+      ...(pair !== 'none' && footPercent !== undefined && allows(context.sectionRanges?.[box.SectionPercent], footPercent)
+        ? [
+            action(
+              'height-foot',
+              'Через основу висоти',
+              'height-foot',
+              values[box.SectionPercent] !== undefined && Math.abs((values[box.SectionPercent] as number) - footPercent) < 1e-6,
+            ),
+          ]
+        : []),
+      // Out of a plane perpendicular to a segment or parallel to two edges by its angles, which start where the plane is; into
+      // a plane perpendicular to a prism's lateral edges, which are all parallel, a pyramid's are not.
+      ...(constrained ? [action('normal-manual', 'Змінити нахил', 'normal-manual')] : []),
+      ...(pyramid || along === 'A-A1' ? [] : [action('normal-lateral', 'Перпендикулярно бічним ребрам', 'normal-lateral')]),
+      ...(pairs.length === 0
+        ? []
+        : [
+            {
+              type: 'disclosure' as const,
+              key: `${kind}-parallel-edges`,
+              label: 'Паралельно двом ребрам',
+              fields: [
+                {
+                  type: 'choice' as const,
+                  key: box.ParallelEdges,
+                  label: 'Паралельно ребрам',
+                  options: [
+                    { value: 'none', label: 'Не вибрано — задати кутами' },
+                    ...pairs.map((key) => ({ value: key, label: pairName(key) })),
+                  ],
+                },
+                note(
+                  'parallel-edges-note',
+                  'Площина паралельна напрямам двох мимобіжних ребер. Посередині між ними в правильному тетраедрі переріз — квадрат, в іншій трикутній піраміді — паралелограм.',
+                ),
+              ],
+            },
+          ]),
       {
         type: 'disclosure',
         key: `${kind}-normal-along`,
@@ -2323,7 +2474,11 @@ function boxPlaneSection(kind: BoxSolid, choices: ParameterChoices, context: Pan
           : [action('add-second-cut', 'Додати паралельний переріз', 'add-second-cut')]),
         { type: 'toggle', key: keys.separated, label: 'Розсунути частини' },
       ];
-  const help = isMode(chosen) ? boxSectionHelps[chosen] : undefined;
+  const help = !isMode(chosen)
+    ? undefined
+    : chosen === 'through-apex' || (pyramid && chosen === 'through-line')
+      ? pyramidSectionHelps[chosen]
+      : boxSectionHelps[chosen];
   return section(
     `${kind}-section`,
     'Переріз',
@@ -2332,9 +2487,9 @@ function boxPlaneSection(kind: BoxSolid, choices: ParameterChoices, context: Pan
         type: 'choice',
         key: keys.choice,
         label: 'Тип перерізу',
-        options: (['none', 'face-parallel', 'longitudinal', 'through-line', 'inclined'] as const).map((value) => ({
+        options: (['none', ...(SECTIONS_BY_SHAPE[kind] ?? [])] as SectionChoice[]).map((value) => ({
           value,
-          label: sectionNames[value],
+          label: value === 'through-line' && pyramid ? 'Через ребро основи' : sectionNames[value],
         })),
       },
       ...planes,
@@ -2369,6 +2524,7 @@ export function shapePanel(kind: ShapeKind, choices: ParameterChoices, context: 
     case 'cube':
       return { type: 'parameters', note: fixedNotes.cube, sections: boxSections(kind, choices, context) };
     case 'tetrahedron':
+      return { type: 'parameters', note: fixedNotes.tetrahedron, sections: boxSections(kind, choices, context) };
     case 'octahedron':
     case 'icosahedron':
     case 'dodecahedron':
@@ -2467,6 +2623,7 @@ export function shapePanel(kind: ShapeKind, choices: ParameterChoices, context: 
             },
             context,
           ),
+          ...boxSections(kind, choices, context),
         ],
       };
     case 'cylinder':

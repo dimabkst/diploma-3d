@@ -752,6 +752,8 @@ describe('plane sections', () => {
       cuboid: box,
       parallelepiped: box,
       prism: box,
+      pyramid: ['face-parallel', 'through-apex', 'through-line', 'inclined'],
+      tetrahedron: ['face-parallel', 'through-apex', 'through-line', 'inclined'],
       cylinder: ['parallel-to-bases', 'vertical', 'oblique', 'axis-parallel'],
       cone: ['parallel-to-bases', 'vertical', 'oblique', 'oblique-apex'],
       ball: ['horizontal'],

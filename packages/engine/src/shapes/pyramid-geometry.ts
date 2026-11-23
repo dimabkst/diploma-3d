@@ -3,8 +3,7 @@ import type { Manifold } from 'manifold-3d';
 import type { GeometryKernel } from '../kernel.ts';
 import { cross, length, subtract, type Vec3 } from '../mesh.ts';
 import type { Track } from '../scope.ts';
-import { baseContours, polygonSize, signedPolygonArea, type Vec2 } from './polygon.ts';
-import { shearMatrix } from './shear.ts';
+import { polygonSize, signedPolygonArea, type Vec2 } from './polygon.ts';
 
 /**
  * A pyramid over any base polygon, before scaling: the base in z = 0 with a0 = 1, counter-clockwise seen from +Z and
@@ -85,17 +84,12 @@ export function pyramidDimensionsMm(pyramid: PyramidProportions, scale: Physical
   };
 }
 
-/**
- * The unscaled pyramid. Extruding the base while scaling its top to zero about the origin, the base centroid, makes
- * manifold-3d emit the base cap, the single apex vertex at (0, 0, h0) and the lateral triangles, with no degenerate top
- * face. A displaced apex is then reached by the shear that keeps the base plane fixed and moves z = h0 by (qx0, qy0).
- */
-export function buildUnscaledPyramid(kernel: GeometryKernel, track: Track, pyramid: PyramidProportions): Manifold {
-  const centred = track(kernel.Manifold.extrude(baseContours(pyramid.base), pyramid.height, 0, 0, [0, 0]));
-  return isApexCentred(pyramid) ? centred : track(centred.transform(shearMatrix(pyramid.height, pyramid.apex)));
+/** The vertices before scaling: the base in z = 0, then the apex at (qx0, qy0, h0). */
+export function pyramidVertices({ base, height, apex }: PyramidProportions): Vec3[] {
+  return [...base.map(([x, y]): Vec3 => [x, y, 0]), [apex[0], apex[1], height]];
 }
 
-/** The pyramid in millimetres, uniformly scaled after positioning the apex; the base stays in z = 0. */
-export function buildPyramid(kernel: GeometryKernel, track: Track, pyramid: PyramidProportions, scale: PhysicalScale): Manifold {
-  return track(buildUnscaledPyramid(kernel, track, pyramid).scale(pyramidScaleMm(pyramid, scale)));
+/** The unscaled pyramid: the convex hull of its vertices, every base being convex. */
+export function buildUnscaledPyramid(kernel: GeometryKernel, track: Track, pyramid: PyramidProportions): Manifold {
+  return track(kernel.Manifold.hull(pyramidVertices(pyramid).map(([x, y, z]): [number, number, number] => [x, y, z])));
 }

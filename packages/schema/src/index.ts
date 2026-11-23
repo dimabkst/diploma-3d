@@ -11,11 +11,11 @@ export { BASE_ANGLE_LIMITS, baseAngleSchema } from './base-angle.ts';
 export { type CubeShape, cubeShapeSchema } from './cube.ts';
 export { type CuboidShape, cuboidShapeSchema } from './cuboid.ts';
 export {
+  boxTopologyOfShape,
   defaultModelSpecs,
   type ModelSpec,
   type ModelSpecInput,
   modelSpecSchema,
-  prismSidesOf,
   SECTIONS_BY_SHAPE,
   type Shape,
   type ShapeKind,
@@ -77,7 +77,9 @@ export {
 } from './scale.ts';
 export {
   APEX_INCLINATION_MAX_DEG,
+  APEX_TRACES,
   type ApexSection,
+  type ApexTrace,
   type AxisParallelSection,
   apexSectionSchema,
   axisParallelSectionSchema,
@@ -145,9 +147,11 @@ export {
   type PlugConnector,
   PRISM_LETTERS,
   type PrismTopology,
+  PYRAMID_APEX,
   parallelSectionSchema,
   plugConnectorSchema,
   prismTopology,
+  pyramidTopology,
   ROUND_CONNECTOR_COUNTS,
   type RoundConnector,
   SECTION_PLATE_MARGIN_LIMITS,
@@ -161,10 +165,12 @@ export {
   sectionPlateSchema,
   sectionPositionSchema,
   sectionSchema,
+  type ThroughApexSection,
   type ThroughLineSection,
   TWIST_AXIAL_CLEARANCE_LIMITS,
   TWIST_CLEARANCE_LIMITS,
   type TwistConnector,
+  throughApexSectionSchema,
   throughLineSectionSchema,
   twistConnectorSchema,
   type VerticalSection,
