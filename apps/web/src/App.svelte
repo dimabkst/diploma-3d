@@ -20,10 +20,13 @@ import {
   type ConnectorEdits,
   canResetShapeParameters,
   commitConnectorEdit,
-  diagonalSection,
+  followNormal,
+  followTrace,
   initialParameterChoices,
   initialParameterTexts,
   magnetAllowancesChanged,
+  normalAlongLateral,
+  normalAlongManual,
   type ParameterExact,
   type ParameterState,
   PLATE_TWIST_NOTICE,
@@ -42,6 +45,7 @@ import {
   startLineAngle,
   startPoint,
   switchTiltMode,
+  traceThrough,
 } from './lib/model/parameters.ts';
 import { loadPrintSizeText, savePrintSize } from './lib/model/printSize.ts';
 import { initialTiltModes, type TiltMode, type TiltSolid } from './lib/model/tilt.ts';
@@ -243,10 +247,16 @@ function runPanelAction(action: PanelAction) {
     if (selectedKind !== undefined) applyState(axialAxisParallel(selectedKind, parameterState));
     return;
   }
-  if (action === 'diagonal-section-ac' || action === 'diagonal-section-bd') {
-    if (selectedKind !== undefined) {
-      applyState(diagonalSection(selectedKind, parameterState, action === 'diagonal-section-ac' ? 'AC' : 'BD'));
-    }
+  if (action === 'trace-through') {
+    if (selectedKind !== undefined) applyState(traceThrough(selectedKind, parameterState));
+    return;
+  }
+  if (action === 'normal-lateral') {
+    if (selectedKind !== undefined) applyState(normalAlongLateral(selectedKind, parameterState));
+    return;
+  }
+  if (action === 'normal-manual') {
+    if (selectedKind !== undefined) applyState(normalAlongManual(selectedKind, parameterState));
     return;
   }
   if (action === 'line-midpoint') {
@@ -291,7 +301,11 @@ $effect.pre(() => {
     untrack(() => applyState(settled));
     return;
   }
-  const next = startLineAngle(selectedKind, parameterState, values) ?? startPoint(selectedKind, parameterState, values);
+  const next =
+    startLineAngle(selectedKind, parameterState, values) ??
+    startPoint(selectedKind, parameterState, values) ??
+    followTrace(selectedKind, parameterState, values) ??
+    followNormal(selectedKind, parameterState, values);
   if (next !== undefined) untrack(() => applyState(next));
 });
 

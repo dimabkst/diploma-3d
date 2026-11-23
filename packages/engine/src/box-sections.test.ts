@@ -1,6 +1,5 @@
 import {
   BOX_FACES,
-  BOX_VERTICES,
   type BoxFace,
   type BoxSectionSpec,
   type BoxSegment,
@@ -14,20 +13,23 @@ import type { Manifold } from 'manifold-3d';
 import { describe, expect, it } from 'vitest';
 import { buildModelArtifacts, SECTION_PREVIEW_GAP_RELATIVE } from './artifacts.ts';
 import {
-  BOX_PARALLEL_FACES,
   type BoxPointRange,
   boxFaceLines,
+  boxFaceOrientations,
   boxFaceParallelPercent,
   boxLineAngleBounds,
-  boxOppositeFace,
+  boxParallelFaces,
   boxPlane,
   boxPointEdges,
   boxPointRange,
   boxSection,
   boxSplitReach,
   boxThroughLineChoices,
+  boxTopologyOf,
+  boxTraceChoices,
   boxVertices,
   inPointRange,
+  topologyOf,
 } from './connectors/box.ts';
 import { cutOfSection } from './connectors/frame.ts';
 import { planMagnets } from './connectors/magnet.ts';
@@ -55,7 +57,7 @@ const OBLIQUE = {
   offsetXRatio: 0.3,
   offsetYRatio: 0.2,
 } as const;
-type BoxShapeInput = Extract<ModelSpecInput['shape'], { kind: 'cube' | 'cuboid' | 'parallelepiped' }>;
+type BoxShapeInput = Extract<ModelSpecInput['shape'], { kind: 'cube' | 'cuboid' | 'parallelepiped' | 'prism' }>;
 type Connector = NonNullable<Section['connector']>;
 
 const spec = (shape: BoxShapeInput, section: object, connector?: Connector): ModelSpecInput => ({
@@ -582,7 +584,7 @@ describe('the choices of a plane through a line that lead to a usable plane', ()
   it('leaves out an edge all of whose points give a face of the cube, and keeps one that only an end of fails', () => {
     const choices = boxThroughLineChoices(CUBE as never);
     const edgesOf = (face: BoxFace, line: string) =>
-      choices[face].find((choice) => choice.line.join('') === line)?.pointEdges.map((edge) => edge.join(''));
+      (choices[face] ?? []).find((choice) => choice.line.join('') === line)?.pointEdges.map((edge) => edge.join(''));
     // Through AB of the side face ABB1A1, any point of BC or AD gives the base ABCD.
     expect(edgesOf('ABB1A1', 'AB')).not.toContain('BC');
     expect(edgesOf('ABB1A1', 'AB')).not.toContain('DA');
@@ -623,12 +625,12 @@ describe('the choices of a plane through a line that lead to a usable plane', ()
   ] as const)('on %s, every point range and choice agrees with the plane it makes', (_, shape) => {
     const choices = boxThroughLineChoices(shape as never);
     for (const face of Object.keys(BOX_FACES) as BoxFace[]) {
-      expect(choices[face].length).toBeGreaterThan(0);
-      for (const line of boxFaceLines(face)) {
-        const offered = choices[face].find((choice) => choice.line.join('') === line.join(''));
+      expect((choices[face] ?? []).length).toBeGreaterThan(0);
+      for (const line of boxFaceLines(boxTopologyOf(shape as never), face)) {
+        const offered = (choices[face] ?? []).find((choice) => choice.line.join('') === line.join(''));
         const bounds = boxLineAngleBounds(shape as never, SCALE, face, line, 'proportional');
         expect(offered !== undefined).toBe(bounds !== null);
-        for (const edge of boxPointEdges(face)) {
+        for (const edge of boxPointEdges(boxTopologyOf(shape as never), face)) {
           const range = boxPointRange(shape as never, SCALE, face, line, edge, 'proportional');
           const samples = Array.from({ length: 101 }, (_, percent) => percent);
           for (const percent of samples) {
@@ -707,6 +709,25 @@ describe('vertex labels on the preview’s own geometry', () => {
       undefined,
     ],
     [
+      'an oblique triangular prism by two planes perpendicular to its lateral edges',
+      { kind: 'prism', baseType: 'regular', baseSides: 3, heightRatio: 1.5, offsetXRatio: 0.6, offsetYRatio: -0.3 },
+      {
+        type: 'inclined',
+        inclinationDeg: 0,
+        directionDeg: 0,
+        normalAlong: ['A', 'A1'],
+        positionPercent: 35,
+        secondPositionPercent: 65,
+      },
+      { type: 'magnet', ...DEFAULT_MAGNET, count: 1 },
+    ],
+    [
+      'a hexagonal prism through its longer diagonal AD, which holds four of its vertices',
+      { kind: 'prism', baseType: 'regular', baseSides: 6, heightRatio: 1, offsetXRatio: 0, offsetYRatio: 0 },
+      { type: 'longitudinal', trace: 'diagonal', traceSegment: ['A', 'D'], through: true, traceAngleDeg: 0, positionPercent: 50 },
+      undefined,
+    ],
+    [
       'the cube’s diagonal section through four of its vertices',
       CUBE,
       { type: 'longitudinal', trace: 'AC', traceAngleDeg: 0, positionPercent: 50 },
@@ -760,7 +781,7 @@ describe('vertex labels on the preview’s own geometry', () => {
       for (const solid of model.solids.filter((solid) => solid.part !== 'dowel')) {
         const { points, node } = nodeOf(solid.part as string);
         const translation = node?.getTranslation() ?? [0, 0, 0];
-        for (const vertex of BOX_VERTICES) {
+        for (const vertex of topologyOf(corners).vertices) {
           const [x, y, z] = corners[vertex];
           const at: Vec3 = [x / 1000 + translation[0], z / 1000 + translation[1], -y / 1000 + translation[2]];
           if (!near(points, at)) continue;
@@ -771,7 +792,7 @@ describe('vertex labels on the preview’s own geometry', () => {
       }
     }
     // Assembled, the copies coincide: one label per vertex.
-    expect((artifacts.vertexLabels ?? []).map((label) => label.name)).toEqual([...BOX_VERTICES]);
+    expect((artifacts.vertexLabels ?? []).map((label) => label.name)).toEqual([...topologyOf(corners).vertices]);
   });
 
   it('shows a vertex on the plane on both parts apart, with its cut face, and once in the assembled cube', async () => {
@@ -891,16 +912,16 @@ describe('three parts of two parallel planes, moved apart in their order', () =>
 });
 
 describe('planes parallel to a face, by one face of each opposite pair', () => {
-  it('pairs each face with the one that shares no vertex, and keeps the first of each pair', () => {
-    expect(Object.fromEntries(Object.keys(BOX_FACES).map((face) => [face, boxOppositeFace(face as BoxFace)]))).toEqual({
-      ABCD: 'A1B1C1D1',
+  it('groups each face with the one opposite it, and keeps the first of each pair', () => {
+    expect(boxFaceOrientations(boxVertices(CUBE, SCALE))).toEqual({
+      ABCD: 'ABCD',
       A1B1C1D1: 'ABCD',
-      ABB1A1: 'CDD1C1',
-      BCC1B1: 'DAA1D1',
+      ABB1A1: 'ABB1A1',
+      BCC1B1: 'BCC1B1',
       CDD1C1: 'ABB1A1',
       DAA1D1: 'BCC1B1',
     });
-    expect(BOX_PARALLEL_FACES).toEqual(['ABCD', 'ABB1A1', 'BCC1B1']);
+    expect(boxParallelFaces(boxVertices(OBLIQUE, SCALE))).toEqual(['ABCD', 'ABB1A1', 'BCC1B1']);
   });
 
   // Strongly oblique: the side faces' normals are far from the axes, and still each pair is the topology's.
@@ -919,9 +940,11 @@ describe('planes parallel to a face, by one face of each opposite pair', () => {
     ['a strongly oblique parallelepiped', LEANING],
   ] as const)('on %s, a position from the opposite face is the same plane from its representative', (_, shape) => {
     const vertices = boxVertices(shape as never, SCALE);
+    const representatives = boxFaceOrientations(vertices);
+    expect(boxParallelFaces(vertices)).toEqual(['ABCD', 'ABB1A1', 'BCC1B1']);
     for (const face of Object.keys(BOX_FACES) as BoxFace[]) {
-      if (BOX_PARALLEL_FACES.includes(face)) continue;
-      const representative = boxOppositeFace(face);
+      const representative = representatives[face] as BoxFace;
+      if (representative === face) continue;
       for (const percent of [10, 23.7, 50, 90]) {
         const converted = boxFaceParallelPercent(shape as never, SCALE, face, percent, representative);
         expect(converted).toBeCloseTo(100 - percent, 9);
@@ -932,5 +955,273 @@ describe('planes parallel to a face, by one face of each opposite pair', () => {
         expect(after.offset).toBeCloseTo(-before.offset, 9);
       }
     }
+  });
+});
+
+describe('sections of the prisms, by the same modes', () => {
+  const regular = (baseSides: 3 | 4 | 5 | 6 | 8, heightRatio = 1, offsetXRatio = 0, offsetYRatio = 0) =>
+    ({ kind: 'prism', baseType: 'regular', baseSides, heightRatio, offsetXRatio, offsetYRatio }) as const;
+  const TRIANGULAR = regular(3, 1.2);
+  // Obtuse at A: the altitudes from B and C meet the extensions of the opposite sides.
+  const OBTUSE = {
+    kind: 'prism',
+    baseType: 'triangle',
+    baseSideRatio: 1.4,
+    baseAngleDeg: 115,
+    heightRatio: 1,
+    offsetXRatio: 0.3,
+    offsetYRatio: 0.2,
+  } as const;
+  const TRAPEZOID = {
+    kind: 'prism',
+    baseType: 'trapezoid',
+    parallelSideRatio: 0.5,
+    baseHeightRatio: 0.6,
+    baseShiftRatio: 0.1,
+    heightRatio: 1,
+    offsetXRatio: 0,
+    offsetYRatio: 0.3,
+  } as const;
+  const volumeOf = (shape: BoxShapeInput) =>
+    generateModel(kernel, { shape, scale: SCALE }).solids[0]?.measurements.volume as number;
+  const partVolumes = (model: GeneratedModel) =>
+    model.solids
+      .filter((solid) => solid.part !== 'dowel')
+      .map((solid) => solid.measurements.volume / volumeOf(model.spec.shape as BoxShapeInput));
+  const longitudinal = (fields: object) => ({
+    type: 'longitudinal',
+    traceAngleDeg: 0,
+    positionPercent: 50,
+    through: true,
+    ...fields,
+  });
+  const baseArea = (shape: BoxShapeInput) => {
+    const vertices = boxVertices(shape as never, SCALE);
+    const base = boxTopologyOf(shape as never).faces[boxTopologyOf(shape as never).lowerBase] as BoxVertex[];
+    return Math.abs(
+      base.reduce((sum, name, index) => {
+        const [x0, y0] = vertices[name];
+        const [x1, y1] = vertices[base[(index + 1) % base.length] as BoxVertex];
+        return sum + x0 * y1 - x1 * y0;
+      }, 0) / 2,
+    );
+  };
+
+  it.each([
+    ['a triangular prism', regular(3), 4],
+    ['a square prism', regular(4), 3],
+    ['a pentagonal prism', regular(5, 1, 0.3, 0.2), 6],
+    ['a hexagonal prism', regular(6), 4],
+    ['an octagonal prism', regular(8), 5],
+    ['a prism over a scalene triangle', OBTUSE, 4],
+    ['a trapezoidal prism, whose bases’ parallel sides make one orientation', TRAPEZOID, 4],
+  ] as const)('%s: one face of each orientation of its faces', (_, shape, count) => {
+    const topology = boxTopologyOf(shape as never);
+    expect(topology.vertices).toHaveLength(2 * topology.sides);
+    expect(topology.edges).toHaveLength(3 * topology.sides);
+    expect(topology.faceNames).toHaveLength(topology.sides + 2);
+    const faces = boxParallelFaces(boxVertices(shape as never, SCALE));
+    expect(faces).toHaveLength(count);
+    expect(faces[0]).toBe(topology.lowerBase);
+  });
+
+  it.each([
+    ['triangular', TRIANGULAR],
+    ['pentagonal, oblique', regular(5, 1, 0.3, 0.2)],
+    ['hexagonal', regular(6)],
+    ['trapezoidal, oblique', TRAPEZOID],
+  ] as const)('a plane parallel to the base of a %s prism is its base', (_, shape) => {
+    const { model, section } = sectionOf(shape, { type: 'face-parallel', positionPercent: 35 });
+    expect(section.contour).toHaveLength(boxTopologyOf(shape as never).sides);
+    expect(section.area).toBeCloseTo(baseArea(shape), 6);
+    expect(partVolumes(model)).toEqual([expect.closeTo(0.35, 6), expect.closeTo(0.65, 6)]);
+    expectPartsOfWhole(model);
+  });
+
+  it('the median of an equilateral base from C: through CC1 and the midpoint of AB, halving the prism, as its altitude and bisector do', () => {
+    const shape = TRIANGULAR;
+    const vertices = boxVertices(shape, SCALE);
+    const { model, section } = sectionOf(shape, longitudinal({ trace: 'median', traceVertex: 'C' }));
+    const middle = vertices.A.map((value, axis) => (value + (vertices.B[axis] as number)) / 2) as unknown as Vec3;
+    for (const point of [vertices.C, vertices.C1, middle]) {
+      expect(Math.min(...section.contour.map((corner) => distance(corner, point)))).toBeLessThan(POSITION_TOLERANCE_MM);
+    }
+    expect(partVolumes(model)).toEqual([expect.closeTo(0.5, 6), expect.closeTo(0.5, 6)]);
+    expectPartsOfWhole(model);
+    const choices = boxTraceChoices(shape);
+    expect(choices.sameLines.C).toEqual(['median', 'height', 'bisector']);
+    for (const trace of ['height', 'bisector']) {
+      expect(sectionOf(shape, longitudinal({ trace, traceVertex: 'C' })).section.area).toBeCloseTo(section.area, 6);
+    }
+  });
+
+  it('the midline parallel to AB cuts off the prism over the triangle of C and the midpoints of CA and CB, a quarter', () => {
+    const { model } = sectionOf(TRIANGULAR, longitudinal({ trace: 'midline', traceSegment: ['A', 'B'] }));
+    expect(partVolumes(model).sort()).toEqual([expect.closeTo(0.25, 6), expect.closeTo(0.75, 6)]);
+    expectPartsOfWhole(model);
+  });
+
+  it('on an obtuse base, the altitude from the obtuse vertex meets BC at right angles; those from B and C only touch the prism', () => {
+    const vertices = boxVertices(OBTUSE, SCALE);
+    const choices = boxTraceChoices(OBTUSE);
+    expect(choices.height).toEqual(['A']);
+    expect(choices.median).toEqual(['A', 'B', 'C']);
+    expect(choices.bisector).toEqual(['A', 'B', 'C']);
+    const plane = boxPlane(vertices, longitudinal({ trace: 'height', traceVertex: 'A' }) as BoxSectionSpec);
+    const side = [0, 1, 2].map((axis) => (vertices.C[axis] as number) - (vertices.B[axis] as number)) as unknown as Vec3;
+    const lateral = [0, 1, 2].map((axis) => (vertices.A1[axis] as number) - (vertices.A[axis] as number)) as unknown as Vec3;
+    // The plane holds A and the lateral direction, and its trace is perpendicular to BC: n is along BC's projection.
+    const dot = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    expect(dot(plane.normal, vertices.A)).toBeCloseTo(plane.offset, 9);
+    expect(dot(plane.normal, lateral)).toBeCloseTo(0, 9);
+    expect(Math.abs(dot(plane.normal, [-side[1], side[0], 0]))).toBeLessThan(1e-9);
+    // From B the line leaves the triangle at once: the plane holds BB1 and leaves the prism on one side.
+    const touching = boxPlane(vertices, longitudinal({ trace: 'height', traceVertex: 'B' }) as BoxSectionSpec);
+    expect(Math.min(touching.offset - touching.extent.min, touching.extent.max - touching.offset)).toBeLessThan(1e-9);
+  });
+
+  it('through AB and the midpoint of the opposite lateral edge CC1: the tetrahedron ABCM, a sixth of the prism', () => {
+    const section = {
+      type: 'through-line',
+      face: 'ABC',
+      line: ['A', 'B'],
+      method: 'point',
+      pointEdge: ['C', 'C1'],
+      pointPercent: 50,
+    };
+    const smooth = generateModel(kernel, spec(TRIANGULAR, section));
+    expect(partVolumes(smooth).sort()).toEqual([expect.closeTo(1 / 6, 6), expect.closeTo(5 / 6, 6)]);
+    expectPartsOfWhole(smooth);
+    const lines = boxThroughLineChoices(TRIANGULAR).ABC ?? [];
+    expect(lines.map(({ line }) => line.join(''))).toEqual(['AB', 'BC', 'CA']);
+    expect(lines[0]?.pointEdges.map((edge) => edge.join(''))).toEqual(['B1C1', 'C1A1', 'CC1']);
+    const magnets = generateModel(kernel, spec(TRIANGULAR, section, { type: 'magnet', ...DEFAULT_MAGNET, count: 1 }));
+    expectPartsOfWhole(magnets);
+  });
+
+  it('a lateral face’s diagonal AB1, by its angle: the plane holds A and B1 whatever the prism becomes', () => {
+    expect(boxFaceLines(boxTopologyOf(TRIANGULAR), 'ABB1A1').map((line) => line.join(''))).toEqual([
+      'AB',
+      'BB1',
+      'B1A1',
+      'A1A',
+      'AB1',
+      'BA1',
+    ]);
+    expect(boxFaceLines(boxTopologyOf(TRIANGULAR), 'ABC').map((line) => line.join(''))).toEqual(['AB', 'BC', 'CA']);
+    const section = { type: 'through-line', face: 'ABB1A1', line: ['A', 'B1'], method: 'angle', angleDeg: 50 } as const;
+    for (const shape of [TRIANGULAR, regular(3, 2, 0.4, -0.3)]) {
+      const vertices = boxVertices(shape, SCALE);
+      const plane = boxPlane(vertices, section as BoxSectionSpec);
+      for (const point of [vertices.A, vertices.B1]) {
+        expect(plane.normal[0] * point[0] + plane.normal[1] * point[1] + plane.normal[2] * point[2]).toBeCloseTo(plane.offset, 9);
+      }
+      expectPartsOfWhole(generateModel(kernel, spec(shape, section)));
+    }
+  });
+
+  it('a regular hexagonal prism: the longer diagonal AD halves it, the shorter AC cuts off the prism over ABC, a sixth', () => {
+    const hexagon = regular(6);
+    const long = sectionOf(hexagon, longitudinal({ trace: 'diagonal', traceSegment: ['A', 'D'] }));
+    expect(partVolumes(long.model)).toEqual([expect.closeTo(0.5, 6), expect.closeTo(0.5, 6)]);
+    const short = sectionOf(hexagon, longitudinal({ trace: 'diagonal', traceSegment: ['A', 'C'] }));
+    expect(partVolumes(short.model).sort()).toEqual([expect.closeTo(1 / 6, 6), expect.closeTo(5 / 6, 6)]);
+    // Both through two lateral edges: rectangles of the prism's height.
+    const height = boxVertices(hexagon, SCALE).A1[2];
+    const vertices = boxVertices(hexagon, SCALE);
+    expect(long.section.area).toBeCloseTo(distance(vertices.A, vertices.D) * height, 6);
+    expect(short.section.area).toBeCloseTo(distance(vertices.A, vertices.C) * height, 6);
+    expectPartsOfWhole(long.model);
+    expectPartsOfWhole(short.model);
+  });
+
+  it('an inclined plane cuts a triangular prism in a pentagon, through both bases and every lateral face', () => {
+    const { model, section } = sectionOf(regular(3, 1), {
+      type: 'inclined',
+      inclinationDeg: 50,
+      directionDeg: 0,
+      positionPercent: 50,
+    });
+    expect(section.contour).toHaveLength(5);
+    expectPartsOfWhole(model);
+  });
+
+  it('an oblique prism: longitudinal planes stay along its lateral edges, n·a = 0, as it leans and grows', () => {
+    for (const shape of [regular(5, 1, 0.3, 0.2), regular(5, 1.6, -0.5, 0.4), OBTUSE]) {
+      const vertices = boxVertices(shape as never, SCALE);
+      const lateral = [0, 1, 2].map((axis) => (vertices.A1[axis] as number) - (vertices.A[axis] as number)) as unknown as Vec3;
+      const sections = [
+        { type: 'longitudinal', trace: 'angle', traceAngleDeg: 35, positionPercent: 40 },
+        ...(shape === OBTUSE
+          ? [longitudinal({ trace: 'median', traceVertex: 'B' })]
+          : [longitudinal({ trace: 'diagonal', traceSegment: ['B', 'E'] })]),
+      ];
+      for (const section of sections) {
+        const plane = boxPlane(vertices, section as BoxSectionSpec);
+        expect(plane.normal[0] * lateral[0] + plane.normal[1] * lateral[1] + plane.normal[2] * lateral[2]).toBeCloseTo(0, 9);
+        expectPartsOfWhole(generateModel(kernel, spec(shape as BoxShapeInput, section)));
+      }
+    }
+  });
+
+  it('perpendicular to the lateral edges, n ∥ a: in the middle its area times the lateral edge is the volume; near an end it crosses a base', () => {
+    const shape = regular(3, 1, 1.5, 0);
+    const vertices = boxVertices(shape, SCALE);
+    const lateral = distance(vertices.A1, vertices.A);
+    const perpendicular = (positionPercent: number) =>
+      sectionOf(shape, { type: 'inclined', inclinationDeg: 0, directionDeg: 0, normalAlong: ['A', 'A1'], positionPercent });
+    const middle = perpendicular(50);
+    expect(middle.section.contour).toHaveLength(3);
+    expect(middle.section.area * lateral).toBeCloseTo(volumeOf(shape), 3);
+    // Not the base's number of sides: a quadrilateral where the plane meets a base and two lateral edges.
+    const end = perpendicular(25);
+    expect(end.section.contour).toHaveLength(4);
+    expectPartsOfWhole(middle.model);
+    expectPartsOfWhole(end.model);
+  });
+
+  it('two parallel planes of an oblique triangular prism with magnets: three closed parts of the whole, both interfaces fitted', () => {
+    const model = generateModel(
+      kernel,
+      spec(
+        regular(3, 1.2, 0.3, -0.2),
+        { type: 'face-parallel', face: 'BCC1B1', positionPercent: 30, secondPositionPercent: 70 },
+        { type: 'magnet', ...DEFAULT_MAGNET, count: 1 },
+      ),
+    );
+    expect(model.solids.map((solid) => solid.part)).toEqual(['part-1', 'middle', 'part-2']);
+    expect(model.section?.connector).toBeDefined();
+    expect(model.section?.secondInterface?.connector).toBeDefined();
+    expectPartsOfWhole(model);
+  });
+
+  it('a square prism of the cube’s proportions is the cube: the same vertices, and the same parts for the same sections', () => {
+    const square = regular(4, 1);
+    const [prism, cube] = [boxVertices(square, SCALE), boxVertices(CUBE, SCALE)];
+    for (const vertex of boxTopologyOf(CUBE).vertices) expect(distance(prism[vertex], cube[vertex])).toBeLessThan(1e-9);
+    for (const section of [
+      { type: 'through-line', face: 'ABCD', line: ['A', 'C'], method: 'point', pointEdge: ['B1', 'C1'], pointPercent: 50 },
+      { type: 'inclined', inclinationDeg: 0, directionDeg: 0, normalAlong: ['A', 'C1'], positionPercent: 30 },
+      longitudinal({ trace: 'diagonal', traceSegment: ['B', 'D'] }),
+    ]) {
+      const [a, b] = [generateModel(kernel, spec(square, section)), generateModel(kernel, spec(CUBE, section))];
+      expect(a.solids.map((solid) => solid.measurements.volume)).toEqual(
+        b.solids.map((solid) => expect.closeTo(solid.measurements.volume, 6)),
+      );
+    }
+  });
+
+  it('refuses a face, a trace or a segment that the prism does not have', () => {
+    for (const section of [
+      { type: 'face-parallel', face: 'ABCD', positionPercent: 50 },
+      longitudinal({ trace: 'diagonal', traceSegment: ['A', 'C'] }),
+      { type: 'inclined', inclinationDeg: 0, directionDeg: 0, normalAlong: ['A', 'D1'], positionPercent: 50 },
+      { type: 'through-line', face: 'ABC', line: ['A', 'C1'], method: 'angle', angleDeg: 30 },
+    ]) {
+      expect(() => generateModel(kernel, spec(TRIANGULAR, section))).toThrow(InvalidModelSpecError);
+    }
+    expect(() => generateModel(kernel, spec(regular(6), longitudinal({ trace: 'median', traceVertex: 'A' })))).toThrow(
+      InvalidModelSpecError,
+    );
   });
 });

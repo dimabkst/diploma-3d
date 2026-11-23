@@ -377,64 +377,110 @@ export const horizontalSectionSchema = z
 
 export type HorizontalSection = z.infer<typeof horizontalSectionSchema>;
 
+/** The letters of a base's vertices in order around it: A, B, C, … for up to eight sides. */
+export const PRISM_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'] as const;
+
+type PrismLetter = (typeof PRISM_LETTERS)[number];
+
 /**
- * The vertices of a cube or parallelepiped as school notation names them: the lower base ABCD counter-clockwise seen from
- * above, AB along +X, and the upper base A1B1C1D1 above it, A1 joined to A by a lateral edge.
+ * A vertex of a cube, a parallelepiped or a prism as school notation names it: the lower base A, B, C, … counter-clockwise seen
+ * from above, AB along +X, and the upper base A1, B1, C1, … above it, A1 joined to A by a lateral edge.
  */
-export const BOX_VERTICES = ['A', 'B', 'C', 'D', 'A1', 'B1', 'C1', 'D1'] as const;
+export type BoxVertex = PrismLetter | `${PrismLetter}1`;
 
-export type BoxVertex = (typeof BOX_VERTICES)[number];
+export const BOX_VERTEX_NAMES: readonly BoxVertex[] = [...PRISM_LETTERS, ...PRISM_LETTERS.map((letter) => `${letter}1` as const)];
 
-/** The faces, each by its vertices in order around it: both bases, then the lateral faces from AB on. */
-export const BOX_FACES = {
-  ABCD: ['A', 'B', 'C', 'D'],
-  A1B1C1D1: ['A1', 'B1', 'C1', 'D1'],
-  ABB1A1: ['A', 'B', 'B1', 'A1'],
-  BCC1B1: ['B', 'C', 'C1', 'B1'],
-  CDD1C1: ['C', 'D', 'D1', 'C1'],
-  DAA1D1: ['D', 'A', 'A1', 'D1'],
-} as const satisfies Record<string, readonly [BoxVertex, BoxVertex, BoxVertex, BoxVertex]>;
-
-export type BoxFace = keyof typeof BOX_FACES;
-
-export const BOX_FACE_NAMES = Object.keys(BOX_FACES) as readonly BoxFace[];
+/** A face by its vertices' names in order around it, such as ABC, A1B1C1 or ABB1A1. */
+export type BoxFace = string;
 
 /** A segment between two vertices: an edge, a face diagonal or a body diagonal, by its endpoints. */
 export const boxSegmentSchema = z
-  .tuple([z.enum(BOX_VERTICES), z.enum(BOX_VERTICES)])
+  .tuple([z.enum(BOX_VERTEX_NAMES as [BoxVertex, ...BoxVertex[]]), z.enum(BOX_VERTEX_NAMES as [BoxVertex, ...BoxVertex[]])])
   .refine(([first, second]) => first !== second, { message: 'A segment needs two different vertices.' });
 
 export type BoxSegment = z.infer<typeof boxSegmentSchema>;
 
-/** Whether two vertices are consecutive around the face, an edge of it, or opposite, a diagonal of it. */
+/**
+ * The vertices, faces and edges of a prism over an n-gon, a cube and the parallelepipeds being those over a quadrilateral: 2n
+ * vertices, the lower base, then the upper one, then the n lateral faces XYY1X1 from AB on, each face by its vertices in order
+ * around it; the 3n edges, the lower base's, the upper base's, then the lateral ones.
+ */
+export interface PrismTopology {
+  readonly sides: number;
+  readonly vertices: readonly BoxVertex[];
+  readonly faces: Readonly<Record<BoxFace, readonly BoxVertex[]>>;
+  readonly faceNames: readonly BoxFace[];
+  readonly lowerBase: BoxFace;
+  readonly upperBase: BoxFace;
+  readonly edges: readonly BoxSegment[];
+}
+
+const topologies = new Map<number, PrismTopology>();
+
+export function prismTopology(sides: number): PrismTopology {
+  const known = topologies.get(sides);
+  if (known !== undefined) return known;
+  if (!Number.isInteger(sides) || sides < 3 || sides > PRISM_LETTERS.length) {
+    throw new RangeError(`A prism needs from 3 to ${PRISM_LETTERS.length} base vertices, not ${sides}.`);
+  }
+  const lower = PRISM_LETTERS.slice(0, sides) as PrismLetter[];
+  const upper = lower.map((letter): BoxVertex => `${letter}1`);
+  const next = (index: number) => (index + 1) % sides;
+  const lateral = lower.map((letter, index): readonly BoxVertex[] => [
+    letter,
+    lower[next(index)] as BoxVertex,
+    upper[next(index)] as BoxVertex,
+    upper[index] as BoxVertex,
+  ]);
+  const faceList: (readonly BoxVertex[])[] = [lower, upper, ...lateral];
+  const faces = Object.fromEntries(faceList.map((corners) => [corners.join(''), corners]));
+  const topology: PrismTopology = {
+    sides,
+    vertices: [...lower, ...upper],
+    faces,
+    faceNames: Object.keys(faces),
+    lowerBase: lower.join(''),
+    upperBase: upper.join(''),
+    edges: [
+      ...lower.map((letter, index): BoxSegment => [letter, lower[next(index)] as BoxVertex]),
+      ...upper.map((vertex, index): BoxSegment => [vertex, upper[next(index)] as BoxVertex]),
+      ...lower.map((letter, index): BoxSegment => [letter, upper[index] as BoxVertex]),
+    ],
+  };
+  topologies.set(sides, topology);
+  return topology;
+}
+
+/** A cube's or parallelepiped's: the bases ABCD and A1B1C1D1 and the lateral faces ABB1A1, BCC1B1, CDD1C1 and DAA1D1. */
+export const BOX_TOPOLOGY = prismTopology(4);
+export const BOX_VERTICES = BOX_TOPOLOGY.vertices;
+export const BOX_FACES = BOX_TOPOLOGY.faces;
+export const BOX_FACE_NAMES = BOX_TOPOLOGY.faceNames;
+export const BOX_EDGES = BOX_TOPOLOGY.edges;
+
+/** Whether two vertices are consecutive around the face, an edge of it, or not, a diagonal of it; undefined off the face. */
 export function boxFaceSegmentKind(
+  topology: PrismTopology,
   face: BoxFace,
   [first, second]: readonly [BoxVertex, BoxVertex],
 ): 'edge' | 'diagonal' | undefined {
-  const corners: readonly BoxVertex[] = BOX_FACES[face];
+  const corners = topology.faces[face];
+  if (corners === undefined) return undefined;
   const [i, j] = [corners.indexOf(first), corners.indexOf(second)];
   if (i < 0 || j < 0 || i === j) return undefined;
-  return Math.abs(i - j) === 2 ? 'diagonal' : 'edge';
+  const apart = Math.abs(i - j);
+  return apart === 1 || apart === corners.length - 1 ? 'edge' : 'diagonal';
 }
 
-/** The twelve edges, as the faces have them. */
-export const BOX_EDGES: readonly BoxSegment[] = [
-  ['A', 'B'],
-  ['B', 'C'],
-  ['C', 'D'],
-  ['D', 'A'],
-  ['A1', 'B1'],
-  ['B1', 'C1'],
-  ['C1', 'D1'],
-  ['D1', 'A1'],
-  ['A', 'A1'],
-  ['B', 'B1'],
-  ['C', 'C1'],
-  ['D', 'D1'],
-];
+const isEdgeOf = (topology: PrismTopology, [first, second]: readonly [BoxVertex, BoxVertex]) =>
+  topology.edges.some(([a, b]) => (a === first && b === second) || (a === second && b === first));
 
-const isBoxEdge = ([first, second]: readonly [BoxVertex, BoxVertex]) =>
-  BOX_EDGES.some(([a, b]) => (a === first && b === second) || (a === second && b === first));
+/** The faces that hold both vertices: those of an edge or a face diagonal; none for a body diagonal. */
+export const boxFacesHolding = (topology: PrismTopology, [first, second]: readonly [BoxVertex, BoxVertex]): BoxFace[] =>
+  topology.faceNames.filter((face) => {
+    const corners = topology.faces[face] ?? [];
+    return corners.includes(first) && corners.includes(second);
+  });
 
 /**
  * The second of two parallel planes of a cube or parallelepiped, at its own percentage of the original solid's extent along
@@ -449,35 +495,50 @@ const secondBoxPlane = { secondPositionPercent: sectionPositionSchema.optional()
  */
 export const faceParallelSectionSchema = z.strictObject({
   type: z.literal('face-parallel'),
-  face: z.enum(BOX_FACE_NAMES as [BoxFace, ...BoxFace[]]).default('ABCD'),
+  /** The lower base when absent; see `boxSectionIssues` for the faces a solid has. */
+  face: z.string().optional(),
   positionPercent: sectionPositionSchema.default(DEFAULT_SECTION_POSITION_PERCENT),
   ...secondBoxPlane,
   connector: connectorSchema.optional(),
 });
+
+/**
+ * The lines of the base plane that a longitudinal plane's trace may run along, besides an angle to AB: a diagonal of the base,
+ * and for a triangular base the median, the altitude and the bisector from a vertex and the midline parallel to a side. AC and
+ * BD are a cube's or parallelepiped's diagonals by their earlier names.
+ */
+export const LONGITUDINAL_TRACES = ['angle', 'AC', 'BD', 'diagonal', 'median', 'height', 'bisector', 'midline'] as const;
+
+export type LongitudinalTrace = (typeof LONGITUDINAL_TRACES)[number];
 
 /**
  * A plane parallel to the lateral edges, whose direction a = A1 − A is the solid's own: its trace on the base plane runs at
- * traceAngleDeg to the edge AB, counter-clockwise seen from above, or along a diagonal of the base, AC or BD, whatever the base
- * becomes; positionPercent places it across the solid's extent along its normal, 50 % through the centre and so through a
- * diagonal.
+ * traceAngleDeg to the edge AB, counter-clockwise seen from above, or along a line of the base, whatever the base becomes: a
+ * diagonal traceSegment; the median, altitude or bisector from traceVertex; the midline parallel to the side traceSegment.
+ * positionPercent places it across the solid's extent along its normal; with `through`, the plane passes through the line
+ * itself, wherever that lies.
  */
-export const longitudinalSectionSchema = z.strictObject({
-  type: z.literal('longitudinal'),
-  trace: z.enum(['angle', 'AC', 'BD']).default('angle'),
-  traceAngleDeg: z.number().min(0).max(180).default(0),
-  positionPercent: sectionPositionSchema.default(DEFAULT_SECTION_POSITION_PERCENT),
-  ...secondBoxPlane,
-  connector: connectorSchema.optional(),
-});
+export const longitudinalSectionSchema = z
+  .strictObject({
+    type: z.literal('longitudinal'),
+    trace: z.enum(LONGITUDINAL_TRACES).default('angle'),
+    traceAngleDeg: z.number().min(0).max(180).default(0),
+    traceVertex: z.enum(BOX_VERTEX_NAMES as [BoxVertex, ...BoxVertex[]]).optional(),
+    traceSegment: boxSegmentSchema.optional(),
+    through: z.boolean().optional(),
+    positionPercent: sectionPositionSchema.default(DEFAULT_SECTION_POSITION_PERCENT),
+    ...secondBoxPlane,
+    connector: connectorSchema.optional(),
+  })
+  .refine((section) => section.through !== true || section.trace !== 'angle', {
+    message: 'A trace at an angle passes through no line of the base.',
+    path: ['through'],
+  });
 
-/**
- * A plane through an edge or a diagonal of a face: turned about that line from the face's own plane into the solid by
- * angleDeg, or through the point at pointPercent of the way along another edge, from its first vertex to its second.
- */
 export const throughLineSectionSchema = z
   .strictObject({
     type: z.literal('through-line'),
-    face: z.enum(BOX_FACE_NAMES as [BoxFace, ...BoxFace[]]),
+    face: z.string(),
     line: boxSegmentSchema,
     method: z.enum(['angle', 'point']),
     angleDeg: z.number().gt(0).lt(180).optional(),
@@ -486,15 +547,11 @@ export const throughLineSectionSchema = z
     ...secondBoxPlane,
     connector: connectorSchema.optional(),
   })
-  .refine((section) => boxFaceSegmentKind(section.face, section.line) !== undefined, {
-    message: 'The line is no edge or diagonal of the face.',
-    path: ['line'],
-  })
   .refine(
     (section) =>
       section.method === 'angle'
         ? section.angleDeg !== undefined
-        : section.pointEdge !== undefined && section.pointPercent !== undefined && isBoxEdge(section.pointEdge),
+        : section.pointEdge !== undefined && section.pointPercent !== undefined,
     { message: 'An angle, or an edge and the point on it.', path: ['method'] },
   );
 
@@ -518,6 +575,56 @@ export type LongitudinalSection = z.infer<typeof longitudinalSectionSchema>;
 export type ThroughLineSection = z.infer<typeof throughLineSectionSchema>;
 export type InclinedSection = z.infer<typeof inclinedSectionSchema>;
 export type BoxSectionSpec = FaceParallelSection | LongitudinalSection | ThroughLineSection | InclinedSection;
+
+/**
+ * What a box section names that the solid does not have, by the solid's topology: a face, a line that is no edge or diagonal of
+ * its face, a point's edge that is no edge, a segment between vertices it lacks, a trace that its base does not offer.
+ */
+export function boxSectionIssues(topology: PrismTopology, section: BoxSectionSpec): { path: string; message: string }[] {
+  const issues: { path: string; message: string }[] = [];
+  const has = (vertex: BoxVertex) => topology.vertices.includes(vertex);
+  const lowerCorners = topology.faces[topology.lowerBase] ?? [];
+  switch (section.type) {
+    case 'face-parallel':
+      if (section.face !== undefined && topology.faces[section.face] === undefined) {
+        issues.push({ path: 'face', message: `The solid has no face ${section.face}.` });
+      }
+      break;
+    case 'longitudinal': {
+      const kind = (segment: readonly [BoxVertex, BoxVertex] | undefined) =>
+        segment === undefined ? undefined : boxFaceSegmentKind(topology, topology.lowerBase, segment);
+      const triangle = topology.sides === 3;
+      const valid =
+        section.trace === 'angle'
+          ? true
+          : section.trace === 'AC' || section.trace === 'BD'
+            ? topology.sides >= 4
+            : section.trace === 'diagonal'
+              ? kind(section.traceSegment) === 'diagonal'
+              : section.trace === 'midline'
+                ? triangle && kind(section.traceSegment) === 'edge'
+                : triangle && section.traceVertex !== undefined && lowerCorners.includes(section.traceVertex);
+      if (!valid) issues.push({ path: 'trace', message: `The base offers no such trace: ${section.trace}.` });
+      break;
+    }
+    case 'through-line':
+      if (topology.faces[section.face] === undefined)
+        issues.push({ path: 'face', message: `The solid has no face ${section.face}.` });
+      else if (boxFaceSegmentKind(topology, section.face, section.line) === undefined) {
+        issues.push({ path: 'line', message: 'The line is no edge or diagonal of the face.' });
+      }
+      if (section.method === 'point' && section.pointEdge !== undefined && !isEdgeOf(topology, section.pointEdge)) {
+        issues.push({ path: 'pointEdge', message: 'The point lies on no edge of the solid.' });
+      }
+      break;
+    case 'inclined':
+      if (section.normalAlong !== undefined && !section.normalAlong.every(has)) {
+        issues.push({ path: 'normalAlong', message: 'The segment joins vertices the solid does not have.' });
+      }
+      break;
+  }
+  return issues;
+}
 
 export const BOX_SECTION_TYPES = ['face-parallel', 'longitudinal', 'through-line', 'inclined'] as const;
 

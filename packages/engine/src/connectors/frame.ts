@@ -930,7 +930,7 @@ export function conePlateSection(shape: ConeShape, scale: PhysicalScale, cut: Pl
 export function plateSection(shape: SectionedShape, scale: PhysicalScale, cut: PlateCut): PlateSection {
   if (shape.kind === 'cone') return conePlateSection(shape, scale, cut);
   if (shape.kind === 'ball') return ballPlateSection(scale, cut);
-  if (isBoxShape(shape)) throw new GeometryError('A cube or parallelepiped takes no section plate.');
+  if (isBoxShape(shape)) throw new GeometryError('A cube, parallelepiped or prism takes no section plate.');
   return cylinderPlateSection(shape, scale, cut);
 }
 

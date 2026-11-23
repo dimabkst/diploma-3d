@@ -751,6 +751,7 @@ describe('plane sections', () => {
       cube: box,
       cuboid: box,
       parallelepiped: box,
+      prism: box,
       cylinder: ['parallel-to-bases', 'vertical', 'oblique', 'axis-parallel'],
       cone: ['parallel-to-bases', 'vertical', 'oblique', 'oblique-apex'],
       ball: ['horizontal'],
@@ -937,7 +938,8 @@ describe('the sections of a cube and the parallelepipeds', () => {
     modelSpecSchema.safeParse({ shape, scale: { longestDimensionMm: 80 }, section });
 
   it('start from the lower base, through the middle, and keep positions within 10–90 % of the extent', () => {
-    expect(parse({ type: 'face-parallel' }).data?.section).toEqual({ type: 'face-parallel', face: 'ABCD', positionPercent: 50 });
+    // Without a face, the lower base, which the engine takes for whatever base the solid has.
+    expect(parse({ type: 'face-parallel' }).data?.section).toEqual({ type: 'face-parallel', positionPercent: 50 });
     expect(parse({ type: 'longitudinal' }).data?.section).toEqual({
       type: 'longitudinal',
       trace: 'angle',
@@ -976,10 +978,37 @@ describe('the sections of a cube and the parallelepipeds', () => {
     expect(parse({ ...point, pointEdge: undefined }).success).toBe(false);
   });
 
-  it('belong to the cube and the parallelepipeds alone', () => {
+  it('belong to the cube, the parallelepipeds and the prisms, each naming only its own faces, edges and vertices', () => {
     const section = { type: 'face-parallel' };
     expect(parse(section, { kind: 'cuboid', widthRatio: 1, heightRatio: 2 }).success).toBe(true);
-    expect(parse(section, { kind: 'prism', baseType: 'regular', baseSides: 4, heightRatio: 1 }).success).toBe(false);
+    const triangular = { kind: 'prism', baseType: 'regular', baseSides: 3, heightRatio: 1 };
+    const hexagonal = { kind: 'prism', baseType: 'regular', baseSides: 6, heightRatio: 1 };
+    expect(parse(section, triangular).success).toBe(true);
     expect(parse(section, { kind: 'cylinder', heightRatio: 2 }).success).toBe(false);
+    expect(parse({ type: 'face-parallel', face: 'CAA1C1' }, triangular).success).toBe(true);
+    expect(parse({ type: 'face-parallel', face: 'ABCD' }, triangular).success).toBe(false);
+    // A triangle's lines through a vertex, no diagonals; a hexagon's diagonals, no medians.
+    const trace = (fields: object) => ({ type: 'longitudinal', through: true, ...fields });
+    expect(parse(trace({ trace: 'median', traceVertex: 'C' }), triangular).success).toBe(true);
+    expect(parse(trace({ trace: 'midline', traceSegment: ['C', 'A'] }), triangular).success).toBe(true);
+    expect(parse(trace({ trace: 'diagonal', traceSegment: ['A', 'C'] }), triangular).success).toBe(false);
+    expect(parse(trace({ trace: 'diagonal', traceSegment: ['A', 'D'] }), hexagonal).success).toBe(true);
+    expect(parse(trace({ trace: 'diagonal', traceSegment: ['A', 'B'] }), hexagonal).success).toBe(false);
+    expect(parse(trace({ trace: 'height', traceVertex: 'A' }), hexagonal).success).toBe(false);
+    expect(parse({ type: 'longitudinal', trace: 'angle', through: true }, hexagonal).success).toBe(false);
+    // A lateral face's diagonal of a triangular prism, and a point of the edge opposite AB.
+    const line = { type: 'through-line', face: 'ABB1A1', line: ['A', 'B1'], method: 'angle', angleDeg: 40 };
+    expect(parse(line, triangular).success).toBe(true);
+    const point = {
+      type: 'through-line',
+      face: 'ABC',
+      line: ['A', 'B'],
+      method: 'point',
+      pointEdge: ['C', 'C1'],
+      pointPercent: 50,
+    };
+    expect(parse(point, triangular).success).toBe(true);
+    expect(parse({ type: 'inclined', normalAlong: ['A', 'D1'] }, triangular).success).toBe(false);
+    expect(parse({ type: 'inclined', normalAlong: ['A', 'F1'] }, hexagonal).success).toBe(true);
   });
 });

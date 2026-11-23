@@ -302,16 +302,10 @@ describe('releases Manifold objects', () => {
       scale: { longestDimensionMm: 80 },
     },
   } as const satisfies Record<string, ModelSpecInput>;
-  // Right prisms and pyramids: extrude, scale. Oblique prisms: extrude, shear, scale.
+  // Pyramids: extrude, scale; with a displaced apex, extrude, shear, scale.
   const polyhedra: readonly (readonly [string, ModelSpecInput, number])[] = [
-    ['prism', defaultModelSpecs.prism, 2],
-    ['oblique prism', oblique.prism, 3],
-    ['triangle prism', triangle.right, 2],
-    ['oblique triangle prism', triangle.oblique, 3],
-    ['trapezoid prism', trapezoid.right, 2],
     ['triangle pyramid', pyramids.triangle, 2],
     ['pyramid with a displaced apex', pyramids.displaced, 3],
-    ['oblique trapezoid prism', trapezoid.oblique, 3],
     ['pyramid', defaultModelSpecs.pyramid, 2],
     ['tetrahedron', defaultModelSpecs.tetrahedron, 2],
   ];
@@ -328,9 +322,14 @@ describe('releases Manifold objects', () => {
     ['oblique cone', obliqueRound.cone, 2],
     ['ball', defaultModelSpecs.ball, 2],
   ];
-  // The convex hull of the vertices in millimetres, in one step.
-  // The convex hull of their vertices in millimetres.
+  // The convex hull of their vertices in millimetres, in one step.
   const hulls: readonly (readonly [string, ModelSpecInput, number])[] = [
+    ['prism', defaultModelSpecs.prism, 1],
+    ['oblique prism', oblique.prism, 1],
+    ['triangle prism', triangle.right, 1],
+    ['oblique triangle prism', triangle.oblique, 1],
+    ['trapezoid prism', trapezoid.right, 1],
+    ['oblique trapezoid prism', trapezoid.oblique, 1],
     ['cube', defaultModelSpecs.cube, 1],
     ['cuboid', defaultModelSpecs.cuboid, 1],
     ['parallelepiped', defaultModelSpecs.parallelepiped, 1],
@@ -367,7 +366,6 @@ describe('releases Manifold objects', () => {
   });
 
   it.each([
-    ['an oblique prism', oblique.prism],
     ['an oblique cone', obliqueRound.cone],
     ['a pyramid with a displaced apex', pyramids.displaced],
   ])('when the shear of %s throws', (_, spec) => {

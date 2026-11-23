@@ -8,7 +8,14 @@ import { pyramidShapeSchema } from './pyramid.ts';
 import { dodecahedronShapeSchema, icosahedronShapeSchema, octahedronShapeSchema } from './regular-polyhedron.ts';
 import { coneShapeSchema, cylinderShapeSchema } from './round.ts';
 import { DEFAULT_LONGEST_DIMENSION_MM, physicalScaleSchema } from './scale.ts';
-import { type SectionType, sectionSchema } from './section.ts';
+import {
+  BOX_SECTION_TYPES,
+  type BoxSectionSpec,
+  boxSectionIssues,
+  prismTopology,
+  type SectionType,
+  sectionSchema,
+} from './section.ts';
 import { tetrahedronShapeSchema } from './tetrahedron.ts';
 import { isWithinMinimumInclination, MIN_INCLINATION_DEG, tiltOf } from './tilt.ts';
 
@@ -49,7 +56,22 @@ export const SECTIONS_BY_SHAPE: Readonly<Partial<Record<ShapeKind, readonly Sect
   cube: ['face-parallel', 'longitudinal', 'through-line', 'inclined'],
   cuboid: ['face-parallel', 'longitudinal', 'through-line', 'inclined'],
   parallelepiped: ['face-parallel', 'longitudinal', 'through-line', 'inclined'],
+  prism: ['face-parallel', 'longitudinal', 'through-line', 'inclined'],
 };
+
+/** The number of base vertices of a solid whose sections name its vertices: four for a cube and the parallelepipeds. */
+export function prismSidesOf(shape: Shape): number | undefined {
+  switch (shape.kind) {
+    case 'cube':
+    case 'cuboid':
+    case 'parallelepiped':
+      return 4;
+    case 'prism':
+      return shape.baseType === 'regular' ? shape.baseSides : shape.baseType === 'triangle' ? 3 : 4;
+    default:
+      return undefined;
+  }
+}
 
 export const supportsSection = (kind: ShapeKind, type: SectionType): boolean => SECTIONS_BY_SHAPE[kind]?.includes(type) ?? false;
 
@@ -70,6 +92,14 @@ export const modelSpecSchema = z
         path: ['section'],
         message: `A ${spec.shape.kind} does not offer the section ${spec.section.type}.`,
       });
+      return;
+    }
+    // A face, an edge or a vertex of a box section must be the solid's own.
+    const sides = prismSidesOf(spec.shape);
+    const section = spec.section;
+    if (sides === undefined || section === undefined || !(BOX_SECTION_TYPES as readonly string[]).includes(section.type)) return;
+    for (const { path, message } of boxSectionIssues(prismTopology(sides), section as BoxSectionSpec)) {
+      context.addIssue({ code: 'custom', path: ['section', path], message });
     }
   });
 

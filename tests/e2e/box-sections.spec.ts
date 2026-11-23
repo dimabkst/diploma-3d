@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { expect, type Page, test } from '@playwright/test';
 import { boxVertices } from '../../packages/engine/src/connectors/box.ts';
 import { readThreeMf, readThreeMfPart } from '../../packages/engine/src/export/three-mf.test-helper.ts';
+import { measureMesh } from '../../packages/engine/src/mesh.ts';
 import { collectErrors, openSection, previewViewport, shapeSelect } from './helpers.ts';
 
 const partsButton = (page: Page) => page.getByRole('button', { name: 'Завантажити частини · 3MF', exact: true });
@@ -25,12 +26,20 @@ test('a cube’s diagonal section, then a plane through an edge and a midpoint, 
   await shapeSelect(page).selectOption({ label: 'Куб' });
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Поздовжній' });
-  await page.getByRole('button', { name: 'Діагональний переріз AA₁C₁C', exact: true }).click();
+  await entry(page, 'Слід на основі').selectOption({ label: 'Через діагональ основи' });
+  await expect(entry(page, 'Діагональ основи')).toHaveValue('A-C');
   await expect(page.getByText('Діагональний переріз: площина проходить через діагональ AC')).toBeVisible();
   const diagonal = await download(page);
   expect(diagonal.fileName).toBe('cube-longitudinal-section.3mf');
   expect(diagonal.objects).toEqual(['cube-part-1', 'cube-part-2']);
-  expect(diagonal.section).toEqual({ type: 'longitudinal', trace: 'AC', traceAngleDeg: 0, positionPercent: 50 });
+  expect(diagonal.section).toEqual({
+    type: 'longitudinal',
+    trace: 'diagonal',
+    traceAngleDeg: 0,
+    traceSegment: ['A', 'C'],
+    through: true,
+    positionPercent: 50,
+  });
   // The vertices are named in the preview, as the fields name them; those on the plane, on both parts apart.
   await expect(page.locator('model-viewer .vertex-label')).toHaveText(
     ['A', 'A', 'B', 'C', 'C', 'D', 'A₁', 'A₁', 'B₁', 'C₁', 'C₁', 'D₁'],
@@ -232,7 +241,6 @@ async function labelGeometry(page: Page): Promise<LabelGeometry[]> {
 
 const PIXEL_TOLERANCE = 1.5;
 const VERTEX_TOLERANCE_M = 1e-6;
-const VERTEX_NAMES = { A: 'A', B: 'B', C: 'C', D: 'D', 'A₁': 'A1', 'B₁': 'B1', 'C₁': 'C1', 'D₁': 'D1' } as const;
 
 /**
  * Every label is drawn over its anchor as the camera projects it onto the canvas, and its anchor is its own vertex: a vertex of
@@ -253,7 +261,7 @@ async function expectLabelsOnVertices(page: Page, shape: Parameters<typeof boxVe
   const corners = boxVertices(shape, { longestDimensionMm: 80 });
   for (const label of labels) {
     expect(label.parts.length).toBeGreaterThan(0);
-    const [x, y, z] = corners[VERTEX_NAMES[label.name as keyof typeof VERTEX_NAMES]];
+    const [x, y, z] = corners[label.name.replace('₁', '1') as keyof typeof corners];
     for (const { matrix, nearestM } of label.onParts) {
       expect(nearestM).toBeLessThan(VERTEX_TOLERANCE_M);
       const at = (index: number) => matrix[index] ?? 0;
@@ -320,7 +328,7 @@ test('vertex labels on a parallelepiped leaning both ways, cut through four vert
   } as const;
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Поздовжній' });
-  await page.getByRole('button', { name: 'Діагональний переріз AA₁C₁C', exact: true }).click();
+  await entry(page, 'Слід на основі').selectOption({ label: 'Через діагональ основи' });
   // Apart, A, C, A1 and C1 on the plane are each shown on both parts, under the same name; assembled, once.
   const apart = await expectLabelsOnVertices(page, shape);
   expect(apart.filter((label) => label.name === 'A').map((label) => label.parts)).toEqual([['part-1'], ['part-2']]);
@@ -388,7 +396,9 @@ test('three parts of the cube by two diagonal planes through BD: both interfaces
   await shapeSelect(page).selectOption({ label: 'Куб' });
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Поздовжній' });
-  await page.getByRole('button', { name: 'Діагональний переріз BB₁D₁D', exact: true }).click();
+  await entry(page, 'Слід на основі').selectOption({ label: 'Через діагональ основи' });
+  await entry(page, 'Діагональ основи').selectOption({ label: 'Діагональ BD' });
+  await expect(entry(page, 'Положення')).toHaveValue('50');
   await page.getByRole('button', { name: 'Додати паралельний переріз', exact: true }).click();
   // The planes x + y = const, the settled normal (1, 1, 0)/√2 in glTF axes (x, z, −y); the gap is 15 % of 80 mm.
   const normal = [Math.SQRT1_2, 0, -Math.SQRT1_2] as const;
@@ -550,6 +560,197 @@ test('vertex labels stay on the drawn vertices in every frame while sliders are 
       offsetYRatio: 0,
     });
     await expect(entry(page, 'Висота h')).toHaveValue('1,5');
+  }
+  expect(errors).toEqual([]);
+});
+
+const options = async (page: Page, label: string) => entry(page, label).locator('option').allTextContents();
+
+test('a triangular prism: through a median and a midline of its base, then through AB and the midpoint of CC₁', async ({
+  page,
+}) => {
+  const errors = collectErrors(page);
+  await page.goto('/');
+  await shapeSelect(page).selectOption({ label: 'Призма' });
+  const shape = { kind: 'prism', baseType: 'regular', baseSides: 3, heightRatio: 2, offsetXRatio: 0, offsetYRatio: 0 } as const;
+  await openSection(page, 'Переріз');
+  await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно грані' });
+  // The base, and the three lateral faces, no two of which are parallel.
+  expect(await options(page, 'Паралельно грані')).toEqual([
+    'ABC — нижня основа',
+    'ABB₁A₁ — бічна грань',
+    'BCC₁B₁ — бічна грань',
+    'CAA₁C₁ — бічна грань',
+  ]);
+  await entry(page, 'Тип перерізу').selectOption({ label: 'Поздовжній' });
+  // An equilateral base: its median, altitude and bisector from a vertex are one line, offered once; no diagonals.
+  expect(await options(page, 'Слід на основі')).toEqual([
+    'Під кутом до ребра AB',
+    'Через медіану, висоту й бісектрису основи',
+    'Через середню лінію основи',
+  ]);
+  await entry(page, 'Слід на основі').selectOption({ label: 'Через медіану, висоту й бісектрису основи' });
+  await entry(page, 'З вершини').selectOption({ label: 'C' });
+  await expect(
+    page.getByText('В основі рівносторонній трикутник: медіана, висота й бісектриса з однієї вершини збігаються.'),
+  ).toBeVisible();
+  await expect(page.getByText(/Площина проходить через медіану з вершини C/)).toBeVisible();
+  const median = await download(page);
+  expect(median.fileName).toBe('prism-3-sided-longitudinal-section.3mf');
+  expect(median.section).toMatchObject({ type: 'longitudinal', trace: 'median', traceVertex: 'C', through: true });
+  await expectLabelsOnVertices(page, shape);
+  await entry(page, 'Слід на основі').selectOption({ label: 'Через середню лінію основи' });
+  await entry(page, 'Паралельно стороні').selectOption({ label: 'Стороні AB' });
+  const midline = await download(page);
+  expect(midline.section).toMatchObject({ trace: 'midline', traceSegment: ['A', 'B'], through: true });
+
+  await entry(page, 'Тип перерізу').selectOption({ label: 'Через ребро або діагональ' });
+  expect(await options(page, 'Ребро або діагональ грані')).toEqual(['Ребро AB', 'Ребро BC', 'Ребро CA']);
+  await entry(page, 'Спосіб').selectOption({ label: 'Через точку ребра' });
+  // A1B1 and the lateral edges through A and B give the face ABB1A1 or meet AB: not offered.
+  expect(await options(page, 'Ребро з точкою')).toEqual(['Ребро B₁C₁', 'Ребро C₁A₁', 'Ребро CC₁']);
+  await expect(entry(page, 'Ребро з точкою')).toHaveValue('C-C1');
+  await expect(entry(page, 'Точка на CC₁ від C')).toHaveValue('50');
+  const edge = await download(page);
+  expect(edge.section).toEqual({
+    type: 'through-line',
+    face: 'ABC',
+    line: ['A', 'B'],
+    method: 'point',
+    pointEdge: ['C', 'C1'],
+    pointPercent: 50,
+  });
+  await expectLabelsOnVertices(page, shape);
+  expect(errors).toEqual([]);
+});
+
+test('a hexagonal prism: its shorter and longer base diagonals, each a section through two lateral edges', async ({ page }) => {
+  const errors = collectErrors(page);
+  await page.goto('/');
+  await shapeSelect(page).selectOption({ label: 'Призма' });
+  await openSection(page, 'Основа');
+  await entry(page, 'Багатокутник').selectOption({ label: 'Правильний шестикутник' });
+  await openSection(page, 'Переріз');
+  await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно грані' });
+  expect(await options(page, 'Паралельно грані')).toHaveLength(4);
+  await entry(page, 'Тип перерізу').selectOption({ label: 'Поздовжній' });
+  await entry(page, 'Слід на основі').selectOption({ label: 'Через діагональ основи' });
+  const diagonals = await options(page, 'Діагональ основи');
+  expect(diagonals).toHaveLength(9);
+  expect(diagonals).toContain('Діагональ AC (коротша)');
+  expect(diagonals).toContain('Діагональ AD (довша)');
+  await entry(page, 'Діагональ основи').selectOption({ label: 'Діагональ AD (довша)' });
+  await expect(
+    page.getByText('Діагональний переріз: площина проходить через діагональ AD (довша, через центр) і бічні ребра AA₁ та DD₁.'),
+  ).toBeVisible();
+  await expect(entry(page, 'Положення')).toHaveValue('50');
+  const long = await download(page);
+  expect(long.section).toMatchObject({ trace: 'diagonal', traceSegment: ['A', 'D'], through: true });
+  await entry(page, 'Діагональ основи').selectOption({ label: 'Діагональ AC (коротша)' });
+  const short = await download(page);
+  expect(short.section).toMatchObject({ trace: 'diagonal', traceSegment: ['A', 'C'], through: true });
+  expect(errors).toEqual([]);
+});
+
+test('an oblique pentagonal prism cut perpendicular to its lateral edges, then into three parts with magnets', async ({
+  page,
+}) => {
+  const errors = collectErrors(page);
+  await page.goto('/');
+  await shapeSelect(page).selectOption({ label: 'Призма' });
+  await openSection(page, 'Основа');
+  await entry(page, 'Багатокутник').selectOption({ label: 'Правильний п’ятикутник' });
+  await openSection(page, 'Нахил');
+  await entry(page, 'Зміщення X').fill('0,4');
+  const shape = { kind: 'prism', baseType: 'regular', baseSides: 5, heightRatio: 2, offsetXRatio: 0.4, offsetYRatio: 0 } as const;
+  await openSection(page, 'Переріз');
+  await entry(page, 'Тип перерізу').selectOption({ label: 'Похилий' });
+  await page.getByRole('button', { name: 'Перпендикулярно бічним ребрам', exact: true }).click();
+  await expect(page.getByText('Площина перпендикулярна до бічних ребер.')).toBeVisible();
+  const single = await download(page);
+  expect(single.section).toMatchObject({ type: 'inclined', normalAlong: ['A', 'A1'], positionPercent: 50 });
+  await expectLabelsOnVertices(page, shape);
+  await page.getByRole('button', { name: 'Додати паралельний переріз', exact: true }).click();
+  await entry(page, 'Тип кріплення').selectOption({ label: 'Магнітні гнізда' });
+  const three = await download(page);
+  expect(three.objects).toEqual(['prism-5-sided-part-1', 'prism-5-sided-middle-part', 'prism-5-sided-part-2']);
+  await expectLabelsOnVertices(page, shape);
+  expect(errors).toEqual([]);
+});
+
+/** The parts' volumes in the downloaded print file, and the section it records. */
+async function partVolumes(page: Page) {
+  await expect(previewViewport(page)).toHaveAttribute('data-preview-status', 'loaded', { timeout: 30_000 });
+  await expect(partsButton(page)).toBeEnabled({ timeout: 30_000 });
+  const [file] = await Promise.all([page.waitForEvent('download'), partsButton(page).click()]);
+  const bytes = new Uint8Array(await readFile(await file.path()));
+  return {
+    volumes: readThreeMf(bytes)
+      .model.objects.filter((object) => !object.name.includes('dowel'))
+      .map((object) => measureMesh(object.mesh).volume),
+    section: JSON.parse(readThreeMfPart(bytes, '3D/Other/model-settings.json') as string).sourceModel.section,
+    connector: JSON.parse(readThreeMfPart(bytes, '3D/Other/model-settings.json') as string).sourceModel.connector,
+  };
+}
+
+const cameraOrbit = (page: Page) =>
+  page.evaluate(() =>
+    (document.querySelector('model-viewer') as unknown as { getCameraOrbit(): { theta: number; phi: number } }).getCameraOrbit(),
+  );
+
+test('a plane perpendicular to the lateral edges goes back to its angles where it is, as often as wanted', async ({ page }) => {
+  const errors = collectErrors(page);
+  await page.goto('/');
+  await shapeSelect(page).selectOption({ label: 'Призма' });
+  await openSection(page, 'Нахил');
+  await entry(page, 'Зміщення X').fill('0,4');
+  await openSection(page, 'Переріз');
+  await entry(page, 'Тип перерізу').selectOption({ label: 'Похилий' });
+  await entry(page, 'Кут до площини основи').fill('30');
+  await page.getByRole('button', { name: 'Додати паралельний переріз', exact: true }).click();
+  await entry(page, 'Тип кріплення').selectOption({ label: 'Магнітні гнізда' });
+  const preset = page.getByRole('button', { name: 'Перпендикулярно бічним ребрам', exact: true });
+  const manual = page.getByRole('button', { name: 'Змінити нахил', exact: true });
+  await expect(preset).toBeEnabled();
+  await expect(manual).toHaveCount(0);
+  await orbit(page, '70deg 75deg auto');
+  for (const lean of ['0,6', '0,2']) {
+    await preset.click();
+    await expect(entry(page, 'Кут до площини основи')).toHaveCount(0);
+    await expect(preset).toHaveCount(0);
+    await expect(page.getByText('Площина перпендикулярна до бічних ребер.')).toBeVisible();
+    // The solid leans another way meanwhile: the plane stays perpendicular to its lateral edges.
+    await entry(page, 'Зміщення X').fill(lean);
+    const perpendicular = await partVolumes(page);
+    expect(perpendicular.section).toMatchObject({ normalAlong: ['A', 'A1'] });
+    expect(perpendicular.volumes).toHaveLength(3);
+    const camera = await cameraOrbit(page);
+    await manual.click();
+    await expect(entry(page, 'Кут до площини основи')).toBeVisible();
+    await expect(entry(page, 'Напрям нахилу')).toBeVisible();
+    await expect(preset).toBeEnabled();
+    await expect(manual).toHaveCount(0);
+    const angles = await partVolumes(page);
+    expect(angles.section).not.toHaveProperty('normalAlong');
+    expect(angles.connector).toMatchObject({ settings: { type: 'magnet' } });
+    expect(angles.section.secondPositionPercent).toBeDefined();
+    // The same three parts: the planes did not move.
+    angles.volumes.forEach((volume, index) => {
+      expect(Math.abs(volume / (perpendicular.volumes[index] as number) - 1)).toBeLessThan(1e-6);
+    });
+    expect(await cameraOrbit(page)).toEqual(camera);
+    await expect(page.getByLabel('Розсунути частини')).toBeChecked();
+    await expectLabelsOnVertices(page, {
+      kind: 'prism',
+      baseType: 'regular',
+      baseSides: 3,
+      heightRatio: 2,
+      offsetXRatio: Number.parseFloat(lean.replace(',', '.')),
+      offsetYRatio: 0,
+    });
+    // The angles are the user's again.
+    await entry(page, 'Кут до площини основи').fill('25');
+    expect((await partVolumes(page)).section).toMatchObject({ inclinationDeg: 25 });
   }
   expect(errors).toEqual([]);
 });

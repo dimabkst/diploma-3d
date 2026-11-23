@@ -1,5 +1,5 @@
-import { BOX_VERTICES, type BoxVertex, type ModelSpecInput } from '@diploma-3d/schema';
-import { boxPolyhedron, boxVertices, isBoxShape } from './connectors/box.ts';
+import type { BoxVertex, ModelSpecInput } from '@diploma-3d/schema';
+import { boxPolyhedron, boxVertices, isBoxShape, topologyOf } from './connectors/box.ts';
 import { obliqueAxes } from './connectors/frame.ts';
 import { dowelLength, type RoundConnectorPlan } from './connectors/round.ts';
 import {
@@ -173,7 +173,8 @@ function labelsOf(model: GeneratedModel, objects: readonly PreviewObject[]): { v
       if (region === undefined || !region.holds(position)) return;
       const object: PreviewObject = objects[part] ?? solid;
       const kept = faces.flatMap(({ corners }, face) =>
-        corners.includes(index) && region.keepsFace(corners.map((corner) => vertices[BOX_VERTICES[corner] as BoxVertex]))
+        corners.includes(index) &&
+        region.keepsFace(corners.map((corner) => vertices[topologyOf(vertices).vertices[corner] as BoxVertex]))
           ? [face]
           : [],
       );

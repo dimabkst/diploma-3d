@@ -96,15 +96,21 @@ const boxInitialTexts = (solid: string) => ({
 });
 
 /** Its choices as they start: no section, a plane through the lower base's edge AB by its angle when one is chosen. */
-const boxInitialChoices = (solid: string) => ({
+const boxInitialChoices = (solid: string, base = 'ABCD') => ({
   [`${solid}Section`]: 'none',
-  [`${solid}Face`]: 'ABCD',
+  [`${solid}Face`]: base,
   [`${solid}Trace`]: 'angle',
-  [`${solid}LineFace`]: 'ABCD',
+  [`${solid}TraceSegment`]: 'A-C',
+  [`${solid}TraceVertex`]: 'A',
+  [`${solid}TraceThrough`]: false,
+  [`${solid}TraceThroughText`]: '',
+  [`${solid}TraceFor`]: '',
+  [`${solid}LineFace`]: base,
   [`${solid}Line`]: 'A-B',
   [`${solid}LineMethod`]: 'angle',
   [`${solid}PointEdge`]: 'C-C1',
   [`${solid}NormalAlong`]: 'none',
+  [`${solid}NormalFrom`]: '',
   [`${solid}Connector`]: 'none',
   [`${solid}DovetailEntrance`]: 'standard',
   [`${solid}RoundCount`]: 1,
@@ -322,6 +328,7 @@ describe('resolveModelRequest', () => {
       ...boxInitialTexts('cube'),
       ...boxInitialTexts('cuboid'),
       ...boxInitialTexts('parallelepiped'),
+      ...boxInitialTexts('prism'),
     });
     expect(initialParameterChoices()).toEqual({
       prismBaseType: 'regular',
@@ -356,6 +363,8 @@ describe('resolveModelRequest', () => {
       ...boxInitialChoices('cube'),
       ...boxInitialChoices('cuboid'),
       ...boxInitialChoices('parallelepiped'),
+      // The initial prism is triangular: its lower base is ABC.
+      ...boxInitialChoices('prism', 'ABC'),
     });
     expect(resolveModelRequest('cuboid', initialParameterTexts(), triangle).spec).toEqual({
       shape: { kind: 'cuboid', widthRatio: 1.5, heightRatio: 2 },
@@ -1458,11 +1467,11 @@ describe('a cylinder section parallel to the bases', () => {
   });
 
   it('is chosen per solid, and not offered by solids without sections', () => {
-    for (const kind of ['cone', 'prism', 'cube'] as const) {
+    for (const kind of ['cone', 'prism', 'pyramid', 'cube'] as const) {
       expect(resolveModelRequest(kind, texts({}), parallel).spec).not.toHaveProperty('section');
       expect(activeSection(kind, parallel)).toBeUndefined();
     }
-    for (const kind of ['prism', 'tetrahedron'] as const) expect(partsSeparated(kind, parallel)).toBe(false);
+    for (const kind of ['pyramid', 'tetrahedron'] as const) expect(partsSeparated(kind, parallel)).toBe(false);
     const cone = shapePanel('cone', parallel);
     // The cone's own choice is still "no section": no connector group.
     expect(cone.type === 'parameters' && cone.sections.map((part) => part.title)).toEqual(['Висота', 'Нахил', 'Переріз']);

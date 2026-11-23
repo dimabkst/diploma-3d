@@ -20,16 +20,7 @@ import {
 } from '@diploma-3d/engine';
 import type { ConeShape, PhysicalScale, SectionType, ShapeKind } from '@diploma-3d/schema';
 import { formatDecimal, formatSteppedDecimal, parseDecimal, type StepRange } from '../decimal.ts';
-import {
-  BOX_SOLIDS,
-  type BoxSolid,
-  boxKeysOf,
-  boxModeKeys,
-  boxSectionOf,
-  boxShapeOf,
-  isBoxSolid,
-  throughLineChoicesFor,
-} from './box.ts';
+import { BOX_SOLIDS, type BoxSolid, boxContextOf, boxKeysOf, boxModeKeys, boxSectionOf, boxShapeOf, isBoxSolid } from './box.ts';
 import type { ParameterChoices, ParameterValues } from './parameters.ts';
 
 /** What turns the connector settings into millimetres: the assembled model's longest side M and the solid's size. */
@@ -283,7 +274,7 @@ export function boxConnectorScale(
   choices: ParameterChoices | undefined,
   previous?: ConnectorScale,
 ): ConnectorScale | undefined {
-  const shape = boxShapeOf(kind, values);
+  const shape = boxShapeOf(kind, values, choices);
   const { printSizeMm } = values;
   if (shape === undefined || printSizeMm === undefined) return undefined;
   const scale = { longestDimensionMm: printSizeMm };
@@ -293,12 +284,12 @@ export function boxConnectorScale(
   const type = choices?.[keys.Section];
   let boxSpanMm = previous?.boxSpanMm;
   if (choices !== undefined && type !== undefined && type !== 'none' && isBoxCut(type)) {
-    const available = throughLineChoicesFor(shape);
-    const fields = boxModeKeys(keys, type, choices, available);
+    const context = boxContextOf(kind, choices, shape);
+    const fields = boxModeKeys(keys, type, choices, context);
     if (fields.every((key) => values[key] !== undefined)) {
       try {
         boxSpanMm = boxSection(solid, scale, {
-          box: boxSectionOf(keys, type, choices, (key) => values[key] as number, false, available),
+          box: boxSectionOf(keys, type, choices, (key) => values[key] as number, false, context),
         }).span;
       } catch {
         // A plane that does not cut the solid, or through a point on its line, keeps the last span.

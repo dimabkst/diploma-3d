@@ -3,7 +3,6 @@ import {
   atSecondPlane,
   axialApexAngles,
   axisParallelOffsetLimitPercent,
-  BOX_PARALLEL_FACES,
   type BoxLikeShape,
   type BoxPointRange,
   ballOffsetLimitPercent,
@@ -11,7 +10,6 @@ import {
   ballSliceMinimumMm,
   boxFaceParallelPercent,
   boxLineAngleBounds,
-  boxOppositeFace,
   boxPartMinimumMm,
   boxPlane,
   boxPlanePercents,
@@ -141,18 +139,19 @@ import {
   type BoxKeysOf,
   type BoxNumberKey,
   type BoxSolid,
+  boxContextFrom,
+  boxContextOf,
   boxKeysOf,
   boxModeKeys,
   boxSectionOf,
-  boxShapeOf,
-  DIAGONAL_POSITION_PERCENT,
+  faceSelection,
   initialBoxChoices,
   isBoxSolid,
+  normalSelection,
   segmentKey,
   segmentName,
-  throughLineChoicesFor,
-  throughLineChoicesOf,
   throughLineSelection,
+  traceSelection,
 } from './box.ts';
 import {
   type ConnectorScale,
@@ -381,7 +380,10 @@ export type ToggleKey =
 /** The choices picked from options. */
 export type ChoiceKey = Exclude<
   keyof ParameterChoices,
-  ToggleKey | 'coneApexStarted' | 'ballSecondCut' | `${BoxSolid}SecondCut` | `${BoxSolid}LineAngleFor`
+  | ToggleKey
+  | 'coneApexStarted'
+  | 'ballSecondCut'
+  | `${BoxSolid}${'SecondCut' | 'LineAngleFor' | 'PointFor' | 'TraceThrough' | 'TraceThroughText' | 'TraceFor' | 'NormalFrom'}`
 >;
 
 export type ParameterErrors = Partial<Record<ParameterKey, string>>;
@@ -1132,7 +1134,7 @@ export function addSecondCut(kind: ShapeKind, state: ParameterState, values: Par
   if (keys === undefined || second === undefined) return state;
   if (isBoxSolid(kind)) {
     // Positions run from 10 % to 90 % of the solid's extent along the planes' normal; the first plane is where it is.
-    const first = boxFirstPercent(kind, state.choices, values) ?? DIAGONAL_POSITION_PERCENT;
+    const first = boxFirstPercent(kind, state.choices, values) ?? 50;
     const { min, max } = SECTION_POSITION_LIMITS;
     const start = (first + (first <= (min + max) / 2 ? max : min)) / 2;
     return {
@@ -1170,12 +1172,12 @@ function boxFirstPercent(kind: BoxSolid, choices: ParameterChoices, values: Para
   const type = activeSection(kind, choices);
   if (type === undefined || !isBoxSectionType(type)) return undefined;
   if (type !== 'through-line') return values[keys.SectionPercent];
-  const shape = boxShapeOf(kind, values);
-  const available = throughLineChoicesFor(shape);
-  const fields = boxModeKeys(keys, type, choices, available);
+  const context = boxContextFrom(kind, values, choices);
+  const { shape } = context;
+  const fields = boxModeKeys(keys, type, choices, context);
   if (shape === undefined || values.printSizeMm === undefined || fields.some((key) => values[key] === undefined))
     return undefined;
-  const spec = boxSectionOf(keys, type, choices, (key) => values[key] as number, false, available);
+  const spec = boxSectionOf(keys, type, choices, (key) => values[key] as number, false, context);
   try {
     return boxPlanePercents(boxVertices(shape as BoxLikeShape, { longestDimensionMm: values.printSizeMm }), spec).first;
   } catch {
@@ -1187,36 +1189,127 @@ function boxFirstPercent(kind: BoxSolid, choices: ParameterChoices, values: Para
 export const isBoxSectionType = (type: SectionType): type is BoxSectionSpec['type'] =>
   type === 'face-parallel' || type === 'longitudinal' || type === 'through-line' || type === 'inclined';
 
-/**
- * The state with a longitudinal plane through a base diagonal, the diagonal section: its trace along the diagonal and its
- * position through the solid's centre, which holds the diagonal whatever the solid becomes. Moving it away later keeps the
- * trace, and the plane is then parallel to the diagonal only.
- */
-export function diagonalSection(kind: ShapeKind, state: ParameterState, diagonal: 'AC' | 'BD'): ParameterState {
+/** The state with the longitudinal plane through its trace's line again, after its position was moved off it. */
+export function traceThrough(kind: ShapeKind, state: ParameterState): ParameterState {
   if (!isBoxSolid(kind)) return state;
   const keys = boxKeysOf(kind);
+  return { ...state, choices: { ...state.choices, [keys.TraceThrough]: true, [keys.TraceThroughText]: '' } };
+}
+
+/**
+ * A longitudinal plane along a line of the base passes through that line when the line is chosen, and keeps passing through it
+ * whatever the solid becomes, its position field showing where that puts the plane, until the field is edited: the plane then
+ * stays parallel to the line only, at the position typed. Undefined when nothing changes.
+ */
+export function followTrace(kind: ShapeKind, state: ParameterState, values: ParameterValues): ParameterState | undefined {
+  if (!isBoxSolid(kind)) return undefined;
+  const keys = boxKeysOf(kind);
+  const { choices, texts } = state;
+  if (activeSection(kind, choices) !== 'longitudinal') return undefined;
+  const context = boxContextFrom(kind, values, choices);
+  const { kind: trace, segment, vertex } = traceSelection(keys, choices, context);
+  if (trace === 'angle') return undefined;
+  const marker = `${trace}:${segment === undefined ? '' : segmentKey(segment)}:${vertex ?? ''}`;
+  if (choices[keys.TraceFor] !== marker) {
+    return { ...state, choices: { ...choices, [keys.TraceFor]: marker, [keys.TraceThrough]: true, [keys.TraceThroughText]: '' } };
+  }
+  if (!choices[keys.TraceThrough]) return undefined;
+  const shown = choices[keys.TraceThroughText];
+  if (shown !== '' && texts[keys.SectionPercent] !== shown) {
+    return { ...state, choices: { ...choices, [keys.TraceThrough]: false, [keys.TraceThroughText]: '' } };
+  }
+  const { shape } = context;
+  if (shape === undefined || values.printSizeMm === undefined) return undefined;
+  const spec = boxSectionOf(keys, 'longitudinal', choices, () => 50, false, context);
+  let percent: number;
+  try {
+    percent = boxPlanePercents(boxVertices(shape, { longestDimensionMm: values.printSizeMm }), spec).first;
+  } catch {
+    return undefined;
+  }
+  const text = formatDecimal(Math.round(percent * 100) / 100);
+  if (text === texts[keys.SectionPercent] && text === shown) return undefined;
   const exact = { ...state.exact };
   delete exact[keys.SectionPercent];
   return {
     ...state,
-    texts: { ...state.texts, [keys.SectionPercent]: formatDecimal(DIAGONAL_POSITION_PERCENT) },
-    choices: { ...state.choices, [keys.Trace]: diagonal },
+    texts: { ...texts, [keys.SectionPercent]: text },
+    choices: { ...choices, [keys.TraceThroughText]: text },
     exact,
   };
 }
 
-/** Whether the longitudinal plane is the diagonal section through this base diagonal now. */
-export const isDiagonalSection = (
-  kind: ShapeKind,
-  choices: ParameterChoices,
-  values: ParameterValues,
-): 'AC' | 'BD' | undefined => {
+/** The state with an inclined plane perpendicular to the lateral edges, n = a/|a|, at its position. */
+export function normalAlongLateral(kind: ShapeKind, state: ParameterState): ParameterState {
+  if (!isBoxSolid(kind)) return state;
+  return { ...state, choices: { ...state.choices, [boxKeysOf(kind).NormalAlong]: 'A-A1' } };
+}
+
+/** The state with an inclined plane given by its angles again; `followNormal` sets them to the plane it was. */
+export function normalAlongManual(kind: ShapeKind, state: ParameterState): ParameterState {
+  if (!isBoxSolid(kind)) return state;
+  return { ...state, choices: { ...state.choices, [boxKeysOf(kind).NormalAlong]: 'none' } };
+}
+
+// A normal this close to vertical makes the plane horizontal, whose direction of rise does not exist.
+const VERTICAL_NORMAL_ROUNDOFF = 1e-12;
+
+/**
+ * An inclined plane perpendicular to a segment that is given by its angles again stays the very plane it was, both planes of a
+ * second cut with it: its angles are read off its current normal n, from `obliqueAxes`, n = (−sin α cos φ, −sin α sin φ, cos α)
+ * with n turned upwards, so that α = arccos n_z ≤ 90° and φ = atan2(−n_y, −n_x); the positions are kept along n, or measured
+ * from the other side, 100 − p, where n had to turn, as the extent along −n is the same one reversed. A horizontal plane, α = 0,
+ * rises in no direction: the direction field keeps its value, which does not change the plane. The angles' full values are kept
+ * behind their rounded texts. While the plane is perpendicular to a segment, that segment is remembered for this; it follows the
+ * solid as before. Only for the inclined mode, whose position field the other modes share. Undefined when nothing changes,
+ * or while the plane is not valid yet.
+ */
+export function followNormal(kind: ShapeKind, state: ParameterState, values: ParameterValues): ParameterState | undefined {
   if (!isBoxSolid(kind)) return undefined;
   const keys = boxKeysOf(kind);
-  const trace = choices[keys.Trace];
-  if (activeSection(kind, choices) !== 'longitudinal' || trace === 'angle') return undefined;
-  return values[keys.SectionPercent] === DIAGONAL_POSITION_PERCENT ? trace : undefined;
-};
+  const { choices } = state;
+  if (activeSection(kind, choices) !== 'inclined') return undefined;
+  const context = boxContextFrom(kind, values, choices);
+  const along = normalSelection(keys, choices, context);
+  const from = choices[keys.NormalFrom];
+  if (along !== 'none') return from === along ? undefined : { ...state, choices: { ...choices, [keys.NormalFrom]: along } };
+  if (from === '') return undefined;
+  const { shape } = context;
+  const position = values[keys.SectionPercent];
+  if (shape === undefined || values.printSizeMm === undefined || position === undefined) return undefined;
+  const spec = boxSectionOf(
+    keys,
+    'inclined',
+    { ...choices, [keys.NormalAlong]: from },
+    (key) => values[key] as number,
+    false,
+    context,
+  );
+  let normal: readonly [number, number, number];
+  try {
+    normal = boxPlane(boxVertices(shape, { longestDimensionMm: values.printSizeMm }), spec).normal;
+  } catch {
+    return undefined;
+  }
+  const flip = normal[2] < 0;
+  const [x, y, z] = flip ? normal.map((value) => -value) : normal;
+  const texts = { ...state.texts };
+  const exact = { ...state.exact };
+  const show = (key: BoxNumberKey, value: number) => {
+    texts[key] = formatDecimal(value);
+    exact[key] = value;
+  };
+  show(keys.PlaneInclinationDeg, (Math.acos(Math.min(Math.max(z as number, -1), 1)) * 180) / Math.PI);
+  if (Math.hypot(x as number, y as number) > VERTICAL_NORMAL_ROUNDOFF) {
+    show(keys.PlaneDirectionDeg, ((((Math.atan2(-(y as number), -(x as number)) * 180) / Math.PI) % 360) + 360) % 360);
+  }
+  if (flip) {
+    show(keys.SectionPercent, 100 - position);
+    const second = values[keys.SectionSecondPercent];
+    if (second !== undefined) show(keys.SectionSecondPercent, 100 - second);
+  }
+  return { ...state, texts, exact, choices: { ...choices, [keys.NormalFrom]: '' } };
+}
 
 /** The state with the point of a plane through a line at the middle of its edge. */
 export function pointAtMidpoint(kind: ShapeKind, state: ParameterState): ParameterState {
@@ -1235,43 +1328,37 @@ export function boxCutHorizontal(kind: ShapeKind, choices: ParameterChoices, val
   if (!isBoxSolid(kind)) return false;
   const keys = boxKeysOf(kind);
   const type = activeSection(kind, choices);
-  const shape = boxShapeOf(kind, values);
+  const context = boxContextFrom(kind, values, choices);
+  const { shape } = context;
   if (type === undefined || !isBoxSectionType(type) || shape === undefined || values.printSizeMm === undefined) return false;
-  const available = throughLineChoicesFor(shape);
-  if (boxModeKeys(keys, type, choices, available).some((key) => values[key] === undefined)) return false;
-  const spec = boxSectionOf(keys, type, choices, (key) => values[key] as number, false, available);
+  if (boxModeKeys(keys, type, choices, context).some((key) => values[key] === undefined)) return false;
+  const spec = boxSectionOf(keys, type, choices, (key) => values[key] as number, false, context);
   return boxPlaneHorizontal(shape as BoxLikeShape, values.printSizeMm, spec as Section);
 }
 
 /**
- * A plane parallel to a face is chosen by one face of each pair of opposite faces, see `BOX_PARALLEL_FACES`; one given by the
- * other face of its pair, as an earlier choice may be, becomes the same plane measured from its representative: both planes'
+ * A plane parallel to a face is chosen by one face of each group of parallel faces, see `boxFaceOrientations`; one given by
+ * another face of its group, as an earlier choice may be, becomes the same plane measured from its representative: both planes'
  * positions are read through the planes themselves, see `boxFaceParallelPercent`, so that neither moves. A position that is not
- * a valid number yet stays as typed. Undefined when the face is a representative or the mode is another one, whose positions
- * share the field.
+ * a valid number yet stays as typed. Undefined when the face is a representative, the solid is not valid, or the mode is
+ * another one, whose positions share the field.
  */
 function representFace(kind: BoxSolid, state: ParameterState, values: ParameterValues): ParameterState | undefined {
   const keys = boxKeysOf(kind);
   const face = state.choices[keys.Face];
-  if (activeSection(kind, state.choices) !== 'face-parallel' || BOX_PARALLEL_FACES.includes(face)) return undefined;
-  const representative = boxOppositeFace(face);
-  const shape = boxShapeOf(kind, values);
+  if (activeSection(kind, state.choices) !== 'face-parallel') return undefined;
+  const { shape, orientations } = boxContextFrom(kind, values, state.choices);
+  const representative = orientations?.[face];
+  if (shape === undefined || representative === undefined || representative === face || values.printSizeMm === undefined) {
+    return undefined;
+  }
+  const scale = { longestDimensionMm: values.printSizeMm };
   const texts = { ...state.texts };
   const exact = { ...state.exact };
   for (const key of [keys.SectionPercent, keys.SectionSecondPercent]) {
     const percent = values[key];
     if (percent === undefined) continue;
-    // Opposite faces are parallel in every parallelepiped: without a valid solid, the same plane lies at 100 − p.
-    const converted =
-      shape === undefined || values.printSizeMm === undefined
-        ? 100 - percent
-        : boxFaceParallelPercent(
-            shape as BoxLikeShape,
-            { longestDimensionMm: values.printSizeMm },
-            face,
-            percent,
-            representative,
-          );
+    const converted = boxFaceParallelPercent(shape, scale, face, percent, representative);
     texts[key] = formatDecimal(Math.round(converted * 1e9) / 1e9);
     delete exact[key];
   }
@@ -1279,9 +1366,11 @@ function representFace(kind: BoxSolid, state: ParameterState, values: ParameterV
 }
 
 /**
- * The choices of a plane through a line that the fields offer, see `throughLineSelection`: a face, line, method or point's edge
- * no longer offered for this solid or for the choices before it is replaced, all of them together, before any model is made of
- * them. Undefined when they are all offered.
+ * The choices of a box's planes that the fields offer, for the solid's current base, all replaced together before any model is
+ * made of them; undefined when they are all offered. A face, a line, a vertex or a segment that the solid no longer has, as when
+ * a prism's base changes, gives way as the fields' own lists do, see `faceSelection`, `traceSelection` and
+ * `throughLineSelection`; a plane perpendicular to a segment the solid lacks is given by its angles again, and one perpendicular
+ * to any lateral edge is perpendicular to the lateral edges, as all of them are parallel.
  */
 export function settleBoxChoices(kind: ShapeKind, state: ParameterState, values: ParameterValues): ParameterState | undefined {
   if (!isBoxSolid(kind)) return undefined;
@@ -1289,12 +1378,19 @@ export function settleBoxChoices(kind: ShapeKind, state: ParameterState, values:
   const opposite = representFace(kind, state, values);
   if (opposite !== undefined) return opposite;
   const { choices } = state;
-  const selection = throughLineSelection(keys, choices, throughLineChoicesOf(kind, values));
+  const context = boxContextFrom(kind, values, choices);
+  const lines = throughLineSelection(keys, choices, context);
+  const trace = traceSelection(keys, choices, context);
   const settled = {
-    [keys.LineFace]: selection.face,
-    [keys.Line]: segmentKey(selection.line),
-    [keys.LineMethod]: selection.method,
-    [keys.PointEdge]: segmentKey(selection.pointEdge),
+    [keys.Face]: faceSelection(keys, choices, context).face,
+    [keys.LineFace]: lines.face,
+    [keys.Line]: segmentKey(lines.line),
+    [keys.LineMethod]: lines.method,
+    [keys.PointEdge]: segmentKey(lines.pointEdge),
+    [keys.Trace]: trace.kind,
+    ...(trace.segment === undefined ? {} : { [keys.TraceSegment]: segmentKey(trace.segment) }),
+    ...(trace.vertex === undefined ? {} : { [keys.TraceVertex]: trace.vertex }),
+    [keys.NormalAlong]: normalSelection(keys, choices, context),
   };
   if (Object.entries(settled).every(([key, value]) => choices[key as keyof typeof choices] === value)) return undefined;
   return { ...state, choices: { ...choices, ...settled } };
@@ -1313,13 +1409,14 @@ export function startLineAngle(kind: ShapeKind, state: ParameterState, values: P
   const keys = boxKeysOf(kind);
   const { choices } = state;
   if (activeSection(kind, choices) !== 'through-line') return undefined;
-  const shape = boxShapeOf(kind, values);
-  const { face, line, method } = throughLineSelection(keys, choices, throughLineChoicesFor(shape));
+  const context = boxContextFrom(kind, values, choices);
+  const { shape } = context;
+  const { face, line, method } = throughLineSelection(keys, choices, context);
   if (method !== 'angle') return undefined;
   const marker = `${face}:${segmentKey(line)}`;
   if (choices[keys.LineAngleFor] === marker) return undefined;
   if (shape === undefined || values.printSizeMm === undefined) return undefined;
-  const bounds = boxLineAngleBounds(shape as BoxLikeShape, { longestDimensionMm: values.printSizeMm }, face, line);
+  const bounds = boxLineAngleBounds(shape, { longestDimensionMm: values.printSizeMm }, face, line);
   const next = { ...state, choices: { ...choices, [keys.LineAngleFor]: marker } };
   if (bounds === null) return next;
   const range = planeAngleRange(bounds, LINE_ANGLE_INCREMENT_DEG);
@@ -1351,13 +1448,14 @@ export function startPoint(kind: ShapeKind, state: ParameterState, values: Param
   const keys = boxKeysOf(kind);
   const { choices } = state;
   if (activeSection(kind, choices) !== 'through-line') return undefined;
-  const shape = boxShapeOf(kind, values);
-  const { face, line, method, pointEdge } = throughLineSelection(keys, choices, throughLineChoicesFor(shape));
+  const context = boxContextFrom(kind, values, choices);
+  const { shape } = context;
+  const { face, line, method, pointEdge } = throughLineSelection(keys, choices, context);
   if (method !== 'point') return undefined;
   const marker = `${face}:${segmentKey(line)}:${segmentKey(pointEdge)}`;
   if (choices[keys.PointFor] === marker) return undefined;
   if (shape === undefined || values.printSizeMm === undefined) return undefined;
-  const range = boxPointRange(shape as BoxLikeShape, { longestDimensionMm: values.printSizeMm }, face, line, pointEdge);
+  const range = boxPointRange(shape, { longestDimensionMm: values.printSizeMm }, face, line, pointEdge);
   const next = { ...state, choices: { ...choices, [keys.PointFor]: marker } };
   if (range === null) return next;
   const allowed = pointInterval(range);
@@ -2892,6 +2990,7 @@ export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys | Plana
   cube: boxSectionKeys('cube'),
   cuboid: boxSectionKeys('cuboid'),
   parallelepiped: boxSectionKeys('parallelepiped'),
+  prism: boxSectionKeys('prism'),
   ball: {
     choice: 'ballSection',
     offset: 'ballSectionOffsetPercent',
@@ -3077,7 +3176,7 @@ function resolveSection(
     keys.box === undefined
       ? []
       : [
-          ...boxModeKeys(keys.box, mode, choices, throughLineChoicesFor(shape)),
+          ...boxModeKeys(keys.box, mode, choices, boxContextOf(kind as BoxSolid, choices, shape)),
           ...(secondCut === undefined ? [] : [secondCut.offset]),
         ];
   const cutFields: Readonly<Record<SectionType, readonly IndependentKey[]>> = {
@@ -3164,7 +3263,7 @@ function resolveSection(
     if (isBoxSectionType(type)) {
       const box = keys.box as BoxKeysOf;
       return {
-        ...boxSectionOf(box, type, choices, read, secondCut !== undefined, throughLineChoicesFor(shape)),
+        ...boxSectionOf(box, type, choices, read, secondCut !== undefined, boxContextOf(kind as BoxSolid, choices, shape)),
         ...joining,
       } as Section;
     }
@@ -3406,8 +3505,9 @@ export const shapeParameterKeys: Readonly<
       'prismDirectionDeg',
       ...prismBaseKeys.triangle,
       ...prismBaseKeys.trapezoid,
+      ...boxParameterTexts('prism'),
     ],
-    choices: ['prismBaseType', 'prismBaseSides'],
+    choices: ['prismBaseType', 'prismBaseSides', ...boxParameterChoices('prism')],
   },
   pyramid: {
     texts: [

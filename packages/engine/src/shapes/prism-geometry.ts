@@ -3,8 +3,7 @@ import type { Manifold } from 'manifold-3d';
 import type { GeometryKernel } from '../kernel.ts';
 import { cross, length, type Vec3 } from '../mesh.ts';
 import type { Track } from '../scope.ts';
-import { baseContours, polygonSize, signedPolygonArea, type Vec2 } from './polygon.ts';
-import { shearMatrix } from './shear.ts';
+import { polygonSize, signedPolygonArea, type Vec2 } from './polygon.ts';
 
 /**
  * A prism over any base polygon, before scaling: the base in z = 0 with a0 = 1, counter-clockwise seen from +Z, the
@@ -81,16 +80,12 @@ export function prismDimensionsMm(prism: PrismProportions, scale: PhysicalScale)
   };
 }
 
-/** The unscaled prism: the right prism extruded from the base, sheared when the upper base is displaced. */
-export function buildUnscaledPrism(kernel: GeometryKernel, track: Track, prism: PrismProportions): Manifold {
-  const right = track(kernel.Manifold.extrude(baseContours(prism.base), prism.height));
-  return isOblique(prism) ? track(right.transform(shearMatrix(prism.height, prism.offset))) : right;
+/** The vertices before scaling: the lower base in z = 0, then the upper base, the same polygon moved by (dx0, dy0, h0). */
+export function prismVertices({ base, height, offset: [dx, dy] }: PrismProportions): Vec3[] {
+  return [...base.map(([x, y]): Vec3 => [x, y, 0]), ...base.map(([x, y]): Vec3 => [x + dx, y + dy, height])];
 }
 
-/**
- * The prism in millimetres, uniformly scaled after the displacement so that the longest dimension of its actual
- * bounding box is L. The lower base keeps its position in z = 0.
- */
-export function buildPrism(kernel: GeometryKernel, track: Track, prism: PrismProportions, scale: PhysicalScale): Manifold {
-  return track(buildUnscaledPrism(kernel, track, prism).scale(prismScaleMm(prism, scale)));
+/** The unscaled prism: the convex hull of its vertices, every base being convex. */
+export function buildUnscaledPrism(kernel: GeometryKernel, track: Track, prism: PrismProportions): Manifold {
+  return track(kernel.Manifold.hull(prismVertices(prism).map(([x, y, z]): [number, number, number] => [x, y, z])));
 }

@@ -1,9 +1,6 @@
 import type { PhysicalScale, PrismShape, RegularPrismShape, TrapezoidPrismShape, TrianglePrismShape } from '@diploma-3d/schema';
-import type { Manifold } from 'manifold-3d';
-import type { GeometryKernel } from '../kernel.ts';
-import type { Track } from '../scope.ts';
 import { baseVertices } from './base.ts';
-import { buildPrism, type PrismDimensions, type PrismProportions, prismDimensionsMm } from './prism-geometry.ts';
+import { type PrismDimensions, type PrismProportions, prismDimensionsMm } from './prism-geometry.ts';
 import { trapezoidLegs } from './trapezoid.ts';
 import { triangleThirdSide } from './triangle.ts';
 
@@ -90,9 +87,4 @@ export function trapezoidPrismDimensionsMm(shape: TrapezoidPrismShape, scale: Ph
   const [b, t, delta] = [shape.parallelSideRatio * a, shape.baseHeightRatio * a, shape.baseShiftRatio * a];
   const { c, d } = trapezoidLegs(a, b, t, delta);
   return { ...dimensions, baseSideB: b, baseSideC: c, baseSideD: d, baseHeight: t, baseShift: delta };
-}
-
-/** The prism in millimetres, with the base centre at the origin and the lower base in z = 0. */
-export function buildPrismShape(kernel: GeometryKernel, track: Track, shape: PrismShape, scale: PhysicalScale): Manifold {
-  return buildPrism(kernel, track, prismShapeProportions(shape), scale);
 }

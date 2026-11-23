@@ -1,6 +1,5 @@
 import {
   axialApexAngles,
-  BOX_PARALLEL_FACES,
   DOVETAIL_PROPORTIONS,
   obliquePlaneContainsAxis,
   ROUND_CONNECTOR_PROPORTIONS,
@@ -12,8 +11,9 @@ import {
 import {
   BASE_ANGLE_LIMITS,
   BASE_SHIFT_LIMITS,
-  BOX_FACE_NAMES,
   type BoxFace,
+  type BoxSegment,
+  type BoxVertex,
   boxFaceSegmentKind,
   CONNECTOR_PROFILES,
   type ConnectorProfile,
@@ -29,6 +29,7 @@ import {
   PRISM_BASE_SIDES,
   PRISM_BASE_TYPES,
   type PrismBaseSides,
+  type PrismTopology,
   PYRAMID_BASE_TYPES,
   type PyramidBaseType,
   RATIO_LIMITS,
@@ -45,15 +46,19 @@ import { formatDecimal, type StepRange } from './decimal.ts';
 import {
   allSegments,
   type BoxSolid,
+  boxContextFrom,
   faceName,
   faceRole,
+  faceSelection,
   isBoxSolid,
+  normalSelection,
   segmentKey,
   segmentLabel,
   segmentName,
   segmentOf,
-  throughLineChoicesOf,
+  type TraceSelection,
   throughLineSelection,
+  traceSelection,
   vertexName,
 } from './model/box.ts';
 import {
@@ -73,7 +78,6 @@ import {
   type ConnectorStatus,
   canSwitchTiltMode,
   coneApexKeys,
-  isDiagonalSection,
   type ParameterChoices,
   type ParameterKey,
   type ParameterValues,
@@ -227,8 +231,9 @@ export type PanelAction =
   | 'add-second-cut'
   | 'remove-second-cut'
   | 'axial-section'
-  | 'diagonal-section-ac'
-  | 'diagonal-section-bd'
+  | 'trace-through'
+  | 'normal-lateral'
+  | 'normal-manual'
   | 'line-midpoint';
 
 /**
@@ -1937,18 +1942,23 @@ const boxSectionHelps: Readonly<Record<'face-parallel' | 'longitudinal' | 'throu
   'face-parallel': {
     label: 'Як задано переріз?',
     text:
-      'Площина паралельна вибраній грані. Положення — відстань від цієї грані у відсотках відстані до протилежної: 0 % — ' +
-      'сама грань, 100 % — протилежна. Переріз дорівнює грані: у куба це квадрат, у паралелепіпеда — паралелограм.\n\n' +
+      'Площина паралельна вибраній грані. Положення — відстань від цієї грані у відсотках відстані до найдальшої вершини з ' +
+      'іншого боку: 0 % — сама грань. Паралельні грані дають ті самі площини, тож у списку по одній грані з кожної групи: ' +
+      'основи завжди паралельні, а бічні грані — лише тоді, коли паралельні їхні ребра основи. Переріз, паралельний ' +
+      'основі, дорівнює основі.\n\n' +
       BOX_PARTS_TEXT,
   },
   longitudinal: {
     label: 'Як задано переріз?',
     text:
-      'Площина паралельна бічним ребрам AA₁, BB₁, CC₁, DD₁, тож у похилого паралелепіпеда вона нахилена разом із ними. ' +
-      'Її слід на основі йде під заданим кутом до ребра AB (проти годинникової стрілки, якщо дивитися згори) або паралельно ' +
-      'діагоналі основи. Переріз — паралелограм, у прямої фігури — прямокутник.\n\n' +
-      'Кнопки діагонального перерізу проводять площину через діагональ основи й два бічні ребра. Якщо пересунути площину, ' +
-      'вона лишається паралельною діагоналі, але вже не проходить через неї.\n\n' +
+      'Площина паралельна бічним ребрам, тож у похилої фігури вона нахилена разом із ними. Її слід на основі йде під заданим ' +
+      'кутом до ребра AB (проти годинникової стрілки, якщо дивитися згори) або вздовж лінії основи: діагоналі, а в ' +
+      'трикутника — медіани, висоти чи бісектриси з вершини або середньої лінії, паралельної стороні. Висоту основи ' +
+      'проведено з вершини перпендикулярно до прямої протилежної сторони; це не висота призми. Переріз — паралелограм, ' +
+      'у прямої фігури — прямокутник.\n\n' +
+      'Вибрана лінія задає площину, що проходить через неї, і так лишається, хоч би як змінилася фігура. Якщо пересунути ' +
+      'положення, площина лишається паралельною лінії, але вже не проходить через неї; «Провести через цю лінію» повертає ' +
+      'її. Лінію, площина через яку лише торкається фігури, у списку не запропоновано.\n\n' +
       `${BOX_POSITION_TEXT}\n\n${BOX_PARTS_TEXT}`,
   },
   'through-line': {
@@ -1968,7 +1978,8 @@ const boxSectionHelps: Readonly<Record<'face-parallel' | 'longitudinal' | 'throu
       'уздовж осі Y. Кут 0° дає горизонтальну площину, 90° — вертикальну. Компас у перегляді показує осі.\n\n' +
       'Спосіб «Перпендикулярно ребру або діагоналі» проводить площину перпендикулярно до ребра, діагоналі грані чи діагоналі ' +
       'тіла. Наприклад, у кубі площина, перпендикулярна до діагоналі AC₁, біля вершини A дає трикутний переріз, а посередині — ' +
-      'правильний шестикутник.\n\n' +
+      'правильний шестикутник. «Перпендикулярно бічним ребрам» дає перпендикулярний переріз призми; у похилої призми він ' +
+      'може перетинати й основи, тож його кутів не обов’язково стільки, скільки в основи.\n\n' +
       `${BOX_POSITION_TEXT}\n\n${BOX_PARTS_TEXT}`,
   },
 };
@@ -1983,7 +1994,59 @@ const TRACE_ANGLE_RANGE: StepRange = { min: 0, max: 180, increment: ANGLE_INCREM
 const BOX_INCLINATION_RANGE: StepRange = { min: 0, max: 90, increment: ANGLE_INCREMENT_DEG };
 const POINT_PERCENT_RANGE: StepRange = { min: 0, max: 100, increment: SECTION_PERCENT_INCREMENT };
 
-const faceOptions = BOX_FACE_NAMES.map((face: BoxFace) => ({ value: face, label: `${faceName(face)} — ${faceRole(face)}` }));
+const faceOption = (topology: PrismTopology, face: BoxFace) => ({
+  value: face,
+  label: `${faceName(topology, face)} — ${faceRole(topology, face)}`,
+});
+
+/**
+ * How a base's diagonal compares with the others of a regular base, which fall into classes by how many sides they span: a
+ * hexagon's shorter and longer ones, the latter through the centre; none where all are equal, as in a pentagon.
+ */
+function diagonalClass(topology: PrismTopology, [first, second]: BoxSegment, centre = false): string {
+  const corners = topology.faces[topology.lowerBase] ?? [];
+  const apart = Math.abs(corners.indexOf(first) - corners.indexOf(second));
+  const span = Math.min(apart, topology.sides - apart);
+  const classes = Math.floor(topology.sides / 2) - 1;
+  const through = centre && 2 * span === topology.sides ? ', через центр' : '';
+  if (classes < 2) return through === '' ? '' : ` (${through.slice(2)})`;
+  const names = classes === 2 ? ['коротша', 'довша'] : ['найкоротша', 'середня', 'найдовша'];
+  return ` (${names[span - 2] ?? ''}${through})`;
+}
+
+/** The line of a longitudinal trace, after "через" and after "паралельна", and as an option of its kind. */
+function traceTexts(selection: TraceSelection, topology: PrismTopology, regular: boolean) {
+  const { kind, segment, vertex, equilateral } = selection;
+  const side = segment === undefined ? '' : segmentName(segment);
+  const at = vertex === undefined ? '' : vertexName(vertex);
+  switch (kind) {
+    case 'diagonal': {
+      const suffix = regular && segment !== undefined ? diagonalClass(topology, segment, true) : '';
+      return { through: `діагональ ${side}${suffix}`, parallel: `діагоналі ${side}` };
+    }
+    case 'median':
+      return equilateral
+        ? { through: `медіану з вершини ${at}, вона ж висота й бісектриса`, parallel: `медіані з вершини ${at}` }
+        : { through: `медіану з вершини ${at}`, parallel: `медіані з вершини ${at}` };
+    case 'height':
+      return { through: `висоту основи з вершини ${at}`, parallel: `висоті основи з вершини ${at}` };
+    case 'bisector':
+      return { through: `бісектрису кута ${at}`, parallel: `бісектрисі кута ${at}` };
+    case 'midline':
+      return { through: `середню лінію, паралельну ${side}`, parallel: `середній лінії, паралельній ${side}` };
+    default:
+      return { through: '', parallel: '' };
+  }
+}
+
+const TRACE_KIND_LABELS = {
+  angle: 'Під кутом до ребра AB',
+  diagonal: 'Через діагональ основи',
+  median: 'Через медіану основи',
+  height: 'Через висоту основи',
+  bisector: 'Через бісектрису основи',
+  midline: 'Через середню лінію основи',
+} as const;
 
 /**
  * "Переріз" of a cube or parallelepiped: the mode and its own fields, a second parallel plane, and the separation. The plane's
@@ -2023,61 +2086,112 @@ function boxPlaneSection(kind: BoxSolid, choices: ParameterChoices, context: Pan
       box.SectionPercent,
       twoPlanes ? `Перший переріз: ${label}` : `${label.charAt(0).toUpperCase()}${label.slice(1)}`,
     );
-  const diagonal = isDiagonalSection(kind, choices, values);
   // A range not yet known allows everything; null, nothing.
   const allows = (interval: { readonly min: number; readonly max: number } | null | undefined, value: number) =>
     interval === undefined || (interval !== null && value >= interval.min && value <= interval.max);
   // Only the choices that lead to a usable plane of this solid are offered, each list given those before it.
-  const lineSelection = throughLineSelection(box, choices, throughLineChoicesOf(kind, values));
+  const solid = boxContextFrom(kind, values, choices);
+  const { topology } = solid;
+  const lineSelection = throughLineSelection(box, choices, solid);
   const { face, line, pointEdge } = lineSelection;
-  const along = choices[box.NormalAlong];
+  const parallelFaces = faceSelection(box, choices, solid);
+  const trace = traceSelection(box, choices, solid);
+  const traceText = traceTexts(trace, topology, solid.regular);
+  const through = trace.kind !== 'angle' && choices[box.TraceThrough];
+  const along = normalSelection(box, choices, solid);
+  const traceReference: ParameterField[] =
+    trace.kind === 'diagonal' || trace.kind === 'midline'
+      ? [
+          {
+            type: 'choice',
+            key: box.TraceSegment,
+            label: trace.kind === 'diagonal' ? 'Діагональ основи' : 'Паралельно стороні',
+            options: trace.segments.map((segment) => ({
+              value: segmentKey(segment),
+              label:
+                trace.kind === 'diagonal'
+                  ? `Діагональ ${segmentName(segment)}${solid.regular ? diagonalClass(topology, segment) : ''}`
+                  : `Стороні ${segmentName(segment)}`,
+            })),
+          },
+        ]
+      : trace.kind === 'angle'
+        ? [{ type: 'number', key: box.TraceAngleDeg, label: 'Кут сліду до AB', suffix: '°', range: TRACE_ANGLE_RANGE }]
+        : [
+            {
+              type: 'choice',
+              key: box.TraceVertex,
+              label: trace.kind === 'bisector' ? 'Кут при вершині' : 'З вершини',
+              options: trace.vertices.map((vertex) => ({ value: vertex, label: vertexName(vertex) })),
+            },
+          ];
+  const sameNote: ParameterField[] =
+    trace.equilateral && trace.kind === 'median'
+      ? [
+          note(
+            'trace-equilateral',
+            'В основі рівносторонній трикутник: медіана, висота й бісектриса з однієї вершини збігаються.',
+          ),
+        ]
+      : trace.vertex !== undefined && trace.sameLines.length === 3
+        ? [
+            note(
+              'trace-same',
+              `З вершини ${vertexName(trace.vertex)} медіана, висота й бісектриса збігаються: трикутник рівнобедрений.`,
+            ),
+          ]
+        : [];
   const modeFields: Record<'face-parallel' | 'longitudinal' | 'through-line' | 'inclined', ParameterField[]> = {
     'face-parallel': [
       {
         type: 'choice',
         key: box.Face,
         label: 'Паралельно грані',
-        // One face of each pair of opposite faces: the other gives the same planes.
-        options: faceOptions.filter((option) => BOX_PARALLEL_FACES.includes(option.value)),
+        // One face of each group of parallel faces: the others give the same planes.
+        options: parallelFaces.faces.map((option) => faceOption(topology, option)),
       },
-      position(`від грані ${faceName(choices[box.Face])}`),
+      position(`від грані ${faceName(topology, parallelFaces.face)}`),
     ],
     longitudinal: [
       {
         type: 'choice',
         key: box.Trace,
         label: 'Слід на основі',
-        options: [
-          { value: 'angle', label: 'Під кутом до ребра AB' },
-          { value: 'AC', label: 'Паралельно діагоналі AC' },
-          { value: 'BD', label: 'Паралельно діагоналі BD' },
-        ],
+        options: trace.kinds.map((kindOption) => ({
+          value: kindOption,
+          label:
+            kindOption === 'median' && trace.equilateral
+              ? 'Через медіану, висоту й бісектрису основи'
+              : TRACE_KIND_LABELS[kindOption],
+        })),
       },
-      ...(choices[box.Trace] === 'angle'
-        ? [{ type: 'number' as const, key: box.TraceAngleDeg, label: 'Кут сліду до AB', suffix: '°', range: TRACE_ANGLE_RANGE }]
-        : []),
+      ...traceReference,
+      ...sameNote,
       position('положення'),
-      ...(diagonal === undefined
-        ? choices[box.Trace] === 'angle'
-          ? []
-          : [note('longitudinal-parallel', `Площина паралельна діагоналі ${choices[box.Trace]}, але не проходить через неї.`)]
-        : [
-            note(
-              'longitudinal-diagonal',
-              diagonal === 'AC'
-                ? 'Діагональний переріз: площина проходить через діагональ AC і бічні ребра AA₁ та CC₁.'
-                : 'Діагональний переріз: площина проходить через діагональ BD і бічні ребра BB₁ та DD₁.',
-            ),
-          ]),
-      action('diagonal-ac', 'Діагональний переріз AA₁C₁C', 'diagonal-section-ac', diagonal === 'AC'),
-      action('diagonal-bd', 'Діагональний переріз BB₁D₁D', 'diagonal-section-bd', diagonal === 'BD'),
+      ...(trace.kind === 'angle'
+        ? []
+        : through
+          ? [
+              note(
+                'trace-through',
+                trace.kind === 'diagonal' && trace.segment !== undefined
+                  ? `Діагональний переріз: площина проходить через ${traceText.through} і бічні ребра ` +
+                      `${segmentName([trace.segment[0], `${trace.segment[0]}1` as BoxVertex])} та ` +
+                      `${segmentName([trace.segment[1], `${trace.segment[1]}1` as BoxVertex])}.`
+                  : `Площина проходить через ${traceText.through} і паралельна бічним ребрам.`,
+              ),
+            ]
+          : [
+              note('trace-parallel', `Площина паралельна ${traceText.parallel}, але не проходить через неї.`),
+              action('trace-through', 'Провести через цю лінію', 'trace-through'),
+            ]),
     ],
     'through-line': [
       {
         type: 'choice',
         key: box.LineFace,
         label: 'Грань',
-        options: faceOptions.filter((option) => lineSelection.faces.includes(option.value)),
+        options: lineSelection.faces.map((option) => faceOption(topology, option)),
       },
       {
         type: 'choice',
@@ -2085,7 +2199,7 @@ function boxPlaneSection(kind: BoxSolid, choices: ParameterChoices, context: Pan
         label: 'Ребро або діагональ грані',
         options: lineSelection.lines.map((segment) => ({
           value: segmentKey(segment),
-          label: `${boxFaceSegmentKind(face, segment) === 'edge' ? 'Ребро' : 'Діагональ'} ${segmentName(segment)}`,
+          label: `${boxFaceSegmentKind(topology, face, segment) === 'edge' ? 'Ребро' : 'Діагональ'} ${segmentName(segment)}`,
         })),
       },
       {
@@ -2102,13 +2216,13 @@ function boxPlaneSection(kind: BoxSolid, choices: ParameterChoices, context: Pan
             {
               type: 'number' as const,
               key: box.LineAngleDeg,
-              label: `Кут повороту від грані ${faceName(face)}`,
+              label: `Кут повороту від грані ${faceName(topology, face)}`,
               suffix: '°',
               range: rangeOf(box.LineAngleDeg, LINE_ANGLE_WINDOW, ANGLE_INCREMENT_DEG),
             },
             note(
               'line-angle',
-              `Площина повертається навколо ${segmentName(line)} від площини грані ${faceName(face)} всередину фігури.`,
+              `Площина повертається навколо ${segmentName(line)} від площини грані ${faceName(topology, face)} всередину фігури.`,
             ),
           ]
         : [
@@ -2154,8 +2268,18 @@ function boxPlaneSection(kind: BoxSolid, choices: ParameterChoices, context: Pan
               range: obliqueDirectionRange,
             },
           ]
-        : [note('normal-along-note', `Площина перпендикулярна до відрізка ${segmentName(segmentOf(along))}.`)]),
+        : [
+            note(
+              'normal-along-note',
+              along === 'A-A1'
+                ? 'Площина перпендикулярна до бічних ребер.'
+                : `Площина перпендикулярна до відрізка ${segmentName(segmentOf(along))}.`,
+            ),
+          ]),
       position('положення'),
+      // Out of a plane perpendicular to a segment by its angles, which start where the plane is; into it by the lateral edges.
+      ...(along === 'none' ? [] : [action('normal-manual', 'Змінити нахил', 'normal-manual')]),
+      ...(along === 'A-A1' ? [] : [action('normal-lateral', 'Перпендикулярно бічним ребрам', 'normal-lateral')]),
       {
         type: 'disclosure',
         key: `${kind}-normal-along`,
@@ -2167,13 +2291,18 @@ function boxPlaneSection(kind: BoxSolid, choices: ParameterChoices, context: Pan
             label: 'Перпендикулярно до',
             options: [
               { value: 'none', label: 'Не вибрано — задати кутами' },
-              ...allSegments().map(({ segment, kind: segmentKind }) => ({
+              ...allSegments(topology).map(({ segment, kind: segmentKind }) => ({
                 value: segmentKey(segment),
                 label: segmentLabel(segment, segmentKind),
               })),
             ],
           },
-          note('normal-along-kinds', 'Ребра, діагоналі граней і діагоналі тіла позначено окремо.'),
+          note(
+            'normal-along-kinds',
+            allSegments(topology).some(({ kind: segmentKind }) => segmentKind === 'body')
+              ? 'Ребра, діагоналі граней і діагоналі тіла позначено окремо.'
+              : 'Ребра й діагоналі граней позначено окремо; діагоналей тіла ця фігура не має.',
+          ),
         ],
       },
     ],
@@ -2219,7 +2348,7 @@ function boxPlaneSection(kind: BoxSolid, choices: ParameterChoices, context: Pan
             ? 'немає'
             : twoPlanes
               ? 'два перерізи'
-              : diagonal !== undefined
+              : chosen === 'longitudinal' && trace.kind === 'diagonal' && through
                 ? 'діагональний'
                 : sectionNames[chosen].toLowerCase(),
         highlighted: chosen !== 'none',
@@ -2315,6 +2444,7 @@ export function shapePanel(kind: ShapeKind, choices: ParameterChoices, context: 
             },
             context,
           ),
+          ...boxSections(kind, choices, context),
         ],
       };
     case 'pyramid':

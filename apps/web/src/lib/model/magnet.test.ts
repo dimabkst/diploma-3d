@@ -106,8 +106,8 @@ describe('magnet pockets in the panel', () => {
   it('keeps no removed placement setting anywhere, which could override the automatic placement', () => {
     const keys = Object.keys(initialParameterTexts()).filter((key) => key.includes('Magnet'));
     expect(keys.filter((key) => /EdgeClearance|Wall|Spacing|Chamfer/.test(key))).toEqual([]);
-    // Five fields for each of the six solids with sections.
-    expect(keys).toHaveLength(30);
+    // Five fields for each of the seven solids with sections.
+    expect(keys).toHaveLength(35);
   });
 
   it('shows the hole the allowances give, and restores those two alone', () => {

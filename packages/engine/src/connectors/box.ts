@@ -1,23 +1,27 @@
 import {
-  BOX_EDGES,
-  BOX_FACES,
-  BOX_VERTICES,
   type BoxFace,
   type BoxSectionSpec,
   type BoxSegment,
   type BoxVertex,
+  boxFaceSegmentKind,
   type CubeShape,
   type CuboidShape,
   type ParallelepipedShape,
   type PhysicalScale,
+  type PrismShape,
+  type PrismTopology,
+  prismSidesOf,
+  prismTopology,
   SECTION_POSITION_LIMITS,
+  type Shape,
 } from '@diploma-3d/schema';
 import { GeometryError } from '../errors.ts';
 import { cross, dot, length, type Vec3 } from '../mesh.ts';
 import { cosSinDeg } from '../shapes/angle.ts';
 import { boxEdgeLengthsMm } from '../shapes/box.ts';
 import { parallelepipedProportions } from '../shapes/parallelepiped.ts';
-import { prismScaleMm } from '../shapes/prism-geometry.ts';
+import { prismShapeProportions } from '../shapes/prism.ts';
+import { type PrismProportions, prismScaleMm, prismVertices } from '../shapes/prism-geometry.ts';
 import {
   type BoxSection,
   CONNECTOR_MIN_WALL_MM,
@@ -27,11 +31,23 @@ import {
   type Polyhedron,
 } from './frame.ts';
 
-/** The solids whose sections are planes through their eight vertices: a cube and the parallelepipeds. */
-export type BoxLikeShape = CubeShape | CuboidShape | ParallelepipedShape;
+/**
+ * The solids whose sections are planes through their named vertices: a cube, the parallelepipeds and the prisms, each a prism
+ * over its base polygon, with 2n vertices, 3n edges and n + 2 faces; see `PrismTopology`.
+ */
+export type BoxLikeShape = CubeShape | CuboidShape | ParallelepipedShape | PrismShape;
 
 export const isBoxShape = (shape: { readonly kind: string }): shape is BoxLikeShape =>
-  shape.kind === 'cube' || shape.kind === 'cuboid' || shape.kind === 'parallelepiped';
+  shape.kind === 'cube' || shape.kind === 'cuboid' || shape.kind === 'parallelepiped' || shape.kind === 'prism';
+
+/** The solid's vertices, faces and edges by name. */
+export const boxTopologyOf = (shape: BoxLikeShape): PrismTopology => prismTopology(prismSidesOf(shape as Shape) as number);
+
+/** Vertices by name: those of one topology, the 2n names of its prism. */
+export type BoxVertices = Readonly<Record<BoxVertex, Vec3>>;
+
+/** The topology of a set of vertices: half of them are a base's. */
+export const topologyOf = (vertices: BoxVertices): PrismTopology => prismTopology(Object.keys(vertices).length / 2);
 
 /**
  * A box section's cut: the section without its connector, and whether it is seen from its second plane, for that plane's own
@@ -45,33 +61,28 @@ export interface BoxCut {
 /**
  * The vertices in millimetres, which the solid is built from as their convex hull, its sections' planes are constructed through
  * and the preview names: a cube or rectangular parallelepiped centred on the Z axis on the plate, z from 0 to c; a
- * parallelepiped's base the parallelogram centred at the origin, AB along +X, scaled as the prism is, and its upper base moved
+ * parallelepiped's or prism's base the polygon of its proportions, AB along +X, scaled as the prism is, and its upper base moved
  * by the scaled displacement (dx, dy, h).
  */
-export function boxVertices(shape: BoxLikeShape, scale: PhysicalScale): Readonly<Record<BoxVertex, Vec3>> {
-  let base: [number, number][];
-  let lateral: Vec3;
-  if (shape.kind === 'parallelepiped') {
-    const proportions = parallelepipedProportions(shape);
+export function boxVertices(shape: BoxLikeShape, scale: PhysicalScale): BoxVertices {
+  let points: Vec3[];
+  if (shape.kind === 'parallelepiped' || shape.kind === 'prism') {
+    const proportions: PrismProportions =
+      shape.kind === 'parallelepiped' ? parallelepipedProportions(shape) : prismShapeProportions(shape);
     const s = prismScaleMm(proportions, scale);
-    base = proportions.base.map(([x, y]) => [x * s, y * s]);
-    lateral = [proportions.offset[0] * s, proportions.offset[1] * s, proportions.height * s];
+    points = prismVertices(proportions).map(([x, y, z]): Vec3 => [x * s, y * s, z * s]);
   } else {
     const [a, b, c] = boxEdgeLengthsMm(shape, scale);
-    base = [
+    const base: [number, number][] = [
       [-a / 2, -b / 2],
       [a / 2, -b / 2],
       [a / 2, b / 2],
       [-a / 2, b / 2],
     ];
-    lateral = [0, 0, c];
+    points = [...base.map(([x, y]): Vec3 => [x, y, 0]), ...base.map(([x, y]): Vec3 => [x, y, c])];
   }
-  const lower = base.map(([x, y]): Vec3 => [x, y, 0]);
-  const upper = lower.map(([x, y, z]): Vec3 => [x + lateral[0], y + lateral[1], z + lateral[2]]);
-  return Object.fromEntries(BOX_VERTICES.map((name, index) => [name, [...lower, ...upper][index] as Vec3])) as Record<
-    BoxVertex,
-    Vec3
-  >;
+  const { vertices } = prismTopology(points.length / 2);
+  return Object.fromEntries(vertices.map((name, index) => [name, points[index] as Vec3])) as Record<BoxVertex, Vec3>;
 }
 
 const minus = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -80,32 +91,46 @@ const times = (a: Vec3, k: number): Vec3 => [a[0] * k, a[1] * k, a[2] * k];
 const unit = (a: Vec3): Vec3 => times(a, 1 / length(a));
 const mean = (points: readonly Vec3[]): Vec3 => times(points.reduce(plus, [0, 0, 0]), 1 / points.length);
 
+const pointsOf = (vertices: BoxVertices): Vec3[] => topologyOf(vertices).vertices.map((name) => vertices[name]);
+
+const cornersOf = (topology: PrismTopology, face: BoxFace): readonly BoxVertex[] => {
+  const corners = topology.faces[face];
+  if (corners === undefined) throw new GeometryError(`The solid has no face ${face}.`);
+  return corners;
+};
+
 /** The solid as a convex polyhedron of its own vertices, edges and faces, each face with its outward normal. */
-export function boxPolyhedron(vertices: Readonly<Record<BoxVertex, Vec3>>): Polyhedron {
-  const index = (name: BoxVertex) => BOX_VERTICES.indexOf(name);
-  const centre = mean(BOX_VERTICES.map((name) => vertices[name]));
+export function boxPolyhedron(vertices: BoxVertices): Polyhedron {
+  const topology = topologyOf(vertices);
+  const index = (name: BoxVertex) => topology.vertices.indexOf(name);
+  const centre = mean(pointsOf(vertices));
   return {
-    vertices: BOX_VERTICES.map((name) => vertices[name]),
-    edges: BOX_EDGES.map(([a, b]) => [index(a), index(b)] as const),
-    faces: (Object.values(BOX_FACES) as readonly (readonly BoxVertex[])[]).map((corners) => {
+    vertices: pointsOf(vertices),
+    edges: topology.edges.map(([a, b]) => [index(a), index(b)] as const),
+    faces: topology.faceNames.map((face) => {
+      const corners = cornersOf(topology, face);
       const normal = faceNormal(vertices, corners, centre);
       return { normal, offset: dot(normal, vertices[corners[0] as BoxVertex]), corners: corners.map(index) };
     }),
-    // A box's faces are its own; this only scales the unused inscribed radius of round solids.
-    sides: 4,
+    // Its faces are its own; this only scales the unused inscribed radius of round solids.
+    sides: topology.sides,
   };
 }
 
-/** A face's outward unit normal, away from the solid's centre. */
-function faceNormal(vertices: Readonly<Record<BoxVertex, Vec3>>, corners: readonly BoxVertex[], centre: Vec3): Vec3 {
-  const [p0, p1, , p3] = corners.map((name) => vertices[name]) as [Vec3, Vec3, Vec3, Vec3];
-  const normal = unit(cross(minus(p1, p0), minus(p3, p0)));
-  return dot(normal, minus(p0, centre)) > 0 ? normal : times(normal, -1);
+/** A face's outward unit normal, away from the solid's centre, by Newell's sum over its corners, for any number of them. */
+function faceNormal(vertices: BoxVertices, corners: readonly BoxVertex[], centre: Vec3): Vec3 {
+  const points = corners.map((name) => vertices[name]);
+  const sum = points.reduce<Vec3>(
+    (total, point, index) => plus(total, cross(point, points[(index + 1) % points.length] as Vec3)),
+    [0, 0, 0],
+  );
+  const normal = unit(sum);
+  return dot(normal, minus(points[0] as Vec3, centre)) > 0 ? normal : times(normal, -1);
 }
 
 /** Where the solid lies along a unit normal: min and max of n·vertex. */
-export function boxExtent(vertices: Readonly<Record<BoxVertex, Vec3>>, normal: Vec3): FrameExtent {
-  const along = BOX_VERTICES.map((name) => dot(normal, vertices[name]));
+export function boxExtent(vertices: BoxVertices, normal: Vec3): FrameExtent {
+  const along = pointsOf(vertices).map((point) => dot(normal, point));
   return { min: Math.min(...along), max: Math.max(...along) };
 }
 
@@ -125,33 +150,32 @@ const AXIS_ROUNDOFF = 1e-12;
 /**
  * The plane a section's mode makes on this solid, before its orientation is settled; see the section schemas.
  *
- * - Parallel to a face: the face's inward normal, at the percentage of the way to the opposite face.
- * - Longitudinal: the trace t on the base plane, at its angle to AB or along a diagonal, swept along the lateral edge a, so
- *   that the normal t × a is perpendicular to a whatever the lean; at the percentage of the solid's extent along it.
+ * - Parallel to a face: the face's inward normal, at the percentage of the way to the farthest vertex beyond it.
+ * - Longitudinal: the trace t on the base plane, at its angle to AB or along a line of the base, see `boxTraceLine`, swept
+ *   along the lateral edge a, so that the normal t × a is perpendicular to a whatever the lean, n·a = 0; at the percentage of
+ *   the solid's extent along it, or through the line itself.
  * - Through a line PQ of a face: turned from the face's plane by the angle, n = e × (cos θ·m + sin θ·(−n_F)), with e along PQ
- *   and m in the face, perpendicular to PQ and towards the face's inside (towards the face's first other corner for a diagonal,
- *   which halves it); or through the point R of another edge, n = (Q − P) × (R − P), refused where R lies on the line.
- * - Inclined: n = (−sin α cos φ, −sin α sin φ, cos α), or along the chosen segment.
+ *   and m in the face, perpendicular to PQ and towards the face's inside (towards the mean of its other corners for a diagonal);
+ *   or through the point R of another edge, n = (Q − P) × (R − P), refused where R lies on the line.
+ * - Inclined: n = (−sin α cos φ, −sin α sin φ, cos α), or along the chosen segment, such as a lateral edge, n = a/|a|.
  */
-export function boxPlane(vertices: Readonly<Record<BoxVertex, Vec3>>, spec: BoxSectionSpec): BoxPlane {
+export function boxPlane(vertices: BoxVertices, spec: BoxSectionSpec): BoxPlane {
   const measured = (normal: Vec3, offset?: number): BoxPlane => {
     const extent = boxExtent(vertices, normal);
     return { normal, offset: offset ?? at(extent, 'positionPercent' in spec ? spec.positionPercent : 50), extent };
   };
+  const topology = topologyOf(vertices);
   switch (spec.type) {
     case 'face-parallel': {
-      const centre = mean(BOX_VERTICES.map((name) => vertices[name]));
-      return measured(times(faceNormal(vertices, BOX_FACES[spec.face], centre), -1));
+      const centre = mean(pointsOf(vertices));
+      return measured(times(faceNormal(vertices, cornersOf(topology, spec.face ?? topology.lowerBase), centre), -1));
     }
     case 'longitudinal': {
       const lateral = minus(vertices.A1, vertices.A);
-      const trace =
-        spec.trace === 'AC'
-          ? minus(vertices.C, vertices.A)
-          : spec.trace === 'BD'
-            ? minus(vertices.D, vertices.B)
-            : rotatedInBase(minus(vertices.B, vertices.A), spec.traceAngleDeg);
-      return measured(unit(cross(unit(trace), lateral)));
+      const line = boxTraceLine(vertices, spec);
+      const trace = line?.direction ?? rotatedInBase(minus(vertices.B, vertices.A), spec.traceAngleDeg);
+      const normal = unit(cross(unit(trace), lateral));
+      return measured(normal, spec.through === true && line !== undefined ? dot(normal, line.point) : undefined);
     }
     case 'through-line': {
       const [p, q] = [vertices[spec.line[0]], vertices[spec.line[1]]];
@@ -178,10 +202,60 @@ export function boxPlane(vertices: Readonly<Record<BoxVertex, Vec3>>, spec: BoxS
   }
 }
 
+/**
+ * The line of the lower base that a longitudinal plane's trace runs along, as a point of it and its direction, computed from the
+ * actual base: a diagonal PR; for a triangle, the median from V to the midpoint of the opposite side, the altitude from V
+ * perpendicular to that side's line, whose foot may lie on its extension, the internal bisector from V along the sum of the
+ * unit vectors to the other vertices, and the midline through the midpoints of the two sides other than the one it is
+ * parallel to. Undefined for a trace at an angle.
+ */
+export function boxTraceLine(
+  vertices: BoxVertices,
+  spec: Extract<BoxSectionSpec, { type: 'longitudinal' }>,
+): { readonly point: Vec3; readonly direction: Vec3 } | undefined {
+  const segment = (first: BoxVertex, second: BoxVertex) => ({
+    point: vertices[first],
+    direction: minus(vertices[second], vertices[first]),
+  });
+  const topology = topologyOf(vertices);
+  const base = cornersOf(topology, topology.lowerBase);
+  switch (spec.trace) {
+    case 'angle':
+      return undefined;
+    case 'AC':
+      return segment('A', 'C');
+    case 'BD':
+      return segment('B', 'D');
+    case 'diagonal':
+    case 'midline': {
+      const [first, second] = spec.traceSegment as BoxSegment;
+      if (spec.trace === 'diagonal') return segment(first, second);
+      const other = base.find((name) => name !== first && name !== second) as BoxVertex;
+      const middle = (a: BoxVertex, b: BoxVertex) => times(plus(vertices[a], vertices[b]), 0.5);
+      return { point: middle(first, other), direction: minus(vertices[second], vertices[first]) };
+    }
+    case 'median':
+    case 'height':
+    case 'bisector': {
+      const vertex = spec.traceVertex as BoxVertex;
+      const [left, right] = base.filter((name) => name !== vertex).map((name) => vertices[name]) as [Vec3, Vec3];
+      const point = vertices[vertex];
+      const side = minus(right, left);
+      const direction =
+        spec.trace === 'median'
+          ? minus(times(plus(left, right), 0.5), point)
+          : spec.trace === 'height'
+            ? ([-side[1], side[0], 0] as Vec3)
+            : plus(unit(minus(left, point)), unit(minus(right, point)));
+      return { point, direction };
+    }
+  }
+}
+
 // Relative to the lengths involved: far below any edge a print could show, far above roundoff of vertex coordinates.
 const COLLINEAR_RELATIVE = 1e-9;
 
-const pointOnEdge = (vertices: Readonly<Record<BoxVertex, Vec3>>, [first, second]: BoxSegment, percent: number): Vec3 =>
+const pointOnEdge = (vertices: BoxVertices, [first, second]: BoxSegment, percent: number): Vec3 =>
   plus(vertices[first], times(minus(vertices[second], vertices[first]), percent / 100));
 
 /**
@@ -196,13 +270,13 @@ interface LineFrame {
   readonly outward: Vec3;
 }
 
-function lineFrame(vertices: Readonly<Record<BoxVertex, Vec3>>, face: BoxFace, line: readonly [BoxVertex, BoxVertex]): LineFrame {
+function lineFrame(vertices: BoxVertices, face: BoxFace, line: readonly [BoxVertex, BoxVertex]): LineFrame {
   const p = vertices[line[0]];
-  const centre = mean(BOX_VERTICES.map((name) => vertices[name]));
-  const outward = faceNormal(vertices, BOX_FACES[face], centre);
+  const corners = cornersOf(topologyOf(vertices), face);
+  const outward = faceNormal(vertices, corners, mean(pointsOf(vertices)));
   const along = unit(minus(vertices[line[1]], p));
   const within = unit(cross(along, outward));
-  const others = (BOX_FACES[face] as readonly BoxVertex[]).filter((name) => !line.includes(name));
+  const others = corners.filter((name) => !line.includes(name));
   const inside = dot(within, minus(mean(others.map((name) => vertices[name])), p));
   const towards =
     Math.abs(inside) > COLLINEAR_RELATIVE
@@ -260,7 +334,7 @@ function settled({ normal, offset }: { normal: Vec3; offset: number }): { normal
 }
 
 /** The positions of a section's planes along its measured normal, the first and the second, in percent of the extent. */
-export function boxPlanePercents(vertices: Readonly<Record<BoxVertex, Vec3>>, spec: BoxSectionSpec) {
+export function boxPlanePercents(vertices: BoxVertices, spec: BoxSectionSpec) {
   const plane = boxPlane(vertices, spec);
   const span = plane.extent.max - plane.extent.min;
   return { first: (100 * (plane.offset - plane.extent.min)) / span, second: spec.secondPositionPercent };
@@ -282,7 +356,7 @@ export function boxSection(shape: BoxLikeShape, scale: PhysicalScale, cut: BoxCu
   const up: Vec3 = Math.abs(n[2]) > 1 - AXIS_ROUNDOFF ? [0, 1, 0] : [0, 0, 1];
   const u = unit(minus(up, times(n, dot(up, n))));
   const v = cross(u, n);
-  const diagonal = Math.max(...BOX_VERTICES.map((name) => length(minus(vertices[name], vertices.A))));
+  const diagonal = Math.max(...pointsOf(vertices).map((point) => length(minus(point, vertices.A))));
   const section = facetedSection(boxPolyhedron(vertices), { n, u, v }, offset, diagonal / 2);
   const other = second === undefined ? undefined : cut.atSecond === true ? plane.offset : at(plane.extent, second);
   const otherOffset = other === undefined ? undefined : flipped ? -other : other;
@@ -316,23 +390,42 @@ export function boxSplitReach(shape: BoxLikeShape, scale: PhysicalScale, cut: Bo
   return { valueMm: Math.min(own - plane.extent.min, plane.extent.max - own), minimumMm: boxPartMinimumMm(plane.extent) };
 }
 
-/** The face opposite a face: the one that shares none of its vertices. */
-export function boxOppositeFace(face: BoxFace): BoxFace {
-  const corners: readonly BoxVertex[] = BOX_FACES[face];
-  const faces = Object.keys(BOX_FACES) as BoxFace[];
-  return faces.find((other) =>
-    (BOX_FACES[other] as readonly BoxVertex[]).every((corner) => !corners.includes(corner)),
-  ) as BoxFace;
+/**
+ * The faces whose planes are parallel, by representative: a plane parallel to a face is parallel to every face of its group, so
+ * one face of each group gives every such plane. The bases are always parallel. Lateral faces XYY1X1 all hold the lateral
+ * direction, and two of them are parallel exactly when their base edges are, a pair of opposite edges of a parallelogram, a
+ * trapezoid's bases or a regular polygon with an even number of sides; their edges are compared in the base, not by face
+ * normals, which a strong lean makes nearly parallel without making them so. The representative is the first face of its group
+ * in the faces' order: the lower base, then lateral faces from AB on.
+ */
+export function boxFaceOrientations(vertices: BoxVertices): Readonly<Record<BoxFace, BoxFace>> {
+  const topology = topologyOf(vertices);
+  const representatives: Record<BoxFace, BoxFace> = {
+    [topology.lowerBase]: topology.lowerBase,
+    [topology.upperBase]: topology.lowerBase,
+  };
+  const laterals = topology.faceNames.slice(2);
+  const edgeOf = (face: BoxFace) => {
+    const [first, second] = cornersOf(topology, face);
+    return minus(vertices[second as BoxVertex], vertices[first as BoxVertex]);
+  };
+  for (const face of laterals) {
+    const edge = edgeOf(face);
+    const parallel = laterals.find((other) => {
+      if (representatives[other] !== other) return false;
+      const otherEdge = edgeOf(other);
+      return Math.abs(edge[0] * otherEdge[1] - edge[1] * otherEdge[0]) <= COLLINEAR_RELATIVE * length(edge) * length(otherEdge);
+    });
+    representatives[face] = parallel ?? face;
+  }
+  return representatives;
 }
 
-/**
- * One face of each pair of opposite faces, the first of the pair in the faces' order: ABCD, ABB1A1 and BCC1B1. A plane parallel
- * to a face is parallel to the opposite one too, so these three give every such plane, each measured from its face.
- */
-export const BOX_PARALLEL_FACES: readonly BoxFace[] = (Object.keys(BOX_FACES) as BoxFace[]).filter((face, index, faces) => {
-  const opposite = faces.indexOf(boxOppositeFace(face));
-  return index < opposite;
-});
+/** One face of each group of parallel faces, in the faces' order; see `boxFaceOrientations`. */
+export const boxParallelFaces = (vertices: BoxVertices): BoxFace[] => {
+  const representatives = boxFaceOrientations(vertices);
+  return topologyOf(vertices).faceNames.filter((face) => representatives[face] === face);
+};
 
 /**
  * The position from another face of the same plane parallel to a face, read through the plane itself: n·x = d measured from
@@ -354,9 +447,9 @@ export function boxFaceParallelPercent(
 }
 
 /** Whether a face holds the segment as an edge or a diagonal; the faces a segment belongs to. */
-export const facesOfSegment = ([first, second]: readonly [BoxVertex, BoxVertex]): BoxFace[] =>
-  (Object.keys(BOX_FACES) as BoxFace[]).filter((face) => {
-    const corners: readonly BoxVertex[] = BOX_FACES[face];
+export const facesOfSegment = (topology: PrismTopology, [first, second]: readonly [BoxVertex, BoxVertex]): BoxFace[] =>
+  topology.faceNames.filter((face) => {
+    const corners = cornersOf(topology, face);
     return corners.includes(first) && corners.includes(second);
   });
 
@@ -379,7 +472,7 @@ export function boxLineAngleBounds(
 }
 
 function lineAngleBounds(
-  vertices: Readonly<Record<BoxVertex, Vec3>>,
+  vertices: BoxVertices,
   face: BoxFace,
   line: readonly [BoxVertex, BoxVertex],
   rule: BoxPartRule,
@@ -387,7 +480,7 @@ function lineAngleBounds(
   const frame = lineFrame(vertices, face, line);
   const cosine = cross(frame.along, frame.within);
   const sine = times(cross(frame.along, frame.outward), -1);
-  const offsets = BOX_VERTICES.map((name) => minus(vertices[name], frame.p));
+  const offsets = pointsOf(vertices).map((point) => minus(point, frame.p));
   const [a, b] = [offsets.map((offset) => dot(cosine, offset)), offsets.map((offset) => dot(sine, offset))];
   const margin = (angleDeg: number) => {
     const [cos, sin] = cosSinDeg(angleDeg);
@@ -439,27 +532,27 @@ function goldenMaximum(value: (x: number) => number, low: number, high: number):
 }
 
 /** The edges a point of a plane through a face's line may lie on: those that leave the face, the opposite face's first. */
-export function boxPointEdges(face: BoxFace): BoxSegment[] {
-  const corners: readonly BoxVertex[] = BOX_FACES[face];
+export function boxPointEdges(topology: PrismTopology, face: BoxFace): BoxSegment[] {
+  const corners = cornersOf(topology, face);
   const inFace = (vertex: BoxVertex) => corners.includes(vertex);
-  const off = BOX_EDGES.filter(([first, second]) => !inFace(first) || !inFace(second));
+  const off = topology.edges.filter(([first, second]) => !inFace(first) || !inFace(second));
   return [
     ...off.filter(([first, second]) => !inFace(first) && !inFace(second)),
     ...off.filter(([first, second]) => inFace(first) !== inFace(second)),
   ].map(([first, second]) => [first, second] as BoxSegment);
 }
 
-/** The edges and the diagonals of a face, edges first, in the order around it. */
-export function boxFaceLines(face: BoxFace): BoxSegment[] {
-  const [a, b, c, d] = BOX_FACES[face];
-  return [
-    [a, b],
-    [b, c],
-    [c, d],
-    [d, a],
-    [a, c],
-    [b, d],
-  ];
+/**
+ * The edges and the diagonals of a face, edges first in the order around it, then the diagonals from each corner in turn: a
+ * triangle has none, a quadrilateral two, a hexagon nine.
+ */
+export function boxFaceLines(topology: PrismTopology, face: BoxFace): BoxSegment[] {
+  const corners = cornersOf(topology, face);
+  const edges = corners.map((corner, index): BoxSegment => [corner, corners[(index + 1) % corners.length] as BoxVertex]);
+  const diagonals = corners.flatMap((corner, index) =>
+    corners.slice(index + 2, index === 0 ? corners.length - 1 : corners.length).map((other): BoxSegment => [corner, other]),
+  );
+  return [...edges, ...diagonals];
 }
 
 /**
@@ -492,7 +585,7 @@ export function boxPointRange(
 }
 
 function pointRange(
-  vertices: Readonly<Record<BoxVertex, Vec3>>,
+  vertices: BoxVertices,
   face: BoxFace,
   line: readonly [BoxVertex, BoxVertex],
   edge: BoxSegment,
@@ -501,7 +594,7 @@ function pointRange(
   if (bounds === null) return null;
   const frame = lineFrame(vertices, face, line);
   const [start, end] = [vertices[edge[0]], vertices[edge[1]]];
-  const size = Math.max(...BOX_VERTICES.map((name) => length(minus(vertices[name], vertices.A))));
+  const size = Math.max(...pointsOf(vertices).map((point) => length(minus(point, vertices.A))));
   const [first, last] = [angleOfPoint(frame, start, size), angleOfPoint(frame, end, size)];
   const within = (angle: number) => angle >= bounds.min && angle <= bounds.max;
   if (first === undefined || last === undefined) {
@@ -550,15 +643,92 @@ export interface BoxLineChoice {
 export function boxThroughLineChoices(shape: BoxLikeShape): Readonly<Record<BoxFace, readonly BoxLineChoice[]>> {
   // The proportional rule does not depend on the scale.
   const vertices = boxVertices(shape, { longestDimensionMm: 100 });
+  const topology = topologyOf(vertices);
   return Object.fromEntries(
-    (Object.keys(BOX_FACES) as BoxFace[]).map((face) => [
+    topology.faceNames.map((face) => [
       face,
-      boxFaceLines(face).flatMap((line) => {
+      boxFaceLines(topology, face).flatMap((line) => {
         const bounds = lineAngleBounds(vertices, face, line, 'proportional');
         if (bounds === null) return [];
-        const pointEdges = boxPointEdges(face).filter((edge) => pointRange(vertices, face, line, edge, bounds) !== null);
+        const pointEdges = boxPointEdges(topology, face).filter(
+          (edge) => pointRange(vertices, face, line, edge, bounds) !== null,
+        );
         return [{ line, pointEdges }];
       }),
     ]),
-  ) as unknown as Record<BoxFace, BoxLineChoice[]>;
+  );
+}
+
+/** The lines of a triangular base through a vertex. */
+export type BoxVertexTrace = 'median' | 'height' | 'bisector';
+
+/**
+ * The longitudinal planes through a line of the base that leave both parts usable by the proportional rule, see `BoxPartRule`:
+ * the base's diagonals; for a triangle, the vertices whose median, altitude or bisector does so, and the sides whose midline
+ * does. An altitude from a vertex at whose neighbour the triangle is obtuse leaves it, and its plane only touches the solid
+ * along a lateral edge. `sameLines` names, per vertex, the lines from it that coincide, all three in an equilateral triangle.
+ */
+export interface BoxTraceChoices {
+  readonly diagonal: readonly BoxSegment[];
+  readonly median: readonly BoxVertex[];
+  readonly height: readonly BoxVertex[];
+  readonly bisector: readonly BoxVertex[];
+  readonly midline: readonly BoxSegment[];
+  readonly sameLines: Readonly<Partial<Record<BoxVertex, readonly BoxVertexTrace[]>>>;
+}
+
+export function boxTraceChoices(shape: BoxLikeShape): BoxTraceChoices {
+  const vertices = boxVertices(shape, { longestDimensionMm: 100 });
+  const topology = topologyOf(vertices);
+  const usable = (spec: Extract<BoxSectionSpec, { type: 'longitudinal' }>) => {
+    const plane = boxPlane(vertices, spec);
+    const reach = Math.min(plane.offset - plane.extent.min, plane.extent.max - plane.offset);
+    return reach >= partMinimum('proportional', plane.extent);
+  };
+  const through = (fields: Partial<Extract<BoxSectionSpec, { type: 'longitudinal' }>>) =>
+    usable({ type: 'longitudinal', trace: 'angle', traceAngleDeg: 0, positionPercent: 50, through: true, ...fields });
+  const lines = boxFaceLines(topology, topology.lowerBase);
+  const diagonal = lines.filter((line) => boxFaceSegmentKind(topology, topology.lowerBase, line) === 'diagonal');
+  if (topology.sides !== 3) {
+    return {
+      diagonal: diagonal.filter((segment) => through({ trace: 'diagonal', traceSegment: segment })),
+      median: [],
+      height: [],
+      bisector: [],
+      midline: [],
+      sameLines: {},
+    };
+  }
+  const corners = cornersOf(topology, topology.lowerBase);
+  const kinds: readonly BoxVertexTrace[] = ['median', 'height', 'bisector'];
+  const byKind = (kind: BoxVertexTrace) => corners.filter((vertex) => through({ trace: kind, traceVertex: vertex }));
+  const sameLines = Object.fromEntries(
+    corners.map((vertex) => {
+      const directions = kinds.map((kind) => {
+        const line = boxTraceLine(vertices, {
+          type: 'longitudinal',
+          trace: kind,
+          traceAngleDeg: 0,
+          positionPercent: 50,
+          traceVertex: vertex,
+        });
+        return unit((line as { direction: Vec3 }).direction);
+      });
+      const same = kinds.filter((_, index) =>
+        directions.some(
+          (other, otherIndex) =>
+            otherIndex !== index && length(cross(directions[index] as Vec3, other)) <= COLLINEAR_RELATIVE * 1e3,
+        ),
+      );
+      return [vertex, same];
+    }),
+  );
+  return {
+    diagonal: [],
+    median: byKind('median'),
+    height: byKind('height'),
+    bisector: byKind('bisector'),
+    midline: lines.filter((side) => through({ trace: 'midline', traceSegment: side })),
+    sameLines,
+  };
 }
