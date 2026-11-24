@@ -21,6 +21,9 @@ describe('describeModelError', () => {
 
   it('explains a connector that the engine refused or that failed its geometric checks', () => {
     expect(describeModelError(new ConnectorUnsuitableError([{ code: 'stop-thin' }]))).toMatch(/^Кріплення не вміщується/);
+    expect(describeModelError(new ConnectorUnsuitableError([{ code: 'interfaces-too-close' }]))).toMatch(
+      /^Кріплення сусідніх перерізів у середній частині підходять одне до одного ближче ніж на 1,2 мм/,
+    );
     expect(describeModelError(new ConnectorVerificationError('clear-path'))).toMatch(/^Кріплення не пройшло перевірку/);
   });
 });

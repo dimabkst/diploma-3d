@@ -52,7 +52,7 @@ export type ShapeKind = Shape['kind'];
 
 /** The section types each shape offers; a shape that is not listed offers none yet. */
 export const SECTIONS_BY_SHAPE: Readonly<Partial<Record<ShapeKind, readonly SectionType[]>>> = {
-  cylinder: ['parallel-to-bases', 'vertical', 'oblique', 'axis-parallel'],
+  cylinder: ['parallel-to-bases', 'vertical', 'oblique', 'axis-parallel', 'shared-generatrix'],
   cone: ['parallel-to-bases', 'vertical', 'oblique', 'oblique-apex'],
   ball: ['horizontal'],
   cube: ['face-parallel', 'longitudinal', 'through-line', 'inclined'],

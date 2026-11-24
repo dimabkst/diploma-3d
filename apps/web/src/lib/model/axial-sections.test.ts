@@ -32,6 +32,7 @@ describe('a plane parallel to a cylinder’s axis', () => {
       'parallel-to-bases',
       'vertical',
       'oblique',
+      'shared-generatrix',
     ]);
     expect(optionsOf(cutGroup('cylinder', LEANING, { cylinderSection: 'vertical' }))).toContain('axis-parallel');
   });

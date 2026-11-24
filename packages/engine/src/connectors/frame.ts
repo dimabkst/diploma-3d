@@ -18,6 +18,7 @@ import { cosSinDeg } from '../shapes/angle.ts';
 import { ballCentreMm, ballInradiusMm, ballPolyhedron, ballRadiusMm } from '../shapes/ball.ts';
 import { circularSegments, type RoundShape, roundDimensionsMm } from '../shapes/round.ts';
 import { type BoxCut, type BoxLikeShape, boxSection, isBoxShape } from './box.ts';
+import { type LinkedPlanes, linkedPlaneCut } from './linked.ts';
 
 /**
  * An orthonormal frame at the centre of the section: n is the cut's normal from the lower part into the upper one, u
@@ -312,6 +313,20 @@ export interface OffsetCut {
 export interface AxisParallelCut {
   readonly offsetPercent: number;
   readonly offsetDirectionDeg: number;
+  /**
+   * Other planes n·x ≤ d, each parallel to the axis, that also bound the part on the negative side, as the section through a
+   * shared generatrix's region between its planes: faces of that part, which its connectors keep their walls from.
+   */
+  readonly bounds?: readonly { readonly normal: Vec3; readonly offset: number }[];
+}
+
+/**
+ * One plane of a cylinder's section through a shared generatrix, see `linkedPlaneCut`: the fields that fix all its planes, and
+ * which of them, 0 and 1 through the shared generatrix and 2 the third.
+ */
+export interface LinkedCut {
+  readonly linked: LinkedPlanes;
+  readonly planeIndex: number;
 }
 
 /** An oblique cut: the point on the axis, the angle to the base plane, and the horizontal direction it rises along. */
@@ -328,7 +343,7 @@ export interface ApexCut {
 }
 
 /** A plane without a plate: parallel to the base at this percentage of the height, or another plane. */
-export type PlaneCut = number | OffsetCut | ObliqueCut | ApexCut | AxisParallelCut | BoxCut;
+export type PlaneCut = number | OffsetCut | ObliqueCut | ApexCut | AxisParallelCut | LinkedCut | BoxCut;
 
 /**
  * A cut that removes a section plate centred on its plane: the plane's own fields, a parallel cut's position among them, and
@@ -381,7 +396,7 @@ export function cylinderSection(shape: CylinderShape, scale: PhysicalScale, posi
 }
 
 /** The base polygon's vertices as manifold-3d builds them: on the circle, the first on +X. */
-function basePolygon(radius: number): [number, number][] {
+export function basePolygon(radius: number): [number, number][] {
   const segments = circularSegments(radius);
   return Array.from({ length: segments }, (_, index) => {
     const angle = (2 * Math.PI * index) / segments;
@@ -721,11 +736,53 @@ export function axisParallelCylinderSection(
   const dimensions = roundDimensionsMm(shape, scale);
   const { n, u, v, toward } = axisParallelAxes(dimensions, cut.offsetDirectionDeg);
   const offset = sectionOffsetMm(cut.offsetPercent, dimensions.radius);
+  const section = facetedSection(cylinderPolyhedron(dimensions), { n, u, v }, offset * toward, dimensions.radius);
+  const bounds = cut.bounds ?? [];
+  if (bounds.length === 0) return { ...section, type: 'axis-parallel', offset };
+  // Every bounding plane holds a, as this one does: the bounded part's horizontal sections are all its base's, moved along a.
+  const base = basePolygon(dimensions.radius).map(([x, y]): Vec3 => [x, y, 0]);
+  const part = [...bounds, { normal: n, offset: offset * toward }].reduce(
+    (polygon, plane) => clippedPolygon(polygon, plane.normal, plane.offset),
+    base,
+  );
+  if (part.length < 3) throw new GeometryError('The planes leave no part between them.');
+  const { origin } = section.frame;
   return {
-    ...facetedSection(cylinderPolyhedron(dimensions), { n, u, v }, offset * toward, dimensions.radius),
+    ...section,
+    faces: [
+      ...section.faces,
+      ...bounds.map(({ normal, offset: planeOffset }) => ({
+        clearance: planeOffset - dot(normal, origin),
+        alongU: dot(normal, u),
+        alongV: dot(normal, v),
+        alongN: dot(normal, n),
+        boundsNegative: true,
+        boundsPositive: false,
+      })),
+    ],
+    reach: { ...section.reach, negative: Math.max(...part.map((point) => offset * toward - dot(n, point))) },
     type: 'axis-parallel',
     offset,
   };
+}
+
+/** A convex polygon clipped to the half-space n·p ≤ d: Sutherland–Hodgman's step for one plane. */
+export function clippedPolygon(polygon: readonly Vec3[], normal: Vec3, offset: number): Vec3[] {
+  const result: Vec3[] = [];
+  polygon.forEach((point, index) => {
+    const next = polygon[(index + 1) % polygon.length] as Vec3;
+    const [a, b] = [dot(normal, point) - offset, dot(normal, next) - offset];
+    if (a <= 0) result.push(point);
+    if ((a < 0 && b > 0) || (a > 0 && b < 0)) {
+      const t = a / (a - b);
+      result.push([
+        point[0] + t * (next[0] - point[0]),
+        point[1] + t * (next[1] - point[1]),
+        point[2] + t * (next[2] - point[2]),
+      ]);
+    }
+  });
+  return result;
 }
 
 /**
@@ -788,6 +845,7 @@ function coneCut(shape: ConeShape, scale: PhysicalScale, cut: PlaneCut): ConeCut
   if (typeof cut === 'number') return coneSection(shape, scale, cut);
   if ('box' in cut) throw new GeometryError('Only a cube or parallelepiped takes this section.');
   if ('offsetDirectionDeg' in cut) throw new GeometryError('A cone offers no plane parallel to its axis but the vertical one.');
+  if ('linked' in cut) throw new GeometryError('Only a cylinder takes planes through a shared generatrix.');
   return 'offsetPercent' in cut ? coneVerticalSection(shape, scale, cut.offsetPercent) : coneObliqueSection(shape, scale, cut);
 }
 
@@ -822,6 +880,7 @@ function cylinderCut(
   cut: PlaneCut,
 ): ParallelCylinderSection | VerticalCylinderSection | ObliqueCylinderSection | AxisParallelCylinderSection {
   if (typeof cut === 'number') return cylinderSection(shape, scale, cut);
+  if ('linked' in cut) return axisParallelCylinderSection(shape, scale, linkedPlaneCut(shape, scale, cut.linked, cut.planeIndex));
   if ('offsetDirectionDeg' in cut) return axisParallelCylinderSection(shape, scale, cut);
   if ('offsetPercent' in cut) return verticalCylinderSection(shape, scale, cut.offsetPercent);
   if ('positionPercent' in cut) return obliqueCylinderSection(shape, scale, cut);
@@ -835,6 +894,10 @@ function cylinderCut(
  */
 export function cylinderFaceSection(shape: CylinderShape, scale: PhysicalScale, cut: PlaneCut): CylinderFaceSection {
   const base = cylinderCut(shape, scale, cut);
+  // A plane through a shared generatrix is read off the solid already, with the other planes' faces of the middle part.
+  if (typeof cut !== 'number' && 'linked' in cut && base.type === 'axis-parallel') {
+    return { ...base, type: 'cylinder-face', baseType: base.type };
+  }
   const dimensions = roundDimensionsMm(shape, scale);
   const { n, u, v } = base.frame;
   const offset = base.type === 'parallel-to-bases' ? dot(n, base.frame.origin) : base.plane.offset;
@@ -1111,6 +1174,13 @@ export function atSecondPlane<S extends Section>(section: S): S {
   return { ...section, offsetPercent: section.secondOffsetPercent, secondOffsetPercent: section.offsetPercent };
 }
 
+/**
+ * A cylinder's section through a shared generatrix as seen from one of its planes, 0 and 1 through the shared generatrix, 2 the
+ * third: what that plane's checks and plans read; see `LinkedCut`.
+ */
+export const atLinkedPlane = <S extends Section>(section: S, planeIndex: number): S =>
+  section.type === 'shared-generatrix' ? { ...section, planeIndex } : section;
+
 /** Whether the section is one of a cube's or parallelepiped's. */
 export const isBoxSectionSpec = (section: Section): section is Extract<Section, { type: BoxSectionSpec['type'] }> =>
   (BOX_SECTION_TYPES as readonly string[]).includes(section.type);
@@ -1250,6 +1320,17 @@ const planeCutOf = (section: Section): PlaneCut => {
       return { inclinationDeg: section.inclinationDeg, directionDeg: section.directionDeg };
     case 'axis-parallel':
       return { offsetPercent: section.offsetPercent, offsetDirectionDeg: section.directionDeg };
+    case 'shared-generatrix': {
+      const {
+        type: _type,
+        connector: _connector,
+        planeIndex,
+        ...linked
+      } = section as typeof section & {
+        readonly planeIndex?: number;
+      };
+      return { linked, planeIndex: planeIndex ?? 0 };
+    }
     case 'parallel-to-bases':
       return section.positionPercent;
     case 'face-parallel':

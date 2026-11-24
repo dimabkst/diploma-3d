@@ -10,7 +10,7 @@ import {
   type TwistPlan,
   verifyTwist,
 } from './connectors/twist.ts';
-import { createPreviewGlb, type PreviewObject, previewDirection, previewPosition } from './export/glb.ts';
+import { createPreviewGlb, type PreviewObject, type PreviewOptions, previewDirection, previewPosition } from './export/glb.ts';
 import { arrangeInRow, restOnFlatFace, rotateHalfTurn, rotateOntoZ } from './export/layout.ts';
 import {
   type ExportKind,
@@ -27,12 +27,20 @@ import {
   dot,
   meshFromManifold,
   ROUNDING_EDGE_RELATIVE,
+  triangleAt,
   triangleCount,
   type Vec3,
   vertexAt,
   vertexCount,
 } from './mesh.ts';
-import { type ConnectorPlan, type GeneratedModel, generateModel, type SectionPart, type Solid } from './model.ts';
+import {
+  type ConnectorPlan,
+  type GeneratedModel,
+  generateModel,
+  type LinkedInterface,
+  type SectionPart,
+  type Solid,
+} from './model.ts';
 import { withScope } from './scope.ts';
 import type { Plane } from './section.ts';
 import { roundDimensionsMm } from './shapes/round.ts';
@@ -122,11 +130,12 @@ export async function buildModelArtifacts(
   const objects = model.solids.length === 1 ? oriented : withoutRoundingSlivers(model, arrangeInRow(oriented));
   const printFile = { fileName: `${model.name}.3mf`, bytes: threeMf(objects, model.name, 'model') };
   const assembledObjects = previewObjects(model, 0);
-  const previewGlb = await createPreviewGlb(assembledObjects);
+  const previewOptions = linkedPreviewOptions(model);
+  const previewGlb = await createPreviewGlb(assembledObjects, previewOptions);
   const labels = labelsOf(model, assembledObjects);
   if (model.section === undefined) return { model, previewGlb, printFile, ...labels };
   const separatedObjects = previewObjects(model, previewSeparation(model));
-  const separatedPreviewGlb = await createPreviewGlb(separatedObjects);
+  const separatedPreviewGlb = await createPreviewGlb(separatedObjects, previewOptions);
   const vertexLabels = labels.vertexLabels;
   const separatedVertexLabels = labelsOf(model, separatedObjects).vertexLabels;
   const labelled =
@@ -152,6 +161,7 @@ export async function buildModelArtifacts(
  */
 function labelsOf(model: GeneratedModel, objects: readonly PreviewObject[]): { vertexLabels?: readonly VertexLabel[] } {
   if (model.vertexLabels === undefined) return {};
+  if (model.section?.linked !== undefined) return { vertexLabels: generatrixLabels(model, objects) };
   const vertices = Object.fromEntries(model.vertexLabels.map(({ name, position }) => [name, position])) as Parameters<
     typeof boxPolyhedron
   >[0];
@@ -214,6 +224,69 @@ function labelsOf(model: GeneratedModel, objects: readonly PreviewObject[]): { v
   });
   return { vertexLabels: labels };
 }
+
+/**
+ * The ends of a section's generatrices through a shared one, a copy in each part that keeps the point, placed through its node:
+ * the middle part lies on the negative side of every plane, an outer part on the positive side of its own. Copies that the
+ * preview shows in one place are one label for all their parts. A copy's faces are the base it lies on, the lateral surface
+ * there, whose normal (cos φ, sin φ, 0) the cylinder's shear x' = x + (d/H)·z turns to (cos φ, sin φ, −(d/H) cos φ), and the cut
+ * faces of the planes through it, facing out of the part.
+ */
+function generatrixLabels(model: GeneratedModel, objects: readonly PreviewObject[]): VertexLabel[] {
+  const section = model.section as NonNullable<GeneratedModel['section']>;
+  const { interfaces } = section.linked as NonNullable<typeof section.linked>;
+  const tolerance = ROUNDING_EDGE_RELATIVE * Math.max(...model.size);
+  const { shape, scale } = model.spec;
+  const shear = shape.kind === 'cylinder' ? roundDimensionsMm(shape, scale).offset / roundDimensionsMm(shape, scale).height : 0;
+  const bottom = Math.min(...(model.vertexLabels ?? []).map(({ position }) => position[2]));
+  const labels: VertexLabel[] = [];
+  for (const { name, position } of model.vertexLabels ?? []) {
+    const side = (index: number) => {
+      const { normal, offset } = (interfaces[index] as LinkedInterface).plane;
+      return dot(normal, position) - offset;
+    };
+    // The lower base's point Q, under the upper one's Q + a.
+    const lower = Math.abs(position[2] - bottom) <= tolerance;
+    const base = lower ? position : position.map((value, axis) => value - shear * position[2] * (axis === 0 ? 1 : 0));
+    const radial = Math.atan2(base[1] as number, base[0] as number);
+    const lateral = normalized([Math.cos(radial), Math.sin(radial), -shear * Math.cos(radial)]);
+    const copies: { parts: SectionPart[]; object: PreviewObject; position: Vec3; normals: Vec3[] }[] = [];
+    model.solids.forEach((solid, index) => {
+      const own = LINKED_OUTER_PARTS.indexOf(solid.part as (typeof LINKED_OUTER_PARTS)[number]);
+      const planes = interfaces.map((_, plane) => plane);
+      const holds =
+        solid.part === 'middle'
+          ? planes.every((plane) => side(plane) <= tolerance)
+          : own >= 0 && own < interfaces.length && side(own) >= -tolerance;
+      if (!holds) return;
+      const cuts = (solid.part === 'middle' ? planes : [own])
+        .filter((plane) => Math.abs(side(plane)) <= tolerance)
+        .map((plane) => {
+          const { normal } = (interfaces[plane] as LinkedInterface).plane;
+          return solid.part === 'middle' ? normal : scaled(normal, -1);
+        });
+      const object: PreviewObject = objects[index] ?? solid;
+      const copy = {
+        parts: [solid.part as SectionPart],
+        object,
+        position: previewPosition(object, position),
+        normals: [[0, 0, lower ? -1 : 1] as Vec3, lateral, ...cuts].map((normal) => previewDirection(object, normal)),
+      };
+      const same = copies.find(
+        (other) =>
+          Math.hypot(...other.position.map((value, axis) => value - (copy.position[axis] as number))) <= tolerance / 1000,
+      );
+      if (same === undefined) copies.push(copy);
+      else same.parts.push(...copy.parts);
+    });
+    for (const { parts, position: shown, normals } of copies) labels.push({ name, parts, position: shown, faceNormals: normals });
+  }
+  return labels;
+}
+
+const LINKED_OUTER_PARTS = ['part-1', 'part-2', 'part-3'] as const;
+
+const normalized = (a: Vec3): Vec3 => scaled(a, 1 / Math.hypot(...a));
 
 /** A cut face through a point: the plane it lies in, by its index among the section's planes, and its outward normal. */
 interface Cut {
@@ -383,10 +456,11 @@ export function previewSeparation({ solids, section, size }: GeneratedModel): nu
  */
 function previewObjects(model: GeneratedModel, gap: number): PreviewObject[] {
   const { solids, section } = model;
-  const shown = solids.map(withAppearance);
+  const shown = solids.map(withAppearance).map((object) => withPlaneTones(model, object));
   if (section === undefined || gap === 0) return shown;
   if (section.plate !== undefined) return explodedAroundPlate(model, shown, gap);
   if (section.secondInterface !== undefined) return explodedAlongPlanes(model, shown);
+  if (section.linked !== undefined) return explodedAroundMiddle(model, shown, section.linked.interfaces);
   const { connector, plane } = section;
   if (connector?.type === 'twist') {
     // Locked lugs cannot be pulled through their ledges: the upper part is shown turned to where it comes off, and withdrawn.
@@ -455,6 +529,95 @@ function explodedAlongPlanes(model: GeneratedModel, shown: readonly PreviewObjec
     return moved === 0 ? object : { ...object, displayOffset: scaled(normal, moved) };
   });
 }
+
+/**
+ * The parts of a section through a shared generatrix moved apart for display: the middle part stays, with any dowels seated in
+ * it, and each outer part moves away from it along its own plane's normal, by the gap of a single cut there, more where what the
+ * middle part carries at that plane, a plug, a tongue or seated dowels, reaches further beyond it; see `explodedAlongPlanes`.
+ * The planes never meet inside the solid, so the outer parts move apart from each other too. Not an assembly path.
+ */
+function explodedAroundMiddle(
+  model: GeneratedModel,
+  shown: readonly PreviewObject[],
+  interfaces: readonly LinkedInterface[],
+): PreviewObject[] {
+  const longest = Math.max(...model.size);
+  const moves = interfaces.map(({ plane: { normal, offset }, connector }, index) => {
+    let reach = 0;
+    const carried = model.solids.filter((solid) => solid.part === 'middle' || (solid.part === 'dowel' && solid.joint === index));
+    for (const { mesh } of carried) {
+      for (let vertex = 0; vertex < vertexCount(mesh); vertex += 1) {
+        reach = Math.max(reach, dot(normal, vertexAt(mesh, vertex)) - offset);
+      }
+    }
+    const flat = connector === undefined || connector.type === 'dovetail';
+    const least = (flat ? SECTION_PREVIEW_GAP_RELATIVE : CONNECTOR_PREVIEW_GAP_RELATIVE) * longest;
+    return scaled(normal, Math.max(least, reach + SECTION_PREVIEW_GAP_RELATIVE * longest));
+  });
+  return shown.map((object, index) => {
+    const own = LINKED_OUTER_PARTS.indexOf(model.solids[index]?.part as (typeof LINKED_OUTER_PARTS)[number]);
+    const move = moves[own];
+    return move === undefined ? object : { ...object, displayOffset: move };
+  });
+}
+
+/**
+ * The colours of a section through a shared generatrix in the preview, sRGB: each plane's cut faces and its generatrices, the
+ * shared one AA1 apart; BB1 and CC1 take the colour of the first and the second plane, whose other generatrices they are. The
+ * page's base diagram takes the same.
+ */
+export const LINKED_PREVIEW_COLORS = {
+  shared: '#ffffff',
+  planes: ['#ff9f43', '#2ed1a2', '#b98cff'],
+} as const;
+
+/**
+ * The preview's colours and guides of a section through a shared generatrix: its planes' colours and the generatrices AA1, BB1
+ * and CC1 as thin rods along the lateral surface, where the middle part, which never moves, has them. Display only: the print
+ * file and the connectors never see them. Nothing for any other section.
+ */
+function linkedPreviewOptions(model: GeneratedModel): PreviewOptions {
+  if (model.section?.linked === undefined || model.vertexLabels === undefined) return {};
+  const positions = Object.fromEntries(model.vertexLabels.map(({ name, position }) => [name, position]));
+  const halfWidth = GUIDE_HALF_WIDTH_RELATIVE * Math.max(...model.size);
+  const colors = [LINKED_PREVIEW_COLORS.shared, LINKED_PREVIEW_COLORS.planes[0], LINKED_PREVIEW_COLORS.planes[1]];
+  return {
+    planeColors: [...LINKED_PREVIEW_COLORS.planes],
+    guides: (['A', 'B', 'C'] as const).map((name, index) => ({
+      name: `${name}${name}1`,
+      from: positions[name] as Vec3,
+      to: positions[`${name}1`] as Vec3,
+      color: colors[index] as string,
+      halfWidth,
+    })),
+  };
+}
+
+// Thin beside the solid, yet some pixels wide at its default framing.
+const GUIDE_HALF_WIDTH_RELATIVE = 0.004;
+
+/**
+ * A part's cut faces through a shared generatrix by the plane they lie on, 2 + its index, so that the preview shows each plane in
+ * its colour; connector faces off the planes keep the cut colour. A face lies on a plane when all its corners do, to the rounding
+ * of the mesh's single-precision positions.
+ */
+function withPlaneTones(model: GeneratedModel, object: PreviewObject): PreviewObject {
+  const interfaces = model.section?.linked?.interfaces;
+  const { newFaces } = object;
+  if (interfaces === undefined || newFaces === undefined) return object;
+  const tolerance = PLANE_FACE_RELATIVE * Math.max(...model.size);
+  const toned = Uint8Array.from(newFaces, (kind, triangle) => {
+    if (kind !== 1) return kind;
+    const corners = triangleAt(object.mesh, triangle).map((vertex) => vertexAt(object.mesh, vertex));
+    const plane = interfaces.findIndex(({ plane: { normal, offset } }) =>
+      corners.every((corner) => Math.abs(dot(normal, corner) - offset) <= tolerance),
+    );
+    return plane < 0 ? kind : 2 + plane;
+  });
+  return { ...object, newFaces: toned };
+}
+
+const PLANE_FACE_RELATIVE = 1e-5;
 
 /** A section plate is shown in its own neutral colour, apart from the solid and its cut faces. */
 const withAppearance = (solid: Solid): PreviewObject => (solid.part === 'plate' ? { ...solid, appearance: 'plate' } : solid);
@@ -586,6 +749,15 @@ function partsOrientation({ solids, section, spec }: GeneratedModel): readonly (
           ...(cutFaceFree ? { cutFaceOutward: outward } : { connectorFace: outward }),
         }),
       };
+    });
+  }
+  if (section?.linked !== undefined) {
+    // Every plane holds the axis: each part keeps some of the lower base and stands on it, its cut faces upright, as a
+    // vertical cut's. A dowel stands on an end face, along its own plane's normal.
+    const { interfaces } = section.linked;
+    return solids.map((solid) => {
+      const plane = solid.part === 'dowel' ? interfaces[solid.joint ?? 0]?.plane : undefined;
+      return plane === undefined ? solid : { ...solid, mesh: rotateOntoZ(solid.mesh, plane.normal) };
     });
   }
   if (connector === undefined) return solids;

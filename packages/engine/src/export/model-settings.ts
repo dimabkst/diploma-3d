@@ -229,17 +229,22 @@ const resolvedConnector = (plan: ConnectorPlan) =>
 
 /**
  * The connector's settings as generated, after any automatic correction, with its physical dimensions; beside two parallel
- * planes, those at the lower plane, and the upper plane's own as fitted to its section.
+ * planes, those at the lower plane, and the upper plane's own as fitted to its section; through a shared generatrix, each plane's.
  */
 function connectorSettings(model: GeneratedModel) {
   const settings: Connector | undefined = model.spec.section?.connector;
   const plan = model.section?.connector;
   if (settings === undefined || plan === undefined) return undefined;
   const upper = model.section?.secondInterface?.connector;
+  // Through a shared generatrix, the first plane's dimensions, and every plane's own, as fitted to its section, in their order.
+  const linked = model.section?.linked?.interfaces.map(({ connector }) =>
+    connector === undefined ? null : resolvedConnector(connector).dimensions,
+  );
   return {
     settings,
     ...resolvedConnector(plan),
     ...(upper === undefined ? {} : { atUpperPlane: resolvedConnector(upper).dimensions }),
+    ...(linked === undefined ? {} : { atPlanes: linked }),
   };
 }
 

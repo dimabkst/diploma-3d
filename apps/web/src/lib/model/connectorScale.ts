@@ -11,17 +11,20 @@ import {
   coneObliqueSection,
   coneSection,
   coneVerticalSection,
+  cutOfSection,
   DOVETAIL_PROPORTIONS,
   isApexChordUsable,
   obliqueCylinderSection,
   ROUND_CONNECTOR_PROPORTIONS,
   roundDimensionsMm,
+  solidCut,
   verticalOffsetLimitPercent,
 } from '@diploma-3d/engine';
 import {
   BOX_SECTION_TYPES,
   type BoxSectionSpec,
   type ConeShape,
+  type CylinderShape,
   type PhysicalScale,
   type SectionType,
   type ShapeKind,
@@ -47,6 +50,8 @@ export type ConnectorScale = {
   readonly horizontalSpanMm?: number | undefined;
   /** The same of a cylinder's plane parallel to its axis, along the axis. */
   readonly axisSpanMm?: number | undefined;
+  /** The same of the first plane through a cylinder's shared generatrix, which the other planes' share in percent follows. */
+  readonly linkedSpanMm?: number | undefined;
   /** The same of a cube's or parallelepiped's current or last valid plane, whatever its mode. */
   readonly boxSpanMm?: number | undefined;
 };
@@ -90,6 +95,7 @@ export function connectorUnits(
     apexSpanMm,
     horizontalSpanMm,
     axisSpanMm,
+    linkedSpanMm,
     boxSpanMm,
   }: ConnectorScale,
   roundType: 'plug' | 'dowel',
@@ -106,9 +112,11 @@ export function connectorUnits(
             ? (horizontalSpanMm ?? 2 * r)
             : sectionType === 'axis-parallel'
               ? (axisSpanMm ?? heightMm)
-              : sectionType === 'parallel-to-bases'
-                ? (parallelSpanMm ?? 2 * r)
-                : (boxSpanMm ?? heightMm);
+              : sectionType === 'shared-generatrix'
+                ? (linkedSpanMm ?? heightMm)
+                : sectionType === 'parallel-to-bases'
+                  ? (parallelSpanMm ?? 2 * r)
+                  : (boxSpanMm ?? heightMm);
   const size = DOVETAIL_PROPORTIONS.height * m;
   const length = span / 100;
   const diameter = ROUND_CONNECTOR_PROPORTIONS.diameter * m;
@@ -161,6 +169,8 @@ export function cylinderConnectorScale(
     readonly cylinderObliqueDirectionDeg?: number | undefined;
     readonly cylinderAxisOffsetPercent?: number | undefined;
     readonly cylinderAxisDirectionDeg?: number | undefined;
+    readonly cylinderLinkedGeneratrixDeg?: number | undefined;
+    readonly cylinderLinkedFirstPlaneDeg?: number | undefined;
   },
   previous?: ConnectorScale,
 ): ConnectorScale | undefined {
@@ -185,7 +195,31 @@ export function cylinderConnectorScale(
     Math.abs(axisOffset) > axisParallelOffsetLimitPercent(shape, scale, axisDirection)
       ? previous?.axisSpanMm
       : axisParallelCylinderSection(shape, scale, { offsetPercent: axisOffset, offsetDirectionDeg: axisDirection }).span;
-  return { longestDimensionMm: printSizeMm, radiusMm: radius, heightMm: height, obliqueSpanMm, axisSpanMm };
+  const { cylinderLinkedGeneratrixDeg: generatrixDeg, cylinderLinkedFirstPlaneDeg: firstPlaneDeg } = values;
+  const linkedSpanMm =
+    generatrixDeg === undefined || firstPlaneDeg === undefined
+      ? previous?.linkedSpanMm
+      : linkedFirstSpan(shape, scale, generatrixDeg, firstPlaneDeg, previous?.linkedSpanMm);
+  return { longestDimensionMm: printSizeMm, radiusMm: radius, heightMm: height, obliqueSpanMm, axisSpanMm, linkedSpanMm };
+}
+
+/**
+ * The span of the first plane through a shared generatrix, which the second plane does not change: with the second at a right
+ * angle, which keeps the generatrices apart for every first plane that cuts the cylinder; the last span for one that does not.
+ */
+function linkedFirstSpan(
+  shape: CylinderShape,
+  scale: PhysicalScale,
+  generatrixDeg: number,
+  firstPlaneDeg: number,
+  previous: number | undefined,
+): number | undefined {
+  const planes = { generatrixDeg, firstPlaneDeg, dihedralDeg: 90, otherSide: false, third: false };
+  try {
+    return solidCut(shape, scale, cutOfSection({ type: 'shared-generatrix', ...planes })).span;
+  } catch {
+    return previous;
+  }
 }
 
 /** The span of a vertical cut within its limit; a plane beyond that has no usable section, and keeps the last span. */

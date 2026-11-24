@@ -1,6 +1,9 @@
 <script lang="ts">
 import { GLB_MEDIA_TYPE, type VertexLabel } from '@diploma-3d/engine';
 import { onMount, untrack } from 'svelte';
+import type { PreviewHighlight } from '../shapes.ts';
+
+const NO_HIGHLIGHT: PreviewHighlight = { materials: [], labels: [] };
 
 let {
   glb,
@@ -10,6 +13,7 @@ let {
   onerror,
   oncamerachange,
   labels = [],
+  highlight: givenHighlight,
 }: {
   glb: Uint8Array<ArrayBuffer>;
   /**
@@ -27,6 +31,11 @@ let {
   onerror: (glb: Uint8Array<ArrayBuffer>) => void;
   /** The camera's direction in radians: θ around the vertical axis from the model's −Y side, φ from straight above. */
   oncamerachange?: (direction: { theta: number; phi: number }) => void;
+  /**
+   * What the control in use changes, shown stronger: the GLB's materials by name, a section's planes (`plane-…`) lit and its
+   * guides (`guide-…`) kept bright while the others recede, and the labels by their shown names.
+   */
+  highlight?: PreviewHighlight | undefined;
 } = $props();
 
 /** The parts of model-viewer's camera and hotspot API used here. */
@@ -42,6 +51,48 @@ type CameraElement = HTMLElement & {
 };
 
 const DEFAULT_ORBIT = '35deg 62deg auto';
+
+/** The parts of model-viewer's scene-graph API used to highlight materials. */
+type SceneMaterial = {
+  readonly name: string;
+  readonly pbrMetallicRoughness: { readonly baseColorFactor: readonly number[] };
+  ensureLoaded(): Promise<void>;
+  setEmissiveFactor(rgb: [number, number, number]): void;
+};
+
+// How strongly a highlighted plane glows in its own colour, and how far the guides not concerned recede.
+const LIT_PLANE = 0.55;
+const RECEDING_GUIDE = 0.25;
+
+/**
+ * Lights the highlighted materials in their own colour: a plane's faces glow, the guides concerned stay bright and the others
+ * recede; with nothing highlighted, every guide is bright and no plane glows. Only display materials change.
+ */
+async function applyHighlight(element: CameraElement, { materials: names }: PreviewHighlight): Promise<void> {
+  const materials = (element as unknown as { model?: { materials: readonly SceneMaterial[] } }).model?.materials ?? [];
+  const lit = new Set(names);
+  for (const material of materials) {
+    const guide = material.name.startsWith('guide-');
+    if (!guide && !material.name.startsWith('plane-')) continue;
+    // model-viewer loads a material's properties on demand; reading them before throws.
+    await material.ensureLoaded();
+    const [r = 0, g = 0, b = 0] = material.pbrMetallicRoughness.baseColorFactor;
+    const factor = guide
+      ? lit.size === 0 || lit.has(material.name)
+        ? 1
+        : RECEDING_GUIDE
+      : lit.has(material.name)
+        ? LIT_PLANE
+        : 0;
+    material.setEmissiveFactor([r * factor, g * factor, b * factor]);
+  }
+}
+
+/** The highlight, never in the way of showing the model: a model replaced meanwhile only loses its emphasis. */
+const highlightSafely = (element: CameraElement, shown: PreviewHighlight) =>
+  applyHighlight(element, shown).catch(() => undefined);
+
+const highlight = $derived(givenHighlight ?? NO_HIGHLIGHT);
 
 let elementDefined = $state(false);
 // The labels of the model on screen: a new model's are shown with it, not over the one it replaces; see `start`.
@@ -200,6 +251,10 @@ $effect(() => {
     shownUrl = url;
     finish(element);
     onload(current);
+    void highlightSafely(
+      element,
+      untrack(() => highlight),
+    );
   };
   const handleError = () => {
     if (loading === undefined) return;
@@ -216,6 +271,10 @@ $effect(() => {
     element.removeEventListener('load', handleLoad);
     element.removeEventListener('error', handleError);
   };
+});
+
+$effect(() => {
+  if (viewer !== undefined) void highlightSafely(viewer, highlight);
 });
 
 $effect(() => {
@@ -249,6 +308,7 @@ onMount(() => () => {
         {...{ slot: slotOf(label) }}
         class="vertex-label"
         class:hidden={!inView(label)}
+        class:highlighted={highlight.labels.includes(label.name)}
         data-position={positionOf(label)}
         data-parts={label.parts.join(' ')}
         aria-hidden="true">{label.name}</span
@@ -284,5 +344,9 @@ onMount(() => () => {
 
   .vertex-label.hidden {
     opacity: 0.35;
+  }
+
+  .vertex-label.highlighted {
+    border-color: var(--color-accent);
   }
 </style>

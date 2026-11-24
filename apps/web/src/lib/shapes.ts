@@ -1,6 +1,7 @@
 import {
   axialApexAngles,
   DOVETAIL_PROPORTIONS,
+  type LinkedPart,
   obliquePlaneContainsAxis,
   ROUND_CONNECTOR_PROPORTIONS,
   ROUND_CONNECTOR_STEPS_MM,
@@ -86,6 +87,13 @@ import {
   canSwitchTiltMode,
   coneApexKeys,
   heightFootPercent,
+  LINKED_KEYS,
+  type LinkedDiagram,
+  linkedAlternativeOffered,
+  linkedAxialOffered,
+  linkedDiagram,
+  linkedFieldRange,
+  linkedThinPart,
   type ParameterChoices,
   type ParameterKey,
   type ParameterValues,
@@ -233,6 +241,8 @@ export type ActionField = {
 
 export type PanelAction =
   | 'download-pins'
+  | 'linked-alternative'
+  | 'linked-axial'
   | 'download-trial'
   | 'choose-no-connector'
   | 'reset-magnet-allowances'
@@ -257,7 +267,24 @@ export type DisclosureGroup = {
   readonly fields: readonly (NumericField | ChoiceField | NoteField | ActionField)[];
 };
 
+/**
+ * The lower base of a cylinder's section through a shared generatrix, drawn beside its controls: the base circle, the points
+ * A, B and C where the generatrices meet it, the chords AB and AC of the first and the second plane and, with the third plane,
+ * BC. Display only; undefined while the construction is not valid, which the diagram answers with the last valid one.
+ */
+export type LinkedDiagramField = {
+  readonly type: 'linked-diagram';
+  readonly key: string;
+  readonly diagram: LinkedDiagram | undefined;
+  /** Which elements each control changes, by the control's key, for highlighting while it is active. */
+  readonly affects: Readonly<Record<string, readonly LinkedElement[]>>;
+};
+
+/** An element of the construction that a control changes, in the diagram and in the 3D preview alike. */
+export type LinkedElement = 'A' | 'B' | 'C' | 'AB' | 'AC' | 'BC' | 'alternative';
+
 export type ParameterField =
+  | LinkedDiagramField
   | NumericField
   | ChoiceField
   | ToggleField
@@ -665,6 +692,7 @@ const sectionNames: Readonly<Record<SectionChoice, string>> = {
   oblique: 'Похилий',
   horizontal: 'Горизонтальний',
   'axis-parallel': 'Паралельно осі',
+  'shared-generatrix': 'Через спільну твірну',
   'oblique-apex': 'Через вершину',
   'face-parallel': 'Паралельно грані',
   longitudinal: 'Поздовжній',
@@ -706,6 +734,29 @@ const axisParallelSectionHelp: Help = {
     'Частини 1 і 2 лежать по різні боки площини й експортуються окремими об’єктами в одному масштабі. Межі зміщення ' +
     'залежать від напрямку й відсувають площину від бічної поверхні, але не гарантують, що тонку частину вдасться ' +
     'надрукувати.',
+};
+
+const linkedSectionHelp: Help = {
+  label: 'Як задано перерізи?',
+  text:
+    'Два перерізи проходять через одну спільну твірну AA₁ — відрізок бічної поверхні, паралельний осі. Кожна площина ' +
+    'містить цю твірну, тож вона паралельна осі навіть у похилого циліндра. Площини вдруге перетинають бічну поверхню по ' +
+    'твірних BB₁ (перший переріз) і CC₁ (другий переріз).\n\n' +
+    '«Кут між площинами» — менший двогранний кут між ними, від 0° до 90°. Він змінює лише другий переріз: перший і ' +
+    'твірна AA₁ лишаються на місці.\n\n' +
+    '«Повернути обидва перерізи» повертає обидві площини навколо AA₁ на той самий кут, тож кут між ними не змінюється. ' +
+    'Відлік — від осьової площини: 0° означає, що перший переріз проходить через вісь; «Перший переріз — осьовий» ставить ' +
+    '0°, якщо така побудова можлива.\n\n' +
+    'За того самого першого перерізу й кута є дві різні площини другого перерізу — з одного й з іншого боку від першого. ' +
+    '«Інше положення другої площини» вибирає іншу; програма сама цього ніколи не робить. За 90° обидві збігаються.\n\n' +
+    '«Додати третій переріз» проводить площину через BB₁ і CC₁: середня частина тоді — трикутна призма ABCA₁B₁C₁. Без ' +
+    'неї частин три, з нею — чотири; усі експортуються окремими об’єктами в одному масштабі.\n\n' +
+    'Недоступні лише положення, де площина дотикається до циліндра або площини майже збігаються: там частина вироджується. ' +
+    'Циліндр у файлі — многогранник, вписаний у коло, тож поблизу дотику площина майже не відрізає його; це дає вузький ' +
+    'проміжок, який повзунок і кнопки оминають. Тонкі частини дозволено, але програма попереджає, що їх може не вдатися ' +
+    'надрукувати.\n\n' +
+    'На схемі нижньої основи кольори відповідають перегляду: перший переріз, другий і третій. Кут BAC на схемі в похилого ' +
+    'циліндра загалом не дорівнює куту між площинами, тому на схемі його не підписано.',
 };
 
 const obliqueSectionHelp: Help = {
@@ -947,6 +998,43 @@ const verticalDovetailHelp = (entrance: DovetailEntrance): Help => ({
     'Висота визначає, наскільки виступ виходить за переріз. Довжина вимірюється вертикально, вздовж паза. Зазор — ' +
     'заданий у моделі проміжок між відповідними поверхнями виступу й паза.\n\n' +
     BOUNDS_HELP,
+});
+
+/** What every connector through a shared generatrix adds: one at each plane, apart from each other in the middle part. */
+const LINKED_CONNECTOR_NOTE =
+  'Біля кожної площини стоїть своє кріплення з тими самими налаштуваннями, підігнане до її перерізу. Їхні отвори й пази ' +
+  'в середній частині мають лишатися щонайменше на 1,2 мм від інших граней і одне від одного; інакше модель не ' +
+  'створюється й пояснюється чому.';
+
+/** The connectors of planes through a shared generatrix: the middle part against each outer part. */
+const linkedConnectorHelps = (entrance: DovetailEntrance): Record<Exclude<ConnectorChoice, 'none'>, Help> => ({
+  dovetail: {
+    label: 'Як працює кріплення?',
+    text:
+      `${VERTICAL_DOVETAIL_MOTION[entrance]}\n\n` +
+      'Виступи — на середній частині, пази — у відрізаних частинах. Похилі боки під кутом 45° утримують частини від ' +
+      'роз’єднання перпендикулярно до перерізу, але це не замок.\n\n' +
+      `${LINKED_CONNECTOR_NOTE}\n\n${BOUNDS_HELP}`,
+  },
+  plug: {
+    label: 'Як працює кріплення?',
+    text:
+      'Виступи друкуються разом із середньою частиною та входять в отвори відрізаних частин. Кожну частину з’єднують і ' +
+      'розбирають рухом перпендикулярно до її перерізу. Отвір має додаткові 0,3 мм глибини, щоб його дно не заважало ' +
+      `зімкнути частини.\n\n${VERTICAL_PRINT_NOTE}\n\n${LINKED_CONNECTOR_NOTE}\n\n${BOUNDS_HELP}`,
+  },
+  dowel: {
+    label: 'Як працює кріплення?',
+    text:
+      'Штифти друкуються окремо та вставляються в отвори середньої й відрізаної частини. Поле довжини задає повну довжину ' +
+      'штифта; номінально в кожну частину входить половина. Збільшення діаметра отворів середньої та відрізаних частин ' +
+      `налаштовуються окремо.\n\n${VERTICAL_PRINT_NOTE}\n\n${LINKED_CONNECTOR_NOTE}\n\n${BOUNDS_HELP}`,
+  },
+  twist: twistHelp,
+  magnet: {
+    ...magnetHelp(false),
+    text: `${magnetHelp(false).text}\n\n${LINKED_CONNECTOR_NOTE}`,
+  },
 });
 
 const OBLIQUE_PRINT_NOTE =
@@ -1464,12 +1552,20 @@ function connectorSection(
           ])),
       clearanceField(
         round.dowelLowerClearance,
-        numbered ? `${enlargement} отворів частини 1, мм` : `${enlargement} нижніх отворів, мм`,
+        cut === 'shared-generatrix'
+          ? `${enlargement} отворів середньої частини, мм`
+          : numbered
+            ? `${enlargement} отворів частини 1, мм`
+            : `${enlargement} нижніх отворів, мм`,
         diametralClearanceRange,
       ),
       clearanceField(
         round.dowelUpperClearance,
-        numbered ? `${enlargement} отворів частини 2, мм` : `${enlargement} верхніх отворів, мм`,
+        cut === 'shared-generatrix'
+          ? `${enlargement} отворів відрізаних частин, мм`
+          : numbered
+            ? `${enlargement} отворів частини 2, мм`
+            : `${enlargement} верхніх отворів, мм`,
         diametralClearanceRange,
       ),
       note('connector-clearance', CLEARANCE_NOTE),
@@ -1517,6 +1613,7 @@ function connectorSection(
       twist: twistHelp,
       magnet: magnetHelp(false),
     },
+    'shared-generatrix': linkedConnectorHelps(entrance),
     horizontal: {
       dovetail: withBallNote(dovetailHelp),
       plug: withBallNote(plugHelp),
@@ -1757,6 +1854,143 @@ function plateFieldsOf(
   ];
 }
 
+/**
+ * What the 3D preview shows stronger while a control is in use: the GLB's materials by name, a section's planes (`plane-…`) and
+ * guides (`guide-…`), and the vertex labels by the model's names of them, such as A1.
+ */
+export type PreviewHighlight = { readonly materials: readonly string[]; readonly labels: readonly string[] };
+
+/** The preview's materials and vertex names of each element of a section through a shared generatrix. */
+const LINKED_PREVIEW_ELEMENTS: Readonly<Record<LinkedElement, PreviewHighlight>> = {
+  A: { materials: ['guide-AA1'], labels: ['A', 'A1'] },
+  B: { materials: ['guide-BB1'], labels: ['B', 'B1'] },
+  C: { materials: ['guide-CC1'], labels: ['C', 'C1'] },
+  AB: { materials: ['plane-1'], labels: [] },
+  AC: { materials: ['plane-2'], labels: [] },
+  BC: { materials: ['plane-3'], labels: [] },
+  alternative: { materials: ['plane-2', 'guide-CC1'], labels: ['C', 'C1'] },
+};
+
+/**
+ * What the preview shows stronger while a control is in use: the elements its group's diagram marks for it, the same in the 3D
+ * view; undefined for a control without a diagram's elements.
+ */
+export function previewHighlightOf(panel: ShapePanel, activeKey: string | undefined): PreviewHighlight | undefined {
+  if (activeKey === undefined || panel.type !== 'parameters') return undefined;
+  const diagram = panel.sections
+    .flatMap((section) => section.fields)
+    .find((field): field is LinkedDiagramField => field.type === 'linked-diagram');
+  const elements = diagram?.affects[activeKey];
+  if (elements === undefined) return undefined;
+  const parts = elements.map((element) => LINKED_PREVIEW_ELEMENTS[element]);
+  return {
+    materials: [...new Set(parts.flatMap(({ materials }) => materials))],
+    labels: [...new Set(parts.flatMap(({ labels }) => labels))],
+  };
+}
+
+/** The part of a section through a shared generatrix as a warning names it. */
+const LINKED_PART_NAMES: Readonly<Record<LinkedPart, string>> = {
+  middle: 'Середня частина',
+  'part-1': 'Частина за першим перерізом',
+  'part-2': 'Частина за другим перерізом',
+  'part-3': 'Частина за третім перерізом',
+};
+
+/**
+ * The controls of a cylinder's section through a shared generatrix, each saying what it changes: the angle between the planes
+ * the second plane alone, the pair's turn both planes about AA1, the explicit action the second plane's other solution, and,
+ * further down, the generatrix itself. The diagram shows what each one changes while it is hovered or focused.
+ */
+function linkedFields(
+  kind: 'cylinder' | 'cone',
+  linked: NonNullable<PlanarSectionKeys['linked']>,
+  choices: ParameterChoices,
+  values: ParameterValues,
+  toggle: ToggleField,
+): ParameterField[] {
+  const axialKey = `${kind}-linked-axial`;
+  const alternativeKey = `${kind}-linked-alternative`;
+  const thin = linkedThinPart(values, choices);
+  return [
+    {
+      type: 'linked-diagram',
+      key: `${kind}-linked-diagram`,
+      diagram: linkedDiagram(values, choices),
+      affects: {
+        [linked.generatrix]: ['A'],
+        [linked.firstPlane]: ['AB', 'AC', 'B', 'C'],
+        [linked.dihedral]: ['AC', 'C'],
+        [axialKey]: ['AB', 'AC', 'B', 'C'],
+        [alternativeKey]: ['alternative'],
+        [linked.third]: ['BC'],
+      },
+    },
+    {
+      type: 'number',
+      key: linked.dihedral,
+      label: 'Кут між площинами',
+      suffix: '°',
+      range: linkedFieldRange(values, choices, 'dihedral', ANGLE_INCREMENT_DEG),
+    },
+    {
+      type: 'number',
+      key: linked.firstPlane,
+      label: 'Повернути обидва перерізи',
+      suffix: '°',
+      range: linkedFieldRange(values, choices, 'pair', ANGLE_INCREMENT_DEG),
+      describedBy: `${kind}-linked-pair-note`,
+    },
+    { type: 'note', key: `${kind}-linked-pair-note`, text: '0° — перший переріз проходить через вісь' },
+    {
+      type: 'action',
+      key: axialKey,
+      label: 'Перший переріз — осьовий',
+      action: 'linked-axial',
+      ...(linkedAxialOffered(values, choices) ? {} : { disabled: true }),
+    },
+    ...(linkedAlternativeOffered(values, choices)
+      ? [
+          {
+            type: 'action' as const,
+            key: alternativeKey,
+            label: 'Інше положення другої площини',
+            action: 'linked-alternative' as const,
+          },
+        ]
+      : []),
+    { type: 'toggle', key: linked.third, label: 'Додати третій переріз', describedBy: `${kind}-linked-third-note` },
+    { type: 'note', key: `${kind}-linked-third-note`, text: 'Третя площина проходить через дві інші твірні.' },
+    ...(thin === undefined
+      ? []
+      : [
+          {
+            type: 'note' as const,
+            key: `${kind}-linked-thin-note`,
+            tone: 'status' as const,
+            text:
+              `${LINKED_PART_NAMES[thin.part]} має завтовшки лише ${formatDecimal(Math.round(thin.reachMm * 100) / 100)} мм — ` +
+              'її може не вдатися надрукувати. Переріз дозволено; розведіть площини або збільште модель.',
+          },
+        ]),
+    {
+      type: 'disclosure',
+      key: `${kind}-linked-more`,
+      label: 'Додаткові налаштування',
+      fields: [
+        {
+          type: 'number',
+          key: linked.generatrix,
+          label: 'Положення спільної твірної',
+          suffix: '°',
+          range: linkedFieldRange(values, choices, 'generatrix', ANGLE_INCREMENT_DEG),
+        },
+      ],
+    },
+    toggle,
+  ];
+}
+
 function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, context: PanelContext): ParameterSection {
   const keys = sectionKeys[kind] as PlanarSectionKeys | undefined;
   if (keys === undefined) throw new Error(`No section fields for ${kind}.`);
@@ -1781,10 +2015,11 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
     type: 'choice',
     key: keys.choice,
     label: 'Тип перерізу',
-    options: (['none', 'parallel-to-bases', 'vertical', 'oblique', 'oblique-apex', 'axis-parallel'] as const)
+    options: (['none', 'parallel-to-bases', 'vertical', 'oblique', 'oblique-apex', 'axis-parallel', 'shared-generatrix'] as const)
       // A right cylinder's planes parallel to its axis are its vertical ones; a cone has no other. Only a cone has an apex.
       .filter((value) => value !== 'axis-parallel' || (kind === 'cylinder' && (leaning || chosen === value)))
       .filter((value) => value !== 'oblique-apex' || kind === 'cone')
+      .filter((value) => value !== 'shared-generatrix' || kind === 'cylinder')
       .map((value) => ({ value, label: namesOf(value) })),
   };
   const { offset, oblique } = keys;
@@ -1796,9 +2031,11 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
   const plate = keys.plate;
   const plateOn = plate !== undefined && choices[plate.toggle];
   const plateFields = plateFieldsOf(kind, keys, choices, context, chosen);
+  const linked = keys.linked;
   const details: Record<SectionChoice, ParameterField[]> = {
     none: [],
     horizontal: [],
+    'shared-generatrix': linked === undefined ? [] : linkedFields(kind, linked, choices, values, toggle),
     'face-parallel': [],
     longitudinal: [],
     'through-apex': [],
@@ -1905,6 +2142,7 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
     'through-line': undefined,
     inclined: undefined,
     'axis-parallel': axisParallelSectionHelp,
+    'shared-generatrix': linkedSectionHelp,
     'parallel-to-bases': kind === 'cone' ? coneSectionHelp : parallelSectionHelp,
     vertical: kind === 'cone' ? coneVerticalSectionHelp : verticalSectionHelp,
     oblique: kind === 'cone' ? coneObliqueSectionHelp : obliqueSectionHelp,
@@ -1927,7 +2165,11 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
             ? 'з пластиною'
             : axial || (apexAxial && chosen === 'oblique-apex')
               ? 'осьовий'
-              : namesOf(chosen).toLowerCase(),
+              : chosen === 'shared-generatrix'
+                ? choices[LINKED_KEYS.third]
+                  ? 'три перерізи'
+                  : 'два перерізи'
+                : namesOf(chosen).toLowerCase(),
       highlighted: chosen !== 'none',
     },
   });

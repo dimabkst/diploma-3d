@@ -10,7 +10,16 @@ export function parseDecimal(text: string): number | undefined {
   return DECIMAL_PATTERN.test(trimmed) ? Number(trimmed.replace(',', '.')) : undefined;
 }
 
-export type StepRange = { readonly min: number; readonly max: number; readonly increment: number };
+export type StepRange = {
+  readonly min: number;
+  readonly max: number;
+  readonly increment: number;
+  /**
+   * Open stretches within the range that hold no allowed value, in increasing order; their ends are allowed. Stepping and the
+   * slider pass over them to the next allowed value.
+   */
+  readonly gaps?: readonly { readonly min: number; readonly max: number }[];
+};
 
 export type StepDirection = 1 | -1;
 
@@ -24,8 +33,14 @@ export function stepDecimal(value: number, direction: StepDirection, range: Step
   const stepped = multipleOfIncrement(value, range.increment, (units, stepUnits) =>
     direction > 0 ? floorDivide(units, stepUnits) + 1n : -floorDivide(-units, stepUnits) - 1n,
   );
-  return clamp(stepped, range);
+  const gap = gapHolding(clamp(stepped, range), range);
+  if (gap === undefined) return clamp(stepped, range);
+  // From within a gap's end, or into it: on to its far end, which is allowed.
+  return direction > 0 ? gap.max : gap.min;
 }
+
+/** The gap of the range that holds the value strictly inside it. */
+const gapHolding = (value: number, { gaps = [] }: StepRange) => gaps.find((gap) => value > gap.min && value < gap.max);
 
 /**
  * The multiple of `increment` (anchored at zero) nearest to `value`, with halves rounded up, clamped to the range. The
@@ -38,8 +53,11 @@ export function snapDecimal(value: number, range: StepRange): number {
     range,
   );
   const distance = Math.abs(value - multiple);
-  if (Math.abs(value - range.max) < distance) return range.max;
-  return Math.abs(value - range.min) < distance ? range.min : multiple;
+  const snapped =
+    Math.abs(value - range.max) < distance ? range.max : Math.abs(value - range.min) < distance ? range.min : multiple;
+  const gap = gapHolding(snapped, range);
+  if (gap === undefined) return snapped;
+  return Math.abs(value - gap.min) <= Math.abs(value - gap.max) ? gap.min : gap.max;
 }
 
 /**

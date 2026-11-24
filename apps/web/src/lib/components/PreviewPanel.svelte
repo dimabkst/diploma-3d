@@ -4,7 +4,7 @@ import type { Section } from '@diploma-3d/schema';
 import { vertexName } from '../model/box.ts';
 import { type ModelState, visibleArtifacts } from '../model/modelState.ts';
 import type { ParameterKey } from '../model/parameters.ts';
-import { formatSize } from '../shapes.ts';
+import { formatSize, type PreviewHighlight } from '../shapes.ts';
 import Button from './Button.svelte';
 import ModelViewer from './ModelViewer.svelte';
 import SectionCompass from './SectionCompass.svelte';
@@ -17,6 +17,7 @@ let {
   invalidFields,
   onfocusfield,
   onretry,
+  highlight,
 }: {
   shapeName: string;
   model: ModelState;
@@ -29,7 +30,19 @@ let {
   invalidFields: readonly { readonly key: ParameterKey; readonly label: string }[];
   onfocusfield: (key: ParameterKey) => void;
   onretry: () => void;
+  /** What the control in use changes, by material and by vertex name as the model has it, such as A1. */
+  highlight?: PreviewHighlight | undefined;
 } = $props();
+
+// The labels are shown as a textbook writes them, A₁ for A1; so are the highlighted ones.
+const shownHighlight = $derived(
+  highlight === undefined
+    ? undefined
+    : {
+        materials: highlight.materials,
+        labels: highlight.labels.map((name) => vertexName(name as Parameters<typeof vertexName>[0])),
+      },
+);
 
 let modelViewer = $state<ModelViewer>();
 
@@ -96,6 +109,7 @@ const assembled = $derived(shownArtifacts?.model.section !== undefined);
           viewKey={artifacts?.model.kind ?? ''}
           alt={`Інтерактивна 3D-модель: ${shapeName.toLowerCase()}${artifacts?.model.section === undefined ? '' : partCount === 3 ? ', три частини перерізу' : ', дві частини перерізу'}`}
           {labels}
+          highlight={shownHighlight}
           onload={showLoaded}
           onerror={(failed) => (failedGlb = failed)}
           oncamerachange={(direction) => (cameraDirection = direction)}

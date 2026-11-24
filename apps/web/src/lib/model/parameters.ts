@@ -1,5 +1,6 @@
 import {
   apexChordCrossesBase,
+  atLinkedPlane,
   atSecondPlane,
   axialApexAngles,
   axisParallelOffsetLimitPercent,
@@ -18,6 +19,7 @@ import {
   boxPointRange,
   boxSplitReach,
   boxVertices,
+  CONNECTOR_MIN_WALL_MM,
   CONSTRAINT_ROUNDOFF_MM,
   type ConnectorFeasibility,
   coneApexAngleBounds,
@@ -30,6 +32,14 @@ import {
   hasFeasibleValues,
   type Interval,
   isApexChordUsable,
+  type LinkedField,
+  type LinkedPart,
+  linkedAlternativeUsable,
+  linkedCylinder,
+  linkedFieldScale,
+  linkedMargin,
+  linkedStart,
+  linkedThinnest,
   type MagnetIssue,
   type MagnetPlan,
   type ModelSettingsInput,
@@ -130,12 +140,13 @@ import {
   type SectionType,
   type ShapeKind,
   sectionPositionSchema,
+  sharedGeneratrixSectionSchema,
   TILT_OFFSET_LIMITS,
   TWIST_AXIAL_CLEARANCE_LIMITS,
   TWIST_CLEARANCE_LIMITS,
   type TwistConnector,
 } from '@diploma-3d/schema';
-import { formatDecimal, formatSteppedDecimal, halfSumDecimal, parseDecimal, snapDecimal } from '../decimal.ts';
+import { formatDecimal, formatSteppedDecimal, halfSumDecimal, parseDecimal, type StepRange, snapDecimal } from '../decimal.ts';
 import {
   BOX_CHOICE_FIELDS,
   BOX_NUMBER_FIELDS,
@@ -186,6 +197,9 @@ import {
   type TiltSolid,
   tiltKeys,
 } from './tilt.ts';
+
+/** The fields of planes through a shared generatrix as the schema defaults them: a right cylinder's generatrices 120° apart. */
+const LINKED_DEFAULTS = sharedGeneratrixSectionSchema.parse({ type: 'shared-generatrix' });
 
 // The default solids are right, so the angle mode starts at 90° with the direction along +X.
 const RIGHT_INCLINATION_TEXT = formatDecimal(RIGHT_INCLINATION_DEG);
@@ -238,6 +252,9 @@ export type ParameterKey =
   | 'cylinderObliqueDirectionDeg'
   | 'cylinderAxisOffsetPercent'
   | 'cylinderAxisDirectionDeg'
+  | 'cylinderLinkedGeneratrixDeg'
+  | 'cylinderLinkedFirstPlaneDeg'
+  | 'cylinderLinkedDihedralDeg'
   | 'cylinderDovetailSize'
   | 'cylinderDovetailLengthPercent'
   | 'cylinderDovetailClearanceMm'
@@ -348,6 +365,12 @@ export type ParameterChoices = {
   cylinderPartsSeparated: boolean;
   /** Whether the cut removes a section plate, printed as a third object between the parts. */
   cylinderPlate: boolean;
+  /** Through a shared generatrix: whether the second plane turns from the first the other way about it. */
+  cylinderLinkedOtherSide: boolean;
+  /** Through a shared generatrix: whether a third plane passes through the other two generatrices. */
+  cylinderLinkedThird: boolean;
+  /** Whether the planes through a shared generatrix have their first values yet, which depend on the cylinder when chosen. */
+  cylinderLinkedStarted: boolean;
   coneSection: SectionChoice;
   coneConnector: ConnectorChoice;
   coneDovetailEntrance: DovetailEntrance;
@@ -375,6 +398,8 @@ export type ParameterChoices = {
 export type ToggleKey =
   | 'cylinderPartsSeparated'
   | 'cylinderPlate'
+  | 'cylinderLinkedOtherSide'
+  | 'cylinderLinkedThird'
   | 'conePartsSeparated'
   | 'conePlate'
   | 'coneApexAxial'
@@ -387,6 +412,7 @@ export type ChoiceKey = Exclude<
   keyof ParameterChoices,
   | ToggleKey
   | 'coneApexStarted'
+  | 'cylinderLinkedStarted'
   | 'ballSecondCut'
   | `${BoxSolid}${'SecondCut' | 'LineAngleFor' | 'PointFor' | 'TraceThrough' | 'TraceThroughText' | 'TraceFor' | 'NormalFrom'}`
 >;
@@ -423,6 +449,8 @@ export type ParameterOptions = {
   readonly connectorScale?: ConnectorScale | undefined;
   /** Without it, as in a request made of bare texts, the stored connector values count as just typed. */
   readonly connectorEdits?: ConnectorEdits | undefined;
+  /** The field the user changed last, where a problem that several fields could cause is said. */
+  readonly edited?: ParameterKey | undefined;
 };
 
 /** What became of the stored dimensions of a round connector. */
@@ -514,6 +542,9 @@ export const initialParameterTexts = (): ParameterTexts => ({
   cylinderObliqueDirectionDeg: formatDecimal(DEFAULT_OBLIQUE_SECTION.directionDeg),
   cylinderAxisOffsetPercent: formatDecimal(DEFAULT_SECTION_OFFSET_PERCENT),
   cylinderAxisDirectionDeg: formatDecimal(AXIS_PARALLEL_DEFAULT_DIRECTION_DEG),
+  cylinderLinkedGeneratrixDeg: formatDecimal(LINKED_DEFAULTS.generatrixDeg),
+  cylinderLinkedFirstPlaneDeg: formatDecimal(LINKED_DEFAULTS.firstPlaneDeg),
+  cylinderLinkedDihedralDeg: formatDecimal(LINKED_DEFAULTS.dihedralDeg),
   cylinderDovetailSize: formatDecimal(DEFAULT_DOVETAIL.sizeFactor),
   cylinderDovetailLengthPercent: formatDecimal(DEFAULT_DOVETAIL.lengthPercent),
   cylinderDovetailClearanceMm: formatDecimal(DEFAULT_DOVETAIL.clearanceMm),
@@ -612,6 +643,9 @@ export const initialParameterChoices = (): ParameterChoices => ({
   cylinderRoundProfile: DEFAULT_CONNECTOR_PROFILE,
   cylinderPartsSeparated: true,
   cylinderPlate: false,
+  cylinderLinkedOtherSide: LINKED_DEFAULTS.otherSide,
+  cylinderLinkedThird: LINKED_DEFAULTS.third,
+  cylinderLinkedStarted: false,
   coneSection: 'none',
   coneConnector: 'none',
   coneDovetailEntrance: 'standard',
@@ -707,6 +741,23 @@ export const validateObliqueInclination = (text: string, exact?: number): Valida
 /** The horizontal direction an oblique plane rises along, from +X towards +Y; 360° is the same as 0°. */
 export const validateObliqueDirection = (text: string, exact?: number): Validation =>
   validateNumber(text, inclusiveRange(OBLIQUE_DIRECTION_LIMITS), OBLIQUE_DIRECTION_LIMITS, '90', '°', exact);
+
+/**
+ * The first plane's turn from the axial plane through the shared generatrix: within a half turn either way here; the cylinder
+ * narrows it to the planes that cut it, see `sectionChecks`.
+ */
+export const validateLinkedFirstPlane = (text: string, exact?: number): Validation => {
+  const read = readNumber(text, '-30', exact);
+  if ('error' in read) return read;
+  return Math.abs(read.value) < 180 ? read : { error: 'Кут має бути більшим за −180° і меншим за 180°.' };
+};
+
+/** The smaller dihedral angle between the planes through the shared generatrix, in (0°, 90°]. */
+export const validateLinkedDihedral = (text: string, exact?: number): Validation => {
+  const read = readNumber(text, '60', exact);
+  if ('error' in read) return read;
+  return read.value > 0 && read.value <= 90 ? read : { error: 'Кут має бути більшим за 0° і не більшим за 90°.' };
+};
 
 /** A plane through the apex: any angle up to the vertical here; the cone and the direction narrow it, see `sectionChecks`. */
 export const validateApexInclination = (text: string, exact?: number): Validation => {
@@ -860,6 +911,9 @@ const validators = {
   cylinderObliqueDirectionDeg: validateObliqueDirection,
   cylinderAxisOffsetPercent: validateSectionOffset,
   cylinderAxisDirectionDeg: validateObliqueDirection,
+  cylinderLinkedGeneratrixDeg: validateObliqueDirection,
+  cylinderLinkedFirstPlaneDeg: validateLinkedFirstPlane,
+  cylinderLinkedDihedralDeg: validateLinkedDihedral,
   cylinderDovetailSize: validateConnectorDimension,
   cylinderDovetailLengthPercent: validateConnectorDimension,
   cylinderDovetailClearanceMm: validateDovetailClearance,
@@ -1066,7 +1120,7 @@ export function resolveModelRequest(
   const checked =
     section.section === 'none'
       ? undefined
-      : sectionChecks(kind, resolved.shape, size.value, section.section, options.connectorEdits);
+      : sectionChecks(kind, resolved.shape, size.value, section.section, options.connectorEdits, options.edited);
   if (checked !== undefined) {
     for (const [key, message] of Object.entries(checked.errors) as [ParameterKey, string][]) {
       errors[key] = errors[key] === undefined ? message : `${errors[key]} ${message}`;
@@ -1113,8 +1167,13 @@ export function plateConnectorFallback(kind: ShapeKind, state: ParameterState): 
 export function plateChosen(kind: ShapeKind, choices: ParameterChoices): boolean {
   const keys = sectionKeys[kind];
   const plate = keys?.plate;
+  const section = activeSection(kind, choices);
   return (
-    plate !== undefined && choices[plate.toggle] && activeSection(kind, choices) !== undefined && !secondCutChosen(kind, choices)
+    plate !== undefined &&
+    choices[plate.toggle] &&
+    section !== undefined &&
+    section !== 'shared-generatrix' &&
+    !secondCutChosen(kind, choices)
   );
 }
 
@@ -1890,6 +1949,7 @@ function sectionChecks(
   longestDimensionMm: number,
   section: Section,
   edits: ConnectorEdits | undefined,
+  edited?: ParameterKey,
 ): SectionCheck | undefined {
   const keys = sectionKeys[kind];
   if (keys?.box !== undefined && isBoxSolid(shape.kind) && isBoxSectionType(section.type)) {
@@ -1927,6 +1987,9 @@ function sectionChecks(
   }
   if (section.type === 'axis-parallel')
     return axisParallelChecks(keys, solid as CylinderShape, longestDimensionMm, section, edits);
+  if (section.type === 'shared-generatrix') {
+    return linkedChecks(keys, solid as CylinderShape, longestDimensionMm, section, edits, edited);
+  }
   if (section.type !== 'vertical') return undefined;
   return offsetChecks(
     keys,
@@ -2324,13 +2387,17 @@ function magnetChecks(shape: SectionedShape, longestDimensionMm: number, section
 
 /** The part as the magnet messages name it: below or above a horizontal cut, by its number beside any other. */
 const magnetPart = (part: 'lower' | 'upper', cut: CutWording) =>
-  cut === 'parallel-to-bases' || cut === 'horizontal'
+  cut === 'shared-generatrix'
     ? part === 'lower'
-      ? 'нижня частина'
-      : 'верхня частина'
-    : part === 'lower'
-      ? 'частина 1'
-      : 'частина 2';
+      ? 'середня частина'
+      : 'відрізана частина'
+    : cut === 'parallel-to-bases' || cut === 'horizontal'
+      ? part === 'lower'
+        ? 'нижня частина'
+        : 'верхня частина'
+      : part === 'lower'
+        ? 'частина 1'
+        : 'частина 2';
 
 /** What keeps the requested magnets from fitting, the part it concerns where known, and what to change; in Ukrainian. */
 export function magnetIssuesMessage(issues: readonly MagnetIssue[], cut: CutWording, connector: MagnetConnector): string {
@@ -2426,7 +2493,7 @@ function offsetChecks(
 }
 
 /** How the messages of each plane's connector say which plane they concern. */
-const PLANE_LABELS = ['Біля першого перерізу', 'Біля другого перерізу'] as const;
+const PLANE_LABELS = ['Біля першого перерізу', 'Біля другого перерізу', 'Біля третього перерізу'] as const;
 
 /**
  * A ball's two parallel planes: the second within the same limits as the first and far enough from it for a usable middle part,
@@ -2476,16 +2543,33 @@ function secondPlaneChecks(
 }
 
 /**
- * The connector at each of two parallel planes, a ball's or a box's. Each plane's own checks see the other plane, so that the
- * middle part's connectors from both sides keep their material. Both planes share the connector's settings: their feasible
- * ranges are what both allow, and a round connector fitted to the first plane is fitted to the second as well, and taken back
- * to the first if that changed it. Nothing is moved to make anything fit.
+ * The connector at each of two parallel planes, a ball's or a box's: the first plane, and the second seen from it; see
+ * `planesConnectorChecks`.
  */
 function pairedConnectorChecks(
   keys: SectionKeys,
   shape: SectionedShape,
   longestDimensionMm: number,
   section: Section,
+  edits: ConnectorEdits | undefined,
+  allRanges: SectionRanges,
+): SectionCheck {
+  return planesConnectorChecks(keys, shape, longestDimensionMm, section, [atSecondPlane(section)], edits, allRanges);
+}
+
+/**
+ * The connector at each plane of a section with several, the first being the section itself and the others its views from
+ * them: two parallel planes, or the planes through a shared generatrix. Each plane's own checks see the other planes, so that
+ * the part between them keeps its material for the connectors from every side. All planes share the connector's settings:
+ * their feasible ranges are what all allow, and a round connector fitted to the first plane is fitted to the next as well, and
+ * taken back to the earlier ones if that changed it. Nothing is moved to make anything fit.
+ */
+function planesConnectorChecks(
+  keys: SectionKeys,
+  shape: SectionedShape,
+  longestDimensionMm: number,
+  section: Section,
+  others: readonly Section[],
   edits: ConnectorEdits | undefined,
   allRanges: SectionRanges,
 ): SectionCheck {
@@ -2510,40 +2594,45 @@ function pairedConnectorChecks(
     return unavailable(`${PLANE_LABELS[0]}: ${first.resolved.status.unavailable}`);
   }
   const fitted = first?.resolved?.section.connector ?? connector;
-  // The second plane reads the first plane's fit as edited elsewhere, kept wherever it fits; typed values in the context of
+  // Each further plane reads the first plane's fit as edited elsewhere, kept wherever it fits; typed values in the context of
   // their last edit stay as typed there too, so that a value out of range is the field's error rather than corrected.
-  const atSecond = { ...atSecondPlane(section), connector: fitted };
-  const secondEdits = (current: Section): ConnectorEdits | undefined => {
-    if (edits === undefined || (fitted.type !== 'plug' && fitted.type !== 'dowel')) return edits;
-    const typed =
-      connector.type === fitted.type &&
-      edits[shape.kind] === roundContext(shape, longestDimensionMm, section, connector as RoundConnector);
+  const typed =
+    edits !== undefined &&
+    connector.type === fitted.type &&
+    (fitted.type === 'plug' || fitted.type === 'dowel') &&
+    edits[shape.kind] === roundContext(shape, longestDimensionMm, section, connector as RoundConnector);
+  const viewEdits = (current: Section, given: NonNullable<Section['connector']>): ConnectorEdits | undefined => {
+    if (edits === undefined || (given.type !== 'plug' && given.type !== 'dowel')) return edits;
     return {
       ...edits,
-      [shape.kind]: typed ? roundContext(shape, longestDimensionMm, current, fitted as RoundConnector) : SECOND_PLANE_EDIT,
+      [shape.kind]: typed ? roundContext(shape, longestDimensionMm, current, given as RoundConnector) : SECOND_PLANE_EDIT,
     };
   };
-  const second = connectorChecks(keys, shape, longestDimensionMm, atSecond, secondEdits(atSecond));
-  if (second?.resolved?.status.unavailable !== undefined) {
-    return unavailable(`${PLANE_LABELS[1]}: ${second.resolved.status.unavailable}`);
+  const checks: (SectionCheck | undefined)[] = [first];
+  let final = fitted;
+  for (const [index, other] of others.entries()) {
+    const view = { ...other, connector: final } as Section;
+    const check = connectorChecks(keys, shape, longestDimensionMm, view, viewEdits(view, final));
+    if (check?.resolved?.status.unavailable !== undefined) {
+      return unavailable(`${PLANE_LABELS[index + 1]}: ${check.resolved.status.unavailable}`);
+    }
+    final = check?.resolved?.section.connector ?? final;
+    checks.push(check);
   }
-  const final = second?.resolved?.section.connector ?? fitted;
   if (JSON.stringify(final) !== JSON.stringify(fitted)) {
-    // The second plane needed less: the first must take that too, as it is.
-    const back = connectorChecks(
-      keys,
-      shape,
-      longestDimensionMm,
-      { ...section, connector: final },
-      {
+    // A later plane needed less: the earlier ones must take that too, as it is.
+    const earlier = [section, ...others.slice(0, -1)];
+    const refits = earlier.some((view) => {
+      const back = connectorChecks(keys, shape, longestDimensionMm, { ...view, connector: final } as Section, {
         ...edits,
         [shape.kind]: SECOND_PLANE_EDIT,
-      },
-    );
-    if (JSON.stringify(back?.resolved?.section.connector ?? final) !== JSON.stringify(final)) {
+      });
+      return JSON.stringify(back?.resolved?.section.connector ?? final) !== JSON.stringify(final);
+    });
+    if (refits) {
       return unavailable(
-        'Кріплення не вдається підібрати так, щоб воно вміщувалося біля обох перерізів. Змініть положення перерізів, тип чи ' +
-          'розміри кріплення або оберіть «Без кріплення». Доти завантаження вимкнено.',
+        `Кріплення не вдається підібрати так, щоб воно вміщувалося біля ${others.length === 1 ? 'обох' : 'всіх'} перерізів. ` +
+          'Змініть положення перерізів, тип чи розміри кріплення або оберіть «Без кріплення». Доти завантаження вимкнено.',
       );
     }
   }
@@ -2555,17 +2644,20 @@ function pairedConnectorChecks(
     return both.min <= both.max + CONSTRAINT_ROUNDOFF_MM ? both : null;
   };
   const merged: SectionRanges = { ...allRanges };
-  for (const key of new Set([...Object.keys(first?.ranges ?? {}), ...Object.keys(second?.ranges ?? {})]) as Set<ParameterKey>) {
-    const both = intersect(first?.ranges[key], second?.ranges[key]);
-    if (both !== undefined) merged[key] = both;
+  const rangeKeys = new Set(checks.flatMap((check) => Object.keys(check?.ranges ?? {}))) as Set<ParameterKey>;
+  for (const key of rangeKeys) {
+    const all = checks.reduce<Interval | null | undefined>((both, check) => intersect(both, check?.ranges[key]), undefined);
+    if (all !== undefined) merged[key] = all;
   }
-  const errors: ParameterErrors = { ...prefixed(first, PLANE_LABELS[0]) };
-  for (const [key, message] of Object.entries(prefixed(second, PLANE_LABELS[1])) as [ParameterKey, string][]) {
-    errors[key] = errors[key] === undefined ? message : `${errors[key]} ${message}`;
-  }
-  const corrections = [...(first?.resolved?.status.corrections ?? []), ...(second?.resolved?.status.corrections ?? [])];
-  const status = first?.resolved?.status ?? second?.resolved?.status;
-  const values = { ...first?.resolved?.values, ...second?.resolved?.values };
+  const errors: ParameterErrors = {};
+  checks.forEach((check, index) => {
+    for (const [key, message] of Object.entries(prefixed(check, PLANE_LABELS[index] as string)) as [ParameterKey, string][]) {
+      errors[key] = errors[key] === undefined ? message : `${errors[key]} ${message}`;
+    }
+  });
+  const corrections = checks.flatMap((check) => check?.resolved?.status.corrections ?? []);
+  const status = checks.find((check) => check?.resolved !== undefined)?.resolved?.status;
+  const values = Object.assign({}, ...checks.map((check) => check?.resolved?.values ?? {})) as ParameterValues;
   return {
     errors,
     ranges: merged,
@@ -2579,6 +2671,214 @@ function pairedConnectorChecks(
           },
         }),
   };
+}
+
+/**
+ * A cylinder's planes through a shared generatrix: refused only where they are degenerate, a plane tangent to the cylinder or
+ * the planes coincident, from the engine's numerical safeguard; then the connector at each plane. A thin but valid part is
+ * built, and the panel warns about it. Nothing is moved to make the planes fit, and the second plane keeps its solution: the
+ * problem is said at the control last edited, which is what the user asked to change, and the model shown stays the last valid
+ * one. Whether the connectors at different planes keep apart inside the middle part is known only once they are built; the
+ * model's error then says so.
+ */
+function linkedChecks(
+  keys: SectionKeys,
+  shape: CylinderShape,
+  longestDimensionMm: number,
+  section: Extract<Section, { type: 'shared-generatrix' }>,
+  edits: ConnectorEdits | undefined,
+  edited: ParameterKey | undefined,
+): SectionCheck {
+  const scale = { longestDimensionMm };
+  const { type: _type, connector: _connector, ...planes } = section;
+  if (linkedMargin(shape, scale, planes) < -CONSTRAINT_ROUNDOFF_MM) {
+    const field = (Object.values(LINKED_NUMBER_KEYS) as ParameterKey[]).includes(edited as ParameterKey)
+      ? (edited as LinkedNumberKey)
+      : LINKED_KEYS.firstPlane;
+    return { errors: { [field]: linkedRefusal(field) }, ranges: {} };
+  }
+  const others = (planes.third ? [1, 2] : [1]).map((index) => atLinkedPlane(section, index));
+  return planesConnectorChecks(keys, shape, longestDimensionMm, section, others, edits, {});
+}
+
+/** The numeric fields of the section through a shared generatrix, by the engine's names of them. */
+const LINKED_NUMBER_KEYS = {
+  generatrix: 'cylinderLinkedGeneratrixDeg',
+  pair: 'cylinderLinkedFirstPlaneDeg',
+  dihedral: 'cylinderLinkedDihedralDeg',
+} as const satisfies Record<LinkedField, ParameterKey>;
+
+type LinkedNumberKey = (typeof LINKED_NUMBER_KEYS)[LinkedField];
+
+/** Why the value just set gives no section, at its own field: what is degenerate there, and that nothing else was changed. */
+function linkedRefusal(field: LinkedNumberKey): string {
+  const kept = ' Інші параметри й положення другої площини не змінено; показано останню правильну побудову.';
+  switch (field) {
+    case LINKED_NUMBER_KEYS.dihedral:
+      return (
+        'За цього кута друга площина лише торкається циліндра вздовж твірної або майже збігається з першою, тож не ' +
+        `відрізає частини.${kept}`
+      );
+    case LINKED_NUMBER_KEYS.generatrix:
+      return `За цього положення твірної одна з площин лише торкається циліндра й не відрізає частини.${kept}`;
+    default:
+      return `За цього повороту одна з площин лише торкається циліндра вздовж твірної й не відрізає частини.${kept}`;
+  }
+}
+
+/** The cylinder and the planes through its shared generatrix from valid values, the second plane's solution as chosen. */
+function linkedPlanesOf(values: ParameterValues, choices: ParameterChoices) {
+  const { printSizeMm, cylinderHeightRatio, cylinderOffsetRatio } = values;
+  const [generatrixDeg, firstPlaneDeg, dihedralDeg] = [
+    values[LINKED_KEYS.generatrix],
+    values[LINKED_KEYS.firstPlane],
+    values[LINKED_KEYS.dihedral],
+  ];
+  if (
+    printSizeMm === undefined ||
+    cylinderHeightRatio === undefined ||
+    cylinderOffsetRatio === undefined ||
+    generatrixDeg === undefined ||
+    firstPlaneDeg === undefined ||
+    dihedralDeg === undefined
+  ) {
+    return undefined;
+  }
+  const shape = { kind: 'cylinder', heightRatio: cylinderHeightRatio, offsetRatio: cylinderOffsetRatio } as const;
+  const scale = { longestDimensionMm: printSizeMm };
+  const planes = {
+    generatrixDeg: generatrixDeg % OBLIQUE_DIRECTION_LIMITS.max,
+    firstPlaneDeg,
+    dihedralDeg,
+    otherSide: choices[LINKED_KEYS.otherSide],
+    third: choices[LINKED_KEYS.third],
+  };
+  return { shape, scale, planes, valid: linkedMargin(shape, scale, planes) >= 0 };
+}
+
+/**
+ * A field's slider and buttons on its fixed scale: the whole turn of the generatrix, the pair's half turn and the dihedral angle
+ * up to 90°, less the ends where a plane is degenerate, rounded inwards to hundredths, and passing over each gap about a
+ * degenerate position, its ends rounded outwards, so that every value they reach is a valid section. The scale itself does not
+ * move as the other fields change; only its few gaps do. Undefined while a value is not valid or nothing is usable.
+ */
+export function linkedFieldRange(
+  values: ParameterValues,
+  choices: ParameterChoices,
+  field: LinkedField,
+  increment: number,
+): StepRange | undefined {
+  const linked = linkedPlanesOf(values, choices);
+  if (linked === undefined) return undefined;
+  const scale = linkedFieldScale(linked.shape, linked.scale, linked.planes, field);
+  if (scale === null) return undefined;
+  const shown = planeAngleRange(scale, increment);
+  // + 0 turns a rounded −0 into 0.
+  const [min, max] = [shown.min + 0, shown.max + 0];
+  const gaps = scale.gaps.map((gap) => ({
+    min: Math.floor(gap.min * 100) / 100,
+    max: Math.ceil(gap.max * 100) / 100,
+  }));
+  return { min, max, increment, ...(gaps.length === 0 ? {} : { gaps }) };
+}
+
+/**
+ * Whether "Інше положення другої площини" is offered: the other second plane at the same angle from the first, the same way
+ * round the shared generatrix the other way, which is another plane below 90° and a valid one. At 90° both are one plane.
+ */
+export function linkedAlternativeOffered(values: ParameterValues, choices: ParameterChoices): boolean {
+  const linked = linkedPlanesOf(values, choices);
+  return linked?.valid === true && linkedAlternativeUsable(linked.shape, linked.scale, linked.planes);
+}
+
+/** Whether "Перший переріз — осьовий" applies: the pair turned so that the first plane holds the axis is valid, and not so yet. */
+export function linkedAxialOffered(values: ParameterValues, choices: ParameterChoices): boolean {
+  const linked = linkedPlanesOf(values, choices);
+  if (linked === undefined || linked.planes.firstPlaneDeg === 0) return false;
+  return linkedMargin(linked.shape, linked.scale, { ...linked.planes, firstPlaneDeg: 0 }) >= 0;
+}
+
+/** The thinnest part of a valid section where it is thinner than a printed wall, and how thin, at the export scale. */
+export function linkedThinPart(
+  values: ParameterValues,
+  choices: ParameterChoices,
+): { readonly part: LinkedPart; readonly reachMm: number } | undefined {
+  const linked = linkedPlanesOf(values, choices);
+  if (linked === undefined || !linked.valid) return undefined;
+  const thinnest = linkedThinnest(linked.shape, linked.scale, linked.planes);
+  return thinnest !== undefined && thinnest.reachMm < CONNECTOR_MIN_WALL_MM ? thinnest : undefined;
+}
+
+/**
+ * The lower base as the diagram draws it, in units of its radius about its centre, x to the right and y up as seen from above:
+ * A, B and C where the shared generatrix and the first and the second plane's other generatrices meet the base, and C' of the
+ * other second plane where it is offered. Undefined for a construction that is not valid; the diagram then keeps the last one.
+ */
+export function linkedDiagram(values: ParameterValues, choices: ParameterChoices): LinkedDiagram | undefined {
+  const linked = linkedPlanesOf(values, choices);
+  if (linked === undefined || !linked.valid) return undefined;
+  const { radius } = roundDimensionsMm(linked.shape, linked.scale);
+  const toPoint = ([x, y]: readonly number[]) => ({ x: (x as number) / radius, y: (y as number) / radius });
+  const [a, b, c] = linkedCylinder(linked.shape, linked.scale, linked.planes).points.map(toPoint) as [
+    LinkedPoint,
+    LinkedPoint,
+    LinkedPoint,
+  ];
+  const alternative = linkedAlternativeUsable(linked.shape, linked.scale, linked.planes)
+    ? toPoint(linkedCylinder(linked.shape, linked.scale, { ...linked.planes, otherSide: !linked.planes.otherSide }).points[2])
+    : undefined;
+  return { a, b, c, third: linked.planes.third, ...(alternative === undefined ? {} : { alternative }) };
+}
+
+export type LinkedPoint = { readonly x: number; readonly y: number };
+
+export type LinkedDiagram = {
+  readonly a: LinkedPoint;
+  readonly b: LinkedPoint;
+  readonly c: LinkedPoint;
+  readonly third: boolean;
+  readonly alternative?: LinkedPoint;
+};
+
+/** "Інше положення другої площини": the other second plane, chosen explicitly; nothing else changes. */
+export function switchLinkedAlternative(state: ParameterState): ParameterState {
+  return { ...state, choices: { ...state.choices, [LINKED_KEYS.otherSide]: !state.choices[LINKED_KEYS.otherSide] } };
+}
+
+/** "Перший переріз — осьовий": the pair turned so that the first plane holds the axis, the angle between them kept. */
+export function linkedAxial(state: ParameterState): ParameterState {
+  const exact = { ...state.exact };
+  delete exact[LINKED_KEYS.firstPlane];
+  return { ...state, texts: { ...state.texts, [LINKED_KEYS.firstPlane]: '0' }, exact };
+}
+
+/**
+ * The first planes through a shared generatrix of this cylinder: through the generatrices at its angle and 120° and 240° on,
+ * with the angles that make those planes on the cylinder as it is, read off them; a right cylinder's are −30° and 60°. Undefined
+ * while the cylinder is not valid yet, and for a state that has its planes already. The texts show the angles rounded, the
+ * exact values stay behind them.
+ */
+export function startLinkedSection(state: ParameterState, values: ParameterValues): ParameterState | undefined {
+  const { cylinderSection, cylinderLinkedStarted } = state.choices;
+  if (cylinderSection !== 'shared-generatrix' || cylinderLinkedStarted) return undefined;
+  const { printSizeMm, cylinderHeightRatio, cylinderOffsetRatio } = values;
+  if (printSizeMm === undefined || cylinderHeightRatio === undefined || cylinderOffsetRatio === undefined) return undefined;
+  const shape = { kind: 'cylinder', heightRatio: cylinderHeightRatio, offsetRatio: cylinderOffsetRatio } as const;
+  const generatrixDeg = (values[LINKED_KEYS.generatrix] ?? LINKED_DEFAULTS.generatrixDeg) % OBLIQUE_DIRECTION_LIMITS.max;
+  const start = linkedStart(shape, { longestDimensionMm: printSizeMm }, generatrixDeg);
+  const texts = { ...state.texts };
+  const exact = { ...state.exact };
+  for (const [key, value] of [
+    [LINKED_KEYS.firstPlane, start.firstPlaneDeg],
+    [LINKED_KEYS.dihedral, start.dihedralDeg],
+  ] as const) {
+    // Without the rounding errors of the computation, such as −30,000000000000004 for −30.
+    const clean = Math.round(value * 1e9) / 1e9;
+    texts[key] = formatDecimal(clean);
+    exact[key] = clean;
+  }
+  const choices = { ...state.choices, cylinderLinkedStarted: true, [LINKED_KEYS.otherSide]: start.otherSide };
+  return { ...state, texts, exact, choices };
 }
 
 /** An edit context that matches no plane's: the stored values are then kept where they fit and corrected where they do not. */
@@ -2735,6 +3035,7 @@ function jointChecks(
       oblique: planar?.oblique.inclination ?? keys.offset,
       'oblique-apex': coneApexKeys.inclination,
       'axis-parallel': planar?.axisParallel?.offset ?? keys.offset,
+      'shared-generatrix': planar?.linked?.dihedral ?? keys.offset,
       'face-parallel': keys.offset,
       longitudinal: keys.offset,
       inclined: keys.offset,
@@ -2778,7 +3079,7 @@ const wordingOf = (cut: CutWording): 'vertical' | 'oblique' | 'parallel-to-bases
     ? 'oblique'
     : cut === 'cone-plate'
       ? 'cone'
-      : cut === 'axis-parallel'
+      : cut === 'axis-parallel' || cut === 'shared-generatrix'
         ? 'vertical'
         : cut;
 
@@ -2788,6 +3089,7 @@ const isBoxCutWording = (cut: CutWording): cut is BoxSectionSpec['type'] =>
 
 /** A part as the messages name it: by its place in a parallel cut, by its number in the others, where it has no place. */
 function partInMessage(part: 'lower' | 'upper', cut: CutWording): string {
+  if (cut === 'shared-generatrix') return part === 'lower' ? 'у середній частині' : 'у відрізаній частині';
   if (cut === 'vertical' || cut === 'oblique' || cut === 'oblique-apex' || cut === 'axis-parallel' || isBoxCutWording(cut)) {
     return part === 'lower' ? 'у частині 1' : 'у частині 2';
   }
@@ -3086,6 +3388,8 @@ export type PlanarSectionKeys = SectionKeys & {
   readonly position: 'cylinderSectionPercent' | 'coneSectionPercent';
   /** A plane parallel to an oblique cylinder's axis: the base-plane line's offset and the direction it moves along. */
   readonly axisParallel?: { readonly offset: 'cylinderAxisOffsetPercent'; readonly direction: 'cylinderAxisDirectionDeg' };
+  /** A cylinder's planes through a shared generatrix. */
+  readonly linked?: typeof LINKED_KEYS;
   readonly oblique: {
     readonly position: 'cylinderObliquePositionPercent' | 'coneObliquePositionPercent';
     readonly inclination: 'cylinderObliqueInclinationDeg' | 'coneObliqueInclinationDeg';
@@ -3143,6 +3447,18 @@ function scaledError(key: ScaledConnectorKey, text: string, unit: number): strin
   return 'error' in read ? read.error : undefined;
 }
 
+/** The fields of a cylinder's planes through a shared generatrix, its numbers and its switches. */
+export const LINKED_KEYS = {
+  generatrix: 'cylinderLinkedGeneratrixDeg',
+  firstPlane: 'cylinderLinkedFirstPlaneDeg',
+  dihedral: 'cylinderLinkedDihedralDeg',
+  otherSide: 'cylinderLinkedOtherSide',
+  third: 'cylinderLinkedThird',
+} as const;
+
+/** The numeric fields of a cylinder's planes through a shared generatrix, which the page follows to know the one last edited. */
+export const LINKED_TEXT_KEYS = [LINKED_KEYS.generatrix, LINKED_KEYS.firstPlane, LINKED_KEYS.dihedral] as const;
+
 /** The fields of a plane through a cone's apex, kept apart from those of a plane through a point on its axis. */
 export const coneApexKeys = { inclination: 'coneApexInclinationDeg', direction: 'coneApexDirectionDeg' } as const;
 
@@ -3196,6 +3512,7 @@ export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys | Plana
       direction: 'cylinderObliqueDirectionDeg',
     },
     axisParallel: { offset: 'cylinderAxisOffsetPercent', direction: 'cylinderAxisDirectionDeg' },
+    linked: LINKED_KEYS,
     separated: 'cylinderPartsSeparated',
     plate: { toggle: 'cylinderPlate', thickness: 'cylinderPlateThicknessMm', margin: 'cylinderPlateMarginMm' },
     connector: 'cylinderConnector',
@@ -3357,6 +3674,8 @@ function resolveSection(
       ? [coneApexKeys.direction, ...plateFields]
       : [...Object.values(coneApexKeys), ...plateFields],
     'axis-parallel': planar?.axisParallel === undefined ? [] : [...Object.values(planar.axisParallel), ...plateFields],
+    'shared-generatrix':
+      planar?.linked === undefined ? [] : [planar.linked.generatrix, planar.linked.firstPlane, planar.linked.dihedral],
     'face-parallel': boxFields('face-parallel'),
     longitudinal: boxFields('longitudinal'),
     'through-apex': boxFields('through-apex'),
@@ -3478,6 +3797,17 @@ function resolveSection(
           directionDeg: read(keys.direction) % OBLIQUE_DIRECTION_LIMITS.max,
           ...joining,
         };
+      }
+      case 'shared-generatrix': {
+        const linked = LINKED_KEYS;
+        const planes = {
+          generatrixDeg: read(linked.generatrix) % OBLIQUE_DIRECTION_LIMITS.max,
+          firstPlaneDeg: read(linked.firstPlane),
+          dihedralDeg: read(linked.dihedral),
+          otherSide: choices[linked.otherSide],
+          third: choices[linked.third],
+        };
+        return { type, ...planes, ...(connector === undefined ? {} : { connector }) };
       }
     }
   };
@@ -3709,6 +4039,9 @@ export const shapeParameterKeys: Readonly<
       'cylinderObliqueDirectionDeg',
       'cylinderAxisOffsetPercent',
       'cylinderAxisDirectionDeg',
+      'cylinderLinkedGeneratrixDeg',
+      'cylinderLinkedFirstPlaneDeg',
+      'cylinderLinkedDihedralDeg',
       'cylinderPlateThicknessMm',
       'cylinderPlateMarginMm',
       'cylinderDovetailSize',
@@ -3725,6 +4058,9 @@ export const shapeParameterKeys: Readonly<
     ],
     choices: [
       'cylinderSection',
+      'cylinderLinkedStarted',
+      'cylinderLinkedOtherSide',
+      'cylinderLinkedThird',
       'cylinderPartsSeparated',
       'cylinderPlate',
       'cylinderConnector',
@@ -3901,6 +4237,7 @@ function inactiveSectionKeys(kind: ShapeKind, choices: ParameterChoices): (keyof
     oblique: [...obliqueFields, ...plateFields],
     'oblique-apex': [...(choices.coneApexAxial ? [coneApexKeys.direction] : apexFields), 'coneApexAxial', ...plateFields],
     'axis-parallel': [...(planar?.axisParallel === undefined ? [] : Object.values(planar.axisParallel)), ...plateFields],
+    'shared-generatrix': planar?.linked === undefined ? [] : Object.values(planar.linked),
     'face-parallel': box === undefined ? [] : [box.Face, box.SectionPercent, ...secondFields],
     longitudinal:
       box === undefined
@@ -3951,7 +4288,11 @@ function inactiveSectionKeys(kind: ShapeKind, choices: ParameterChoices): (keyof
   ];
   const cuts = [...new Set([...Object.values(cutFields).flat(), ...allPlateFields])].filter((key) => !active.has(key));
   // Whether the first plane through the apex was set up is no setting, and starts over with the section.
-  const always: (keyof ParameterChoices)[] = ['coneApexStarted', ...(box === undefined ? [] : [box.LineAngleFor])];
+  const always: (keyof ParameterChoices)[] = [
+    'coneApexStarted',
+    'cylinderLinkedStarted',
+    ...(box === undefined ? [] : [box.LineAngleFor]),
+  ];
   return [...always, ...cuts, ...connectorFields, ...(section === undefined ? ([keys.separated, keys.connector] as const) : [])];
 }
 

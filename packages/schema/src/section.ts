@@ -7,6 +7,7 @@ export const SECTION_TYPES = [
   'oblique-apex',
   'horizontal',
   'axis-parallel',
+  'shared-generatrix',
   'face-parallel',
   'longitudinal',
   'through-apex',
@@ -377,6 +378,27 @@ export const horizontalSectionSchema = z
   });
 
 export type HorizontalSection = z.infer<typeof horizontalSectionSchema>;
+
+/**
+ * Two planes of a cylinder through one shared generatrix, and optionally a third through their other two: the generatrix at
+ * generatrixDeg around the lower base, from the direction the upper base leans to, +X, counter-clockwise seen from above; the
+ * first plane turned about it by firstPlaneDeg from the axial plane through it, the plane of the generatrix and the axis; the
+ * second turned from the first by the smaller dihedral angle between them, dihedralDeg, one way about the generatrix or, with
+ * otherSide, the other, which at 90° is the same plane. With `third`, the plane through the other generatrices of the first
+ * two. Every plane holds the lateral direction a, n·a = 0. The defaults are a right cylinder's planes through the generatrices
+ * at 0°, 120° and 240°, 60° apart and neither through the axis.
+ */
+export const sharedGeneratrixSectionSchema = z.strictObject({
+  type: z.literal('shared-generatrix'),
+  generatrixDeg: z.number().min(0).max(360).default(0),
+  firstPlaneDeg: z.number().gt(-180).lt(180).default(-30),
+  dihedralDeg: z.number().gt(0).max(90).default(60),
+  otherSide: z.boolean().default(false),
+  third: z.boolean().default(false),
+  connector: connectorSchema.optional(),
+});
+
+export type SharedGeneratrixSection = z.infer<typeof sharedGeneratrixSectionSchema>;
 
 /** The letters of a base's vertices in order around it: A, B, C, … for up to eight sides. */
 export const PRISM_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'] as const;
@@ -751,6 +773,7 @@ export const sectionSchema = z.discriminatedUnion('type', [
   apexSectionSchema,
   horizontalSectionSchema,
   axisParallelSectionSchema,
+  sharedGeneratrixSectionSchema,
   faceParallelSectionSchema,
   longitudinalSectionSchema,
   throughApexSectionSchema,

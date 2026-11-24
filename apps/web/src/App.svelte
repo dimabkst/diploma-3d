@@ -24,10 +24,13 @@ import {
   followTrace,
   initialParameterChoices,
   initialParameterTexts,
+  LINKED_TEXT_KEYS,
+  linkedAxial,
   magnetAllowancesChanged,
   normalAlongLateral,
   normalAlongManual,
   type ParameterExact,
+  type ParameterKey,
   type ParameterState,
   PLATE_TWIST_NOTICE,
   partsSeparated,
@@ -43,8 +46,10 @@ import {
   settleBoxChoices,
   startApexSection,
   startLineAngle,
+  startLinkedSection,
   startPoint,
   startTracePoint,
+  switchLinkedAlternative,
   switchTiltMode,
   throughHeightFoot,
   tracePointAtMidpoint,
@@ -55,6 +60,7 @@ import { initialTiltModes, type TiltMode, type TiltSolid } from './lib/model/til
 import {
   isAvailableShape,
   type PanelAction,
+  previewHighlightOf,
   printSizeField,
   sectionNumberFields,
   shapeLabel,
@@ -79,6 +85,18 @@ let model = $state.raw<ModelState>({ status: 'generating', stale: undefined });
 let controls = $state<ControlsPanel>();
 // Why the page replaced a connector, such as on turning a section plate on; cleared once it no longer applies.
 let plateNotice = $state<string | undefined>();
+// The control hovered or focused in the panel, whose effect the preview shows stronger.
+let activeField = $state<string>();
+// The section's field the user changed last, where a problem that any of them could cause is said.
+let editedField = $state<ParameterKey>();
+let seenLinkedTexts: Partial<Record<ParameterKey, string>> = {};
+$effect.pre(() => {
+  for (const key of LINKED_TEXT_KEYS) {
+    const text = parameterTexts[key];
+    if (seenLinkedTexts[key] !== undefined && seenLinkedTexts[key] !== text) editedField = key;
+    seenLinkedTexts = { ...seenLinkedTexts, [key]: text };
+  }
+});
 
 const selectedKind = $derived(isAvailableShape(selectedShape) ? selectedShape : undefined);
 const selectedShapeName = $derived(shapeLabel(selectedShape));
@@ -101,6 +119,7 @@ const request = $derived(
         tiltModes,
         connectorScale: lastConnectorScale,
         connectorEdits,
+        edited: editedField,
       }),
 );
 const connectorScale = $derived(
@@ -246,6 +265,14 @@ function runPanelAction(action: PanelAction) {
     );
     return;
   }
+  if (action === 'linked-alternative') {
+    applyState(switchLinkedAlternative(parameterState));
+    return;
+  }
+  if (action === 'linked-axial') {
+    applyState(linkedAxial(parameterState));
+    return;
+  }
   if (action === 'axial-section') {
     if (selectedKind !== undefined) applyState(axialAxisParallel(selectedKind, parameterState));
     return;
@@ -299,6 +326,12 @@ $effect.pre(() => {
 // The first plane through a cone's apex takes a valid angle for the cone it finds; after that nothing changes on its own.
 $effect.pre(() => {
   const next = startApexSection(parameterState, request?.values ?? {});
+  if (next !== undefined) untrack(() => applyState(next));
+});
+
+// The first planes through a cylinder's shared generatrix take the angles of its generatrices 120° apart; then they keep theirs.
+$effect.pre(() => {
+  const next = startLinkedSection(parameterState, request?.values ?? {});
   if (next !== undefined) untrack(() => applyState(next));
 });
 
@@ -417,6 +450,7 @@ function downloadPrintFile() {
         trialReady={trialFile !== undefined}
         onaction={runPanelAction}
         onroundedit={commitRoundEdit}
+        onactivefield={(key) => (activeField = key)}
       />
     </div>
     <div class="preview-area">
@@ -427,6 +461,7 @@ function downloadPrintFile() {
         {invalidFields}
         onfocusfield={(key) => controls?.focusField(key)}
         onretry={() => (attempt += 1)}
+        highlight={previewHighlightOf(panel, activeField)}
       />
     </div>
   </main>

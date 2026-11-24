@@ -298,6 +298,9 @@ describe('resolveModelRequest', () => {
       cylinderObliqueDirectionDeg: '0',
       cylinderAxisOffsetPercent: '0',
       cylinderAxisDirectionDeg: '90',
+      cylinderLinkedGeneratrixDeg: '0',
+      cylinderLinkedFirstPlaneDeg: '-30',
+      cylinderLinkedDihedralDeg: '60',
       cylinderDovetailSize: '1',
       cylinderDovetailLengthPercent: '50',
       cylinderDovetailClearanceMm: '0,2',
@@ -342,6 +345,9 @@ describe('resolveModelRequest', () => {
       cylinderSection: 'none',
       cylinderPartsSeparated: true,
       cylinderPlate: false,
+      cylinderLinkedOtherSide: false,
+      cylinderLinkedThird: false,
+      cylinderLinkedStarted: false,
       cylinderConnector: 'none',
       cylinderDovetailEntrance: 'standard',
       cylinderRoundCount: 1,
@@ -1980,6 +1986,7 @@ describe('a vertical section of the cylinder', () => {
         { value: 'parallel-to-bases', label: 'Паралельно основам' },
         { value: 'vertical', label: 'Вертикальний' },
         { value: 'oblique', label: 'Похилий' },
+        { value: 'shared-generatrix', label: 'Через спільну твірну' },
       ],
     });
   });
@@ -2245,6 +2252,7 @@ describe('an oblique section of the cylinder', () => {
         { value: 'parallel-to-bases', label: 'Паралельно основам' },
         { value: 'vertical', label: 'Вертикальний' },
         { value: 'oblique', label: 'Похилий' },
+        { value: 'shared-generatrix', label: 'Через спільну твірну' },
       ],
     });
     expect(sectionNumberFields(cut)).toMatchObject([

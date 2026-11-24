@@ -15,6 +15,7 @@ import {
 import type { TiltMode, TiltSolid } from '../model/tilt.ts';
 import {
   type ActionField,
+  type LinkedDiagramField,
   type NoteField,
   type NumericField,
   type PanelAction,
@@ -30,6 +31,7 @@ import Checkbox from './Checkbox.svelte';
 import Field from './Field.svelte';
 import FieldDisclosure from './FieldDisclosure.svelte';
 import HelpToggle from './HelpToggle.svelte';
+import LinkedBaseDiagram from './LinkedBaseDiagram.svelte';
 import NumberField from './NumberField.svelte';
 import ParameterSection from './ParameterSection.svelte';
 import SegmentedControl from './SegmentedControl.svelte';
@@ -48,6 +50,7 @@ let {
   trialReady,
   onaction,
   onroundedit,
+  onactivefield,
 }: {
   panel: ShapePanel;
   texts: ParameterTexts;
@@ -66,7 +69,47 @@ let {
   onaction: (action: PanelAction) => void;
   /** Called before a round connector's field changes by hand, while its other values are still as shown. */
   onroundedit: () => void;
+  /** The control being hovered, or else focused, by its field's key; undefined for none. */
+  onactivefield?: ((key: string | undefined) => void) | undefined;
 } = $props();
+
+// The control in use: hovered, or else focused. A diagram and the preview show what it changes.
+let hoveredField = $state<string>();
+let focusedField = $state<string>();
+const activeField = $derived(hoveredField ?? focusedField);
+$effect(() => {
+  onactivefield?.(activeField);
+});
+
+let sectionsElement = $state<HTMLElement | null>();
+
+// Followed on the groups as a whole: which control the pointer is over, and which has the focus, by its field's slot.
+$effect(() => {
+  const element = sectionsElement;
+  // Unmounted, as for a solid with fixed proportions, the binding holds null.
+  if (element == null) return;
+  // Removing a focused field while the panel updates fires its focusout within that update, where no state may change: every
+  // change waits for the update to finish.
+  const later = (change: () => void) => queueMicrotask(change);
+  const listeners: [string, (event: Event) => void][] = [
+    ['focusin', (event) => later(() => (focusedField = fieldKeyOf(event.target)))],
+    [
+      'focusout',
+      (event) => {
+        if (fieldKeyOf((event as FocusEvent).relatedTarget) === undefined) later(() => (focusedField = undefined));
+      },
+    ],
+    ['pointerover', (event) => later(() => (hoveredField = fieldKeyOf(event.target)))],
+    ['pointerleave', () => later(() => (hoveredField = undefined))],
+  ];
+  for (const [type, listener] of listeners) element.addEventListener(type, listener);
+  return () => {
+    for (const [type, listener] of listeners) element.removeEventListener(type, listener);
+  };
+});
+
+const fieldKeyOf = (target: EventTarget | null) =>
+  target instanceof Element ? (target.closest('[data-field-key]') as HTMLElement | null)?.dataset.fieldKey : undefined;
 
 // Per group, across shapes: a group keeps its open state and its fields keep their values while collapsed.
 let openSections = $state<Record<string, boolean>>({});
@@ -187,6 +230,13 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
   </p>
 {/snippet}
 
+{#snippet diagramView(field: LinkedDiagramField)}
+  <LinkedBaseDiagram
+    diagram={field.diagram}
+    active={activeField === undefined ? [] : (field.affects[activeField] ?? [])}
+  />
+{/snippet}
+
 {#snippet actionView(field: ActionField)}
   <div class="group-actions">
     <Button
@@ -218,7 +268,7 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
   {:else}
     {#if panel.note !== undefined}<p class="note">{panel.note}</p>{/if}
     {#if panel.help !== undefined}<HelpToggle id="reference-help" help={panel.help} />{/if}
-    <div class="sections">
+    <div class="sections" bind:this={sectionsElement}>
       {#each panel.sections as section (section.key)}
         {@const tilt = tiltOf(section)}
         {@const state = tilt === undefined ? undefined : offsetState(tilt)}
@@ -235,7 +285,10 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
           invalid={hasError(section)}
         >
           {#each section.fields as field (field.key)}
-            {#if field.type === 'choice'}
+            <div class="field-slot" data-field-key={field.key}>
+            {#if field.type === 'linked-diagram'}
+              {@render diagramView(field)}
+            {:else if field.type === 'choice'}
               <Field label={field.label} forId={field.key}>
                 <Select id={field.key} bind:value={choices[field.key]} options={field.options} />
               </Field>
@@ -251,6 +304,7 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
                 bind:open={() => openDisclosures[disclosureKey] ?? false, (open) => (openDisclosures[disclosureKey] = open)}
               >
                 {#each field.fields as inner (inner.key)}
+                  <div class="field-slot" data-field-key={inner.key}>
                   {#if inner.type === 'choice'}
                     <Field label={inner.label} forId={inner.key}>
                       <Select id={inner.key} bind:value={choices[inner.key]} options={inner.options} />
@@ -262,6 +316,7 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
                   {:else}
                     {@render numberField(inner)}
                   {/if}
+                  </div>
                 {/each}
               </FieldDisclosure>
             {:else if field.type === 'toggle'}
@@ -317,6 +372,7 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
             {:else}
               {@render numberField(field)}
             {/if}
+            </div>
           {/each}
           {#if section.help !== undefined}
             <HelpToggle id={`${section.key}-help`} help={section.help} />
@@ -394,6 +450,11 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
 
   .sections {
     border-bottom: 1px solid var(--color-border);
+  }
+
+  /* A field's own markup takes its place in the group's layout; the slot only names the field for hover and focus. */
+  .field-slot {
+    display: contents;
   }
 
   .group-actions {

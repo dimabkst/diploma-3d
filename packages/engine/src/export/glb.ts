@@ -30,7 +30,10 @@ export interface PreviewObject {
    * and are then mapped to the sheared surface by the inverse transpose of the shear.
    */
   readonly smoothingShear?: readonly [number, number];
-  /** 1 per triangle made by a cut or a connector, shown in the cut colour; the solid's own surface keeps its colour. */
+  /**
+   * 1 per triangle made by a cut or a connector, shown in the cut colour; the solid's own surface keeps its colour, 0. A value
+   * 2 + k marks a face on the section's plane k, shown in that plane's colour of `PreviewOptions.planeColors`.
+   */
   readonly newFaces?: Uint8Array;
   /**
    * A translation in millimetres, Z up, applied to the object's node only, such as to move the parts of a section
@@ -41,6 +44,36 @@ export interface PreviewObject {
   readonly displayTurn?: { readonly angleDeg: number; readonly axis: Vec3; readonly pivot: Vec3 };
   /** `plate`: a section plate, all of it in a neutral colour of its own, as it belongs to neither part of the solid. */
   readonly appearance?: 'plate';
+}
+
+/**
+ * A display-only line of the construction, such as a generatrix: a thin square rod between two points in Z-up millimetres, in
+ * its own material, named for the viewer to highlight. Never part of a printed solid.
+ */
+export interface PreviewGuide {
+  readonly name: string;
+  readonly from: Vec3;
+  readonly to: Vec3;
+  /** sRGB, as `#rrggbb`. */
+  readonly color: string;
+  /** Half the rod's width, in millimetres. */
+  readonly halfWidth: number;
+}
+
+/** What a preview shows beside its solids: the colours of a section's planes, by index, and its guides. */
+export interface PreviewOptions {
+  /** sRGB, as `#rrggbb`: the faces marked 2 + k are shown in the colour k, in a material named `plane-${k + 1}`. */
+  readonly planeColors?: readonly string[];
+  readonly guides?: readonly PreviewGuide[];
+}
+
+/** glTF's colour factors are linear: the sRGB `#rrggbb` decoded. */
+function linearColor(hex: string): [number, number, number] {
+  const channel = (offset: number) => {
+    const value = Number.parseInt(hex.slice(offset, offset + 2), 16) / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  };
+  return [channel(1), channel(3), channel(5)];
 }
 
 export const GLB_MEDIA_TYPE = 'model/gltf-binary';
@@ -89,7 +122,10 @@ export function toGltfPosition([x, y, z]: Vec3): Vec3 {
 const toGltfDirection = ([x, y, z]: Vec3): Vec3 => [x, z, -y];
 
 /** Builds a shaded preview with outlined feature edges from the same meshes that are exported for printing. */
-export async function createPreviewGlb(objects: readonly PreviewObject[]): Promise<Uint8Array<ArrayBuffer>> {
+export async function createPreviewGlb(
+  objects: readonly PreviewObject[],
+  options: PreviewOptions = {},
+): Promise<Uint8Array<ArrayBuffer>> {
   if (objects.length === 0) {
     throw new GeometryError('A preview needs at least one object.');
   }
@@ -125,6 +161,22 @@ export async function createPreviewGlb(objects: readonly PreviewObject[]): Promi
     return plateMaterial;
   };
 
+  const planeMaterials = (options.planeColors ?? []).map((color, index) =>
+    document
+      .createMaterial(`plane-${index + 1}`)
+      .setBaseColorFactor([...linearColor(color), 1])
+      .setMetallicFactor(0)
+      .setRoughnessFactor(0.75),
+  );
+  const materialOf = (object: PreviewObject, kind: number) =>
+    object.appearance === 'plate'
+      ? plateMaterialOnce()
+      : kind === 0
+        ? surfaceMaterial
+        : kind === 1
+          ? cutMaterialOnce()
+          : (planeMaterials[kind - 2] ?? cutMaterialOnce());
+
   for (const object of objects) {
     assertValidSolidMesh(object.mesh);
     const smooth = object.smoothShading ?? false;
@@ -132,8 +184,9 @@ export async function createPreviewGlb(objects: readonly PreviewObject[]): Promi
     const rightMesh = shear === undefined ? object.mesh : unshear(object.mesh, shear);
     const shaded = shadedTriangles(object.mesh, rightMesh, smooth, shear, object.newFaces);
     const mesh = document.createMesh(object.name);
-    for (const cut of [false, true]) {
-      const selected = selectTriangles(shaded, (triangle) => (object.newFaces?.[triangle] === 1) === cut);
+    const kinds = [...new Set(object.newFaces ?? [0])].sort((a, b) => a - b);
+    for (const kind of kinds.includes(0) ? kinds : [0, ...kinds]) {
+      const selected = selectTriangles(shaded, (triangle) => (object.newFaces?.[triangle] ?? 0) === kind);
       if (selected.positions.length === 0) continue;
       mesh.addPrimitive(
         document
@@ -141,7 +194,7 @@ export async function createPreviewGlb(objects: readonly PreviewObject[]): Promi
           .setMode(TRIANGLES)
           .setAttribute('POSITION', document.createAccessor().setType('VEC3').setArray(selected.positions).setBuffer(buffer))
           .setAttribute('NORMAL', document.createAccessor().setType('VEC3').setArray(selected.normals).setBuffer(buffer))
-          .setMaterial(object.appearance === 'plate' ? plateMaterialOnce() : cut ? cutMaterialOnce() : surfaceMaterial),
+          .setMaterial(materialOf(object, kind)),
       );
     }
 
@@ -167,9 +220,86 @@ export async function createPreviewGlb(objects: readonly PreviewObject[]): Promi
     scene.addChild(node);
   }
 
+  for (const guide of options.guides ?? []) {
+    const color = linearColor(guide.color);
+    const material = document
+      .createMaterial(`guide-${guide.name}`)
+      .setBaseColorFactor([...color, 1])
+      .setEmissiveFactor(color)
+      .setMetallicFactor(0)
+      .setRoughnessFactor(1)
+      // A thin rod is seen from every side; both sides keep it visible whatever its winding looks like from the camera.
+      .setDoubleSided(true);
+    const rod = guideRod(guide);
+    const mesh = document
+      .createMesh(`guide-${guide.name}`)
+      .addPrimitive(
+        document
+          .createPrimitive()
+          .setMode(TRIANGLES)
+          .setAttribute('POSITION', document.createAccessor().setType('VEC3').setArray(rod.positions).setBuffer(buffer))
+          .setAttribute('NORMAL', document.createAccessor().setType('VEC3').setArray(rod.normals).setBuffer(buffer))
+          .setMaterial(material),
+      );
+    scene.addChild(document.createNode(`guide-${guide.name}`).setMesh(mesh));
+  }
+
   // glTF-Transform allocates a regular ArrayBuffer; its typings predate the ArrayBuffer type parameter.
   return (await new WebIO().writeBinary(document)) as Uint8Array<ArrayBuffer>;
 }
+
+/**
+ * A guide's rod in glTF axes and metres, flat-shaded: its four long faces, square about the segment, and its two ends, each face
+ * two triangles of its own vertices.
+ */
+function guideRod({ from, to, halfWidth }: PreviewGuide): {
+  positions: Float32Array<ArrayBuffer>;
+  normals: Float32Array<ArrayBuffer>;
+} {
+  const along = subtract(to, from);
+  const direction = scaledBy(along, 1 / length(along));
+  const helper: Vec3 = Math.abs(direction[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+  const side = scaledBy(cross(direction, helper), 1 / length(cross(direction, helper)));
+  const other = cross(direction, side);
+  const corner = (end: Vec3, a: number, b: number): Vec3 => [
+    end[0] + halfWidth * (a * side[0] + b * other[0]),
+    end[1] + halfWidth * (a * side[1] + b * other[1]),
+    end[2] + halfWidth * (a * side[2] + b * other[2]),
+  ];
+  const square = [
+    [1, 1],
+    [-1, 1],
+    [-1, -1],
+    [1, -1],
+  ] as const;
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const face = (corners: readonly Vec3[], normal: Vec3) => {
+    for (const index of [0, 1, 2, 0, 2, 3]) {
+      positions.push(...toGltfPosition(corners[index] as Vec3));
+      normals.push(...toGltfDirection(normal));
+    }
+  };
+  square.forEach(([a, b], index) => {
+    const [c, d] = square[(index + 1) % 4] as readonly [number, number];
+    const outward = scaledBy(
+      [(a + c) * side[0] + (b + d) * other[0], (a + c) * side[1] + (b + d) * other[1], (a + c) * side[2] + (b + d) * other[2]],
+      1 / 2,
+    );
+    face([corner(from, a, b), corner(from, c, d), corner(to, c, d), corner(to, a, b)], outward);
+  });
+  face(
+    square.map(([a, b]) => corner(to, a, b)),
+    direction,
+  );
+  face(
+    [...square].reverse().map(([a, b]) => corner(from, a, b)),
+    scaledBy(direction, -1),
+  );
+  return { positions: new Float32Array(positions), normals: new Float32Array(normals) };
+}
+
+const scaledBy = (a: Vec3, factor: number): Vec3 => [a[0] * factor, a[1] * factor, a[2] * factor];
 
 /** A node's transform in glTF axes and metres, p ↦ R·p + t, R the unit quaternion (x, y, z, w); absent parts are the identity. */
 export interface NodeTransform {

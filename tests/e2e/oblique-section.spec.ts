@@ -67,7 +67,7 @@ test('cylinder: an oblique section starts at the default plane and exports two p
   await expect(entry(page, DIRECTION)).toHaveValue('0');
   await expect(parameterSection(page, 'Переріз').locator('summary')).toContainText('похилий');
   const options = await entry(page, 'Тип перерізу').locator('option').allTextContents();
-  expect(options).toEqual(['Без перерізу', 'Паралельно основам', 'Вертикальний', 'Похилий']);
+  expect(options).toEqual(['Без перерізу', 'Паралельно основам', 'Вертикальний', 'Похилий', 'Через спільну твірну']);
   const { names, objects } = await download(page);
   expect(names).toEqual(['cylinder-part-1', 'cylinder-part-2']);
   // Each part stands on the base it kept: 80 mm wide and deep, and the cut's ends rise to the whole height.

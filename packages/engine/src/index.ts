@@ -1,6 +1,7 @@
 export {
   buildModelArtifacts,
   CONNECTOR_PREVIEW_GAP_RELATIVE,
+  LINKED_PREVIEW_COLORS,
   type ModelArtifacts,
   previewSeparation,
   SECTION_PREVIEW_GAP_RELATIVE,
@@ -84,6 +85,7 @@ export {
   type AxisParallelCut,
   type AxisParallelCylinderSection,
   apexChordCrossesBase,
+  atLinkedPlane,
   atSecondPlane,
   axialApexAngles,
   axisParallelCylinderSection,
@@ -159,6 +161,22 @@ export {
   verticalOffsetLimitMm,
   verticalOffsetLimitPercent,
 } from './connectors/frame.ts';
+export {
+  LINKED_FIELD_DOMAINS,
+  type LinkedCylinder,
+  type LinkedField,
+  type LinkedPart,
+  type LinkedPlane,
+  type LinkedPlanes,
+  linkedAlternativeUsable,
+  linkedCylinder,
+  linkedFieldScale,
+  linkedFirstPlaneDomain,
+  linkedMargin,
+  linkedReaches,
+  linkedStart,
+  linkedThinnest,
+} from './connectors/linked.ts';
 export {
   buildMagnetPockets,
   type FramePoint as MagnetFramePoint,
@@ -288,6 +306,7 @@ export {
   type ConnectorPlan,
   type GeneratedModel,
   generateModel,
+  type LinkedInterface,
   type ModelSection,
   modelName,
   type SectionPart,

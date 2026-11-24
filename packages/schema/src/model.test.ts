@@ -745,6 +745,41 @@ describe('plane sections', () => {
     expect(modelSpecSchema.safeParse({ shape: cylinder, scale, section: { ...at(50), extra: 1 } }).success).toBe(false);
   });
 
+  it('takes planes through a cylinder’s shared generatrix, a right angle between them at most, and no other solid', () => {
+    const scale = { longestDimensionMm: 80 };
+    const shape = { kind: 'cylinder', heightRatio: 2 };
+    const linked = (fields: Record<string, unknown> = {}) =>
+      modelSpecSchema.safeParse({ shape, scale, section: { type: 'shared-generatrix', ...fields } });
+    const defaults = linked();
+    expect(defaults.success && defaults.data.section).toEqual({
+      type: 'shared-generatrix',
+      generatrixDeg: 0,
+      firstPlaneDeg: -30,
+      dihedralDeg: 60,
+      otherSide: false,
+      third: false,
+    });
+    expect(linked({ dihedralDeg: 90, otherSide: true, third: true }).success).toBe(true);
+    for (const fields of [
+      { dihedralDeg: 0 },
+      { dihedralDeg: 90.1 },
+      { dihedralDeg: Number.NaN },
+      { firstPlaneDeg: 180 },
+      { firstPlaneDeg: -180 },
+      { generatrixDeg: 360.1 },
+      { generatrixDeg: Number.POSITIVE_INFINITY },
+      { plate: { thicknessMm: 2, marginMm: 5 } },
+    ]) {
+      expect(linked(fields).success).toBe(false);
+    }
+    const cone = modelSpecSchema.safeParse({
+      shape: { kind: 'cone', heightRatio: 2 },
+      scale,
+      section: { type: 'shared-generatrix' },
+    });
+    expect(cone.success).toBe(false);
+  });
+
   it('offers parallel sections for the cylinder and the cone, and a plane through an apex for the cone alone', () => {
     const box = ['face-parallel', 'longitudinal', 'through-line', 'inclined'];
     expect(SECTIONS_BY_SHAPE).toEqual({
@@ -754,7 +789,7 @@ describe('plane sections', () => {
       prism: box,
       pyramid: ['face-parallel', 'through-apex', 'through-line', 'inclined'],
       tetrahedron: ['face-parallel', 'through-apex', 'through-line', 'inclined'],
-      cylinder: ['parallel-to-bases', 'vertical', 'oblique', 'axis-parallel'],
+      cylinder: ['parallel-to-bases', 'vertical', 'oblique', 'axis-parallel', 'shared-generatrix'],
       cone: ['parallel-to-bases', 'vertical', 'oblique', 'oblique-apex'],
       ball: ['horizontal'],
     });

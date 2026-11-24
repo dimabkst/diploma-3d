@@ -254,7 +254,7 @@ test('the cone keeps its own section settings, apart from the cylinder’s', asy
   await shapeSelect(page).selectOption({ label: 'Циліндр' });
   await openSection(page, 'Переріз');
   await expect(entry(page, 'Тип перерізу')).toHaveValue('none');
-  await expect(entry(page, 'Тип перерізу').locator('option')).toHaveCount(4);
+  await expect(entry(page, 'Тип перерізу').locator('option')).toHaveCount(5);
   await shapeSelect(page).selectOption({ label: 'Конус' });
   await expect(entry(page, 'Тип перерізу')).toHaveValue('parallel-to-bases');
   await expect(entry(page, POSITION)).toHaveValue('30');

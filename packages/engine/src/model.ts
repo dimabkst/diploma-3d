@@ -30,6 +30,7 @@ import {
   verifyDovetail,
 } from './connectors/dovetail.ts';
 import {
+  atLinkedPlane,
   atSecondPlane,
   axialApexAngles,
   axisParallelCylinderSection,
@@ -37,6 +38,7 @@ import {
   ballOffsetLimitPercent,
   ballSection,
   ballSliceMinimumMm,
+  CONNECTOR_MIN_WALL_MM,
   CONSTRAINT_ROUNDOFF_MM,
   coneApexChord,
   coneObliqueSection,
@@ -59,6 +61,7 @@ import {
   verticalCylinderSection,
   verticalOffsetLimitMm,
 } from './connectors/frame.ts';
+import { linkedCylinder, linkedMargin } from './connectors/linked.ts';
 import { buildMagnetPockets, type MagnetPlan, planMagnets, verifyMagnetPockets } from './connectors/magnet.ts';
 import { buildRoundConnectors, planRoundConnectors, type RoundConnectorPlan, verifyRoundConnectors } from './connectors/round.ts';
 import { buildTwist, planTwist, type TwistPlan, verifyTwist } from './connectors/twist.ts';
@@ -102,8 +105,11 @@ export interface Solid {
    * planes, on the negative (1) or positive (2) side of the normal of a vertical or oblique plane, or a separate removable dowel.
    */
   readonly part?: SectionPart;
-  /** For a dowel beside two parallel planes, the plane it joins at: 0 the lower, 1 the upper one. */
-  readonly joint?: 0 | 1;
+  /**
+   * For a dowel beside two parallel planes, the plane it joins at: 0 the lower, 1 the upper one; through a shared generatrix, the
+   * index of its plane.
+   */
+  readonly joint?: 0 | 1 | 2;
   /**
    * For a part: 1 per triangle that the cut or a connector made, 0 where the solid's original surface remains. The
    * preview shows these faces apart from the exterior.
@@ -115,7 +121,7 @@ export interface Solid {
  * Which part of a sectioned solid this is; `plate` is a section plate between the lower and the upper part, which belongs to
  * neither and is shown in its own colour.
  */
-export type SectionPart = 'lower' | 'middle' | 'upper' | 'part-1' | 'part-2' | 'plate' | 'dowel';
+export type SectionPart = 'lower' | 'middle' | 'upper' | 'part-1' | 'part-2' | 'part-3' | 'plate' | 'dowel';
 
 export type ConnectorPlan = DovetailPlan | RoundConnectorPlan | TwistPlan | MagnetPlan;
 
@@ -132,6 +138,19 @@ export interface ModelSection {
    * connector of the same settings, fitted to its own section. The middle part lies between them.
    */
   readonly secondInterface?: { readonly plane: Plane; readonly connector?: ConnectorPlan };
+  /**
+   * The planes through a shared generatrix, the first being `plane`, each with its normal pointing from the middle part, which
+   * lies on the negative side of all of them, to its own outer part, and its own connector of the same settings, fitted to its
+   * own section.
+   */
+  readonly linked?: { readonly interfaces: readonly LinkedInterface[] };
+}
+
+/** One plane of a section through a shared generatrix: the outer part beyond it and the connector joining that to the middle. */
+export interface LinkedInterface {
+  readonly plane: Plane;
+  readonly part: SectionPart;
+  readonly connector?: ConnectorPlan;
 }
 
 export interface GeneratedModel {
@@ -150,7 +169,8 @@ export interface GeneratedModel {
   readonly section?: ModelSection;
   /**
    * For a cube or parallelepiped, its vertices by the names its sections refer to, A–D on the lower base and A1–D1 above them,
-   * where the model has them: what the preview labels.
+   * where the model has them; for a cylinder's section through a shared generatrix, the ends of its generatrices: what the preview
+   * labels.
    */
   readonly vertexLabels?: readonly { readonly name: BoxVertex; readonly position: Vec3 }[];
 }
@@ -158,11 +178,17 @@ export interface GeneratedModel {
 type BuiltMeshes =
   | { readonly whole: TriangleMesh }
   | {
+      readonly planes: readonly Plane[];
+      readonly middle: MarkedMesh;
+      readonly outers: readonly MarkedMesh[];
+      readonly dowels: readonly (MarkedMesh & { readonly joint: 0 | 1 | 2 })[];
+    }
+  | {
       readonly type: SectionType;
       readonly plane: Plane;
       readonly parts: Readonly<Record<'lower' | 'upper', MarkedMesh>> & { readonly middle?: MarkedMesh };
       readonly plate?: TriangleMesh;
-      readonly dowels: readonly (MarkedMesh & { readonly joint?: 0 | 1 })[];
+      readonly dowels: readonly (MarkedMesh & { readonly joint?: 0 | 1 | 2 })[];
     };
 
 type MarkedMesh = { readonly mesh: TriangleMesh; readonly newFaces: Uint8Array };
@@ -175,6 +201,7 @@ const sectionNames: Readonly<Record<SectionType, string>> = {
   'oblique-apex': 'apex-section',
   horizontal: 'horizontal-section',
   'axis-parallel': 'axis-parallel-section',
+  'shared-generatrix': 'shared-generatrix-section',
   'face-parallel': 'face-parallel-section',
   longitudinal: 'longitudinal-section',
   'through-apex': 'apex-section',
@@ -190,6 +217,7 @@ const partNames: Readonly<Record<SectionType, readonly [SectionPart, SectionPart
   'oblique-apex': ['part-1', 'part-2'],
   horizontal: ['lower', 'upper'],
   'axis-parallel': ['part-1', 'part-2'],
+  'shared-generatrix': ['middle', 'part-1'],
   'face-parallel': ['part-1', 'part-2'],
   longitudinal: ['part-1', 'part-2'],
   'through-apex': ['part-1', 'part-2'],
@@ -203,6 +231,8 @@ const partNamesOf = (type: SectionType, plane: Plane): readonly [SectionPart, Se
 const HORIZONTAL_ROUNDOFF = 1e-9;
 const isBoxSectionType = (type: SectionType): type is BoxSectionSpec['type'] =>
   (BOX_SECTION_TYPES as readonly string[]).includes(type);
+/** The outer parts of a section through a shared generatrix, beyond its planes in their order. */
+const LINKED_PARTS = ['part-1', 'part-2', 'part-3'] as const;
 const partObjectName = (name: string, part: SectionPart): string =>
   part === 'lower' || part === 'middle' || part === 'upper' ? `${name}-${part}-part` : `${name}-${part}`;
 
@@ -224,14 +254,25 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
   assertVerticalOffset(spec);
   assertObliqueSplit(spec);
   assertBoxSplit(spec);
+  assertLinkedSplit(spec);
   const plateGeometry = planPlate(spec);
   const pair = parallelPair(spec);
-  const connector = pair === undefined ? planConnector(spec) : pair.lower.connector;
+  const linked = linkedInterfaces(spec);
+  const connector = pair !== undefined ? pair.lower.connector : linked !== undefined ? linked[0]?.connector : planConnector(spec);
   const built = withScope((track): BuiltMeshes => {
     const solid = checked(buildShape(kernel, track, spec.shape, spec.scale));
     if (spec.section === undefined) return { whole: meshFromManifold(solid) };
     const originalIds = originalIdsOf(solid);
     const marked = (part: Manifold) => collapseRoundingSlivers(meshWithNewFaces(part, originalIds));
+    if (linked !== undefined) {
+      const joined = joinLinkedParts(kernel, track, solid, linked, spec.scale.longestDimensionMm);
+      return {
+        planes: linked.map(({ plane }) => plane),
+        middle: marked(joined.middle),
+        outers: joined.outers.map(marked),
+        dowels: joined.dowels.map(({ dowel, joint }) => ({ ...meshWithNewFaces(dowel, originalIds), joint })),
+      };
+    }
     if (pair !== undefined) {
       const { normal } = pair.lower.plane;
       const regions = splitByParallelPlanes(track, solid, normal, [pair.lower.plane.offset, pair.upper.plane.offset]);
@@ -342,6 +383,49 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
     const { bounds, size } = solid.measurements;
     return { kind: shape.kind, name, spec, solids: [solid], bounds, size, ...vertexLabels };
   }
+  const dowelsOf = (dowels: readonly (MarkedMesh & { readonly joint?: 0 | 1 | 2 })[]) =>
+    // Curved but never sheared: a dowel lies along the cut's normal however the cylinder leans.
+    dowels.map(({ mesh, newFaces, joint }, index): Solid => {
+      assertValidSolidMesh(mesh);
+      return {
+        name: `${name}-dowel-${index + 1}`,
+        mesh,
+        measurements: measureMesh(mesh),
+        smoothShading: true,
+        part: 'dowel',
+        newFaces,
+        ...(joint === undefined ? {} : { joint }),
+      };
+    });
+  if ('outers' in built) {
+    const middle: Solid = { ...solidOf(partObjectName(name, 'middle'), built.middle.mesh), part: 'middle' };
+    const outers = built.outers.map((outer, index): Solid => {
+      const part = LINKED_PARTS[index] as SectionPart;
+      return { ...solidOf(partObjectName(name, part), outer.mesh), part, newFaces: outer.newFaces };
+    });
+    const parts = [{ ...middle, newFaces: built.middle.newFaces }, ...outers];
+    const bounds = unionBounds(parts.map((part) => part.measurements.bounds));
+    const interfaces = (linked ?? []).map(({ plane, connector: joint }, index) => ({
+      plane,
+      part: LINKED_PARTS[index] as SectionPart,
+      ...(joint === undefined ? {} : { connector: joint }),
+    }));
+    return {
+      kind: shape.kind,
+      name: `${name}-${built.planes.length === 2 ? 'two' : 'three'}-shared-generatrix-sections`,
+      spec,
+      solids: [...parts, ...dowelsOf(built.dowels)],
+      bounds,
+      size: subtract(bounds.max, bounds.min),
+      section: {
+        type: 'shared-generatrix',
+        plane: built.planes[0] as Plane,
+        ...(connector === undefined ? {} : { connector }),
+        linked: { interfaces },
+      },
+      vertexLabels: generatrixLabels(spec),
+    };
+  }
   const sides: readonly ('lower' | 'middle' | 'upper')[] =
     built.parts.middle === undefined ? ['lower', 'upper'] : ['lower', 'middle', 'upper'];
   const parts = sides.map((side): Solid => {
@@ -353,19 +437,7 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
   // Flat, apart from its rounded corners, which the preview shades smoothly; never sheared, as it lies in the cut's frame.
   const plates = built.plate === undefined ? [] : [plateSolid(`${name}-section-plate`, built.plate)];
   const bounds = unionBounds([...parts, ...plates].map((part) => part.measurements.bounds));
-  // Curved but never sheared: a dowel lies along the cut's normal however the cylinder leans.
-  const dowels = built.dowels.map(({ mesh, newFaces, joint }, index): Solid => {
-    assertValidSolidMesh(mesh);
-    return {
-      name: `${name}-dowel-${index + 1}`,
-      mesh,
-      measurements: measureMesh(mesh),
-      smoothShading: true,
-      part: 'dowel',
-      newFaces,
-      ...(joint === undefined ? {} : { joint }),
-    };
-  });
+  const dowels = dowelsOf(built.dowels);
   return {
     kind: shape.kind,
     name:
@@ -435,6 +507,134 @@ function joinParts(
   const joined = buildRoundConnectors(kernel, track, parts, connector);
   verifyRoundConnectors(kernel, track, solid, joined, connector, longest);
   return { lower: checked(joined.lower), upper: checked(joined.upper), dowels: joined.pins.map(checked) };
+}
+
+/**
+ * Cuts the cylinder by the planes through a shared generatrix and joins each outer part to the middle one, which lies on the
+ * negative side of every plane. The planes never meet inside the solid, so each cut leaves the outer part beyond it whole, and
+ * the middle part is all that remains. The connectors join the planes in turn, each built and verified on its outer part and the
+ * middle part as the connectors before it left it, as for two parallel planes. A connector at one plane keeps its walls from the
+ * other planes by its plan; here the cavities the connectors leave in the middle part must also keep a wall from each other.
+ */
+function joinLinkedParts(
+  kernel: GeometryKernel,
+  track: Track,
+  solid: Manifold,
+  interfaces: readonly LinkedInterface[],
+  longest: number,
+): { readonly middle: Manifold; readonly outers: readonly Manifold[]; readonly dowels: readonly LinkedDowel[] } {
+  const regions: Manifold[] = [];
+  let middle = solid;
+  for (const { plane } of interfaces) {
+    const split = splitByPlane(track, middle, plane);
+    regions.push(split.positive);
+    middle = split.negative;
+  }
+  const tolerance = connectorVolumeTolerance(longest);
+  const least = CONNECTOR_MIN_WALL_MM + LINKED_PROBE_DEPTH_MM;
+  const cavities: Manifold[] = [];
+  const outers: Manifold[] = [];
+  const dowels: LinkedDowel[] = [];
+  const plain = middle;
+  interfaces.forEach(({ connector, plane: { normal, offset } }, index) => {
+    const upper = regions[index] as Manifold;
+    let joined: JoinedParts;
+    try {
+      joined = joinParts(kernel, track, solid, { lower: middle, upper }, connector, longest);
+    } catch (error) {
+      // A connector that fits the plain middle part fails only on what the connectors before it cut there.
+      if (!(error instanceof GeometryError) || error instanceof ConnectorUnsuitableError || middle === plain) throw error;
+      joinParts(kernel, track, solid, { lower: plain, upper }, connector, longest);
+      throw new ConnectorUnsuitableError([{ code: 'interfaces-too-close' }]);
+    }
+    if (connector !== undefined) {
+      // A difference of solids that share a face leaves zero-volume flaps on it; just inside the face, nothing coincides.
+      const inside = track(middle.trimByPlane([-normal[0], -normal[1], -normal[2]], -(offset - LINKED_PROBE_DEPTH_MM)));
+      const cavity = substantial(track, track(inside.subtract(joined.lower)), tolerance);
+      if (cavity !== undefined) {
+        if (cavities.some((other) => other.minGap(cavity, least) < least)) {
+          throw new ConnectorUnsuitableError([{ code: 'interfaces-too-close' }]);
+        }
+        cavities.push(cavity);
+      }
+    }
+    middle = joined.lower;
+    outers.push(joined.upper);
+    for (const dowel of joined.dowels) dowels.push({ dowel, joint: index as 0 | 1 | 2 });
+  });
+  return { middle: checked(middle), outers, dowels };
+}
+
+/**
+ * The ends of the generatrices a section through a shared generatrix runs along, as a textbook names them: A A1 the shared one,
+ * B B1 and C C1 where the first and the second plane meet the lateral surface again, the third plane's edges.
+ */
+function generatrixLabels({ shape, scale, section }: ModelSpec): NonNullable<GeneratedModel['vertexLabels']> {
+  if (section?.type !== 'shared-generatrix' || shape.kind !== 'cylinder') return [];
+  const { axis, points } = linkedCylinder(shape, scale, section);
+  return (['A', 'B', 'C'] as const).flatMap((name, index) => {
+    const point = points[index] as Vec3;
+    return [
+      { name, position: point },
+      { name: `${name}1` as const, position: [point[0] + axis[0], point[1] + axis[1], point[2] + axis[2]] as Vec3 },
+    ];
+  });
+}
+
+/**
+ * How far inside a plane the cavities of its connector are compared with another's: what the wall between them may be
+ * misjudged by, a thousandth of a millimetre.
+ */
+const LINKED_PROBE_DEPTH_MM = 1e-3;
+
+interface LinkedDowel {
+  readonly dowel: Manifold;
+  readonly joint: 0 | 1 | 2;
+}
+
+/** The solid without the pieces a Boolean operation leaves of coincident surfaces; undefined where nothing else remains. */
+function substantial(track: Track, solid: Manifold, tolerance: number): Manifold | undefined {
+  const pieces = solid.decompose().map(track);
+  const kept = pieces.filter((piece) => piece.volume() > tolerance);
+  if (kept.length === 0) return undefined;
+  return kept.length === pieces.length ? solid : kept.reduce((union, piece) => track(union.add(piece)));
+}
+
+/**
+ * The planes of a section through a shared generatrix, each with the connector planned on its own section, which knows the other
+ * planes as faces of the middle part; undefined for any other section.
+ */
+function linkedInterfaces(spec: ModelSpec): readonly LinkedInterface[] | undefined {
+  const { shape, scale, section } = spec;
+  if (section?.type !== 'shared-generatrix' || shape.kind !== 'cylinder') return undefined;
+  return linkedCylinder(shape, scale, section).planes.map(({ normal, offset }, index): LinkedInterface => {
+    const plan = planConnector({ ...spec, section: atLinkedPlane(section, index) });
+    return {
+      plane: { normal, offset },
+      part: LINKED_PARTS[index] as SectionPart,
+      ...(plan === undefined ? {} : { connector: plan }),
+    };
+  });
+}
+
+/**
+ * A section through a shared generatrix: a cylinder's alone, with planes that are not degenerate, tangent or coincident or
+ * leaving a part of no volume, on the actual polygonal solid; see `linkedMargin`. Refused before anything is built. A thin but
+ * valid part is built: whether it prints is the user's to judge from the warning.
+ */
+function assertLinkedSplit({ shape, scale, section }: ModelSpec): void {
+  if (section?.type !== 'shared-generatrix') return;
+  if (shape.kind !== 'cylinder') {
+    throw new InvalidModelSpecError([`section.type: ${section.type} is a section of a cylinder.`]);
+  }
+  const margin = linkedMargin(shape, scale, section);
+  if (!(margin >= -CONSTRAINT_ROUNDOFF_MM)) {
+    throw new InvalidModelSpecError([
+      Number.isFinite(margin)
+        ? `section: a part reaches ${-margin} mm less from a plane than the geometry builds reliably; a plane is nearly tangent or the planes nearly coincide.`
+        : 'section: the planes coincide or touch the cylinder along the generatrix alone, which fixes no parts.',
+    ]);
+  }
 }
 
 /** A plane of two parallel ones, and the connector planned for its own section. */

@@ -36,6 +36,12 @@ export function describeModelError(error: unknown): string {
   if (error instanceof InfeasibleGeometryError) {
     return 'Тіло задовге й тонке для надійного обчислення. Збільште кут нахилу або зменште зміщення.';
   }
+  if (error instanceof ConnectorUnsuitableError && error.issues.some(({ code }) => code === 'interfaces-too-close')) {
+    return (
+      'Кріплення сусідніх перерізів у середній частині підходять одне до одного ближче ніж на 1,2 мм. Збільште кут між ' +
+      'площинами, зменште кріплення або оберіть «Без кріплення».'
+    );
+  }
   if (error instanceof ConnectorUnsuitableError) {
     return 'Кріплення не вміщується в ці частини. Змініть розмір, довжину кріплення або положення перерізу.';
   }

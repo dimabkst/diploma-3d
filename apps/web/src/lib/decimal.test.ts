@@ -137,6 +137,25 @@ describe('stepDecimal', () => {
   });
 });
 
+describe('a range with gaps', () => {
+  const angles: StepRange = { min: -53.06, max: 53.06, increment: 5, gaps: [{ min: -6.94, max: 6.94 }] };
+
+  it('steps over a gap to its far end, which is allowed, and on from there', () => {
+    expect(stepDecimal(-10, 1, angles)).toBe(6.94);
+    expect(stepDecimal(-6.94, 1, angles)).toBe(6.94);
+    expect(stepDecimal(6.94, 1, angles)).toBe(10);
+    expect(stepDecimal(10, -1, angles)).toBe(-6.94);
+    expect(stepDecimal(6.94, -1, angles)).toBe(-6.94);
+    expect(stepDecimal(-6.94, -1, angles)).toBe(-10);
+  });
+
+  it('snaps a slider position within a gap to its nearer end', () => {
+    expect(snapDecimal(-3, angles)).toBe(-6.94);
+    expect(snapDecimal(2, angles)).toBe(6.94);
+    expect(snapDecimal(20, angles)).toBe(20);
+  });
+});
+
 describe('snapDecimal', () => {
   it('reaches a range end that is no multiple of the increment, and keeps multiples inside the range', () => {
     const range = { min: -65.71, max: 65.71, increment: 5 };
