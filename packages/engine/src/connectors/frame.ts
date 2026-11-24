@@ -41,6 +41,11 @@ interface CutGeometry {
   readonly span: number;
   /** The solid's extent along n, within which any connector must stay. */
   readonly depthExtent: number;
+  /**
+   * Beside a second parallel plane, the part between the two: on which side of this plane it lies, and how thick it is along n.
+   * Both planes join it with the same connector, so whatever this one cuts or adds there meets what the other does.
+   */
+  readonly middle?: { readonly side: 'negative' | 'positive'; readonly thickness: number };
 }
 
 /** A cylinder's cut parallel to its bases: the lower part lies under the plane, the upper part above it. */
@@ -343,7 +348,18 @@ export interface ApexCut {
 }
 
 /** A plane without a plate: parallel to the base at this percentage of the height, or another plane. */
-export type PlaneCut = number | OffsetCut | ObliqueCut | ApexCut | AxisParallelCut | LinkedCut | BoxCut;
+export type PlaneCut = number | OffsetCut | ObliqueCut | ApexCut | AxisParallelCut | LinkedCut | BoxCut | PairedCut;
+
+/**
+ * A cylinder's or a cone's cut with a second plane parallel to the first: the first plane as its own construction makes it, a
+ * plane through the apex through the apex, and the second at `secondPositionPercent` of the whole solid's extent along their
+ * shared normal; seen from the second plane with `atSecond`. Both planes are of the original solid, not of a part.
+ */
+export interface PairedCut {
+  readonly first: Exclude<PlaneCut, PairedCut | LinkedCut | BoxCut>;
+  readonly secondPositionPercent: number;
+  readonly atSecond?: true;
+}
 
 /**
  * A cut that removes a section plate centred on its plane: the plane's own fields, a parallel cut's position among them, and
@@ -842,6 +858,7 @@ export function facetedCut(shape: RoundShape, scale: PhysicalScale, cut: PlaneCu
 
 /** The cone's own section for a plane without a plate. */
 function coneCut(shape: ConeShape, scale: PhysicalScale, cut: PlaneCut): ConeCutSection {
+  if (typeof cut !== 'number' && 'first' in cut) return pairedSection(shape, scale, cut, (first) => coneCut(shape, scale, first));
   if (typeof cut === 'number') return coneSection(shape, scale, cut);
   if ('box' in cut) throw new GeometryError('Only a cube or parallelepiped takes this section.');
   if ('offsetDirectionDeg' in cut) throw new GeometryError('A cone offers no plane parallel to its axis but the vertical one.');
@@ -873,12 +890,113 @@ export const conePlateThicknessRange = (shape: ConeShape, scale: PhysicalScale, 
 /** The solids that offer a section plate. */
 export type PlatedShape = ConeShape | BallShape | CylinderShape;
 
+/** A section's plane: its own, or for a cylinder's cut parallel to its bases, the horizontal plane through its centre. */
+export function planeOfSection(section: SolidSection): { readonly normal: Vec3; readonly offset: number } {
+  if ('plane' in section) return section.plane;
+  const { n, origin } = section.frame;
+  return { normal: n, offset: dot(n, origin) };
+}
+
+/** How far the whole solid reaches along a direction: its polyhedron's least and greatest n·x. */
+function extentAlong(shape: RoundShape, scale: PhysicalScale, n: Vec3): FrameExtent {
+  const dimensions = roundDimensionsMm(shape, scale);
+  const { vertices } = shape.kind === 'cone' ? conePolyhedron(dimensions) : cylinderPolyhedron(dimensions);
+  const along = vertices.map((vertex) => dot(n, vertex));
+  return { min: Math.min(...along), max: Math.max(...along) };
+}
+
+/** Both planes of a paired cut along their shared normal: the first's offset, the second's, and the solid's extent. */
+export function pairedOffsets(shape: RoundShape, scale: PhysicalScale, cut: PairedCut) {
+  const first = shape.kind === 'cone' ? coneCut(shape, scale, cut.first) : cylinderCut(shape, scale, cut.first);
+  const { normal, offset } = planeOfSection(first);
+  const extent = extentAlong(shape, scale, normal);
+  const second = extent.min + (cut.secondPositionPercent / 100) * (extent.max - extent.min);
+  return { normal, first: offset, second, extent };
+}
+
+/**
+ * The first plane's position along its normal in percent of the whole solid's extent along it: where a second plane at the same
+ * percentage would coincide with it; see `PairedCut`.
+ */
+export function roundPlanePercent(shape: RoundShape, scale: PhysicalScale, cut: PairedCut['first']): number {
+  const section = shape.kind === 'cone' ? coneCut(shape, scale, cut) : cylinderCut(shape, scale, cut);
+  const { normal, offset } = planeOfSection(section);
+  const extent = extentAlong(shape, scale, normal);
+  return (100 * (offset - extent.min)) / (extent.max - extent.min);
+}
+
+/**
+ * How thin the thinnest part of two parallel planes is along their normal, with the least it must be: the middle part between
+ * them, and the outer part beyond the second plane, the first plane's own having been checked by its cut; the rule of the
+ * other solids' cuts, a tenth of the extent and at least one wall. An application restriction that also refuses coincident
+ * planes and slivers; it does not make every thin part printable.
+ */
+export function pairedSplitReach(shape: RoundShape, scale: PhysicalScale, cut: PairedCut): Measurement {
+  const { first, second, extent } = pairedOffsets(shape, scale, cut);
+  const minimumMm = Math.max((SECTION_POSITION_LIMITS.min / 100) * (extent.max - extent.min), CONNECTOR_MIN_WALL_MM);
+  return {
+    valueMm: Math.min(Math.abs(second - first), second - extent.min, extent.max - second),
+    minimumMm,
+  };
+}
+
+/**
+ * The section of a paired cut at the plane it is seen from, with the middle part beside it: at the first plane, the first plane's
+ * own section; at the second, the same kind of section moved along the shared normal to the second plane's offset, with the
+ * first plane's frame, so that both sections face the same way and a dovetail's entrance lies at the same end of both. A plane
+ * through a cone's apex moved off it no longer passes through the apex.
+ */
+function pairedSection<S extends SolidSection>(
+  shape: RoundShape,
+  scale: PhysicalScale,
+  cut: PairedCut,
+  sectionOf: (first: PairedCut['first']) => S,
+): S {
+  const base = sectionOf(cut.first);
+  const { first, second } = pairedOffsets(shape, scale, cut);
+  const [own, other] = cut.atSecond === true ? [second, first] : [first, second];
+  const section = cut.atSecond === true ? (sectionAtOffset(shape, scale, base, second) as S) : base;
+  return { ...section, middle: { side: other > own ? 'positive' : 'negative', thickness: Math.abs(other - own) } };
+}
+
+/** The same kind of section as `base`, of the same solid, at another offset along its normal. */
+function sectionAtOffset(shape: RoundShape, scale: PhysicalScale, base: SolidSection, offset: number): SolidSection {
+  const dimensions = roundDimensionsMm(shape, scale);
+  const { normal, offset: own } = planeOfSection(base);
+  switch (base.type) {
+    case 'parallel-to-bases':
+      return cylinderSection(shape as CylinderShape, scale, (100 * offset) / dimensions.height);
+    case 'cone-parallel':
+      return coneSection(shape as ConeShape, scale, (100 * offset) / dimensions.height);
+    case 'vertical':
+      return verticalCylinderSection(
+        shape as CylinderShape,
+        scale,
+        sectionOffsetPercent(base.offset + offset - own, dimensions.radius),
+      );
+    case 'cone-vertical':
+      return coneVerticalSection(shape as ConeShape, scale, sectionOffsetPercent(base.offset + offset - own, dimensions.radius));
+    default: {
+      if (!isFaceted(base)) throw new GeometryError(`A ${base.type} section takes no second plane.`);
+      const polyhedron = shape.kind === 'cone' ? conePolyhedron(dimensions) : cylinderPolyhedron(dimensions);
+      const { u, v } = base.frame;
+      const moved = facetedSection(polyhedron, { n: normal, u, v }, offset, dimensions.radius);
+      return base.type === 'cone-oblique'
+        ? { ...base, ...moved, throughApex: false, anchor: moved.frame.origin }
+        : ({ ...base, ...moved } as SolidSection);
+    }
+  }
+}
+
 /** A cylinder's own section for a plane without a plate. */
 function cylinderCut(
   shape: CylinderShape,
   scale: PhysicalScale,
   cut: PlaneCut,
 ): ParallelCylinderSection | VerticalCylinderSection | ObliqueCylinderSection | AxisParallelCylinderSection {
+  if (typeof cut !== 'number' && 'first' in cut) {
+    return pairedSection(shape, scale, cut, (first) => cylinderCut(shape, scale, first));
+  }
   if (typeof cut === 'number') return cylinderSection(shape, scale, cut);
   if ('linked' in cut) return axisParallelCylinderSection(shape, scale, linkedPlaneCut(shape, scale, cut.linked, cut.planeIndex));
   if ('offsetDirectionDeg' in cut) return axisParallelCylinderSection(shape, scale, cut);
@@ -906,6 +1024,7 @@ export function cylinderFaceSection(shape: CylinderShape, scale: PhysicalScale, 
     type: 'cylinder-face',
     baseType: base.type,
     span: base.span,
+    ...(base.middle === undefined ? {} : { middle: base.middle }),
   };
 }
 
@@ -1161,8 +1280,7 @@ export function ballSliceMinimumMm(scale: PhysicalScale): number {
 }
 
 /** The part between two parallel planes of a ball as its connectors see it; undefined for a single cut. */
-export const middleOf = (section: SolidSection) =>
-  section.type === 'ball-horizontal' || section.type === 'box-section' ? section.middle : undefined;
+export const middleOf = (section: SolidSection) => section.middle;
 
 /**
  * The section as seen from its second plane: the same two planes with their roles swapped, so that the first plane's offset is
@@ -1170,6 +1288,7 @@ export const middleOf = (section: SolidSection) =>
  */
 export function atSecondPlane<S extends Section>(section: S): S {
   if (isBoxSectionSpec(section) && section.secondPositionPercent !== undefined) return { ...section, atSecond: true };
+  if (isRoundPairSpec(section)) return { ...section, atSecond: true };
   if (section.type !== 'horizontal' || section.secondOffsetPercent === undefined) return section;
   return { ...section, offsetPercent: section.secondOffsetPercent, secondOffsetPercent: section.offsetPercent };
 }
@@ -1189,7 +1308,18 @@ export const isBoxSectionSpec = (section: Section): section is Extract<Section, 
 export const hasSecondPlane = (section: Section): boolean =>
   section.type === 'horizontal'
     ? section.secondOffsetPercent !== undefined
-    : isBoxSectionSpec(section) && section.secondPositionPercent !== undefined;
+    : isRoundPairSpec(section) || (isBoxSectionSpec(section) && section.secondPositionPercent !== undefined);
+
+/** The section types of a cylinder or a cone that take a second parallel plane. */
+export const ROUND_PAIR_TYPES = ['parallel-to-bases', 'vertical', 'oblique', 'oblique-apex', 'axis-parallel'] as const;
+
+/** Whether the section is a cylinder's or a cone's with a second parallel plane. */
+export const isRoundPairSpec = (
+  section: Section,
+): section is Extract<Section, { type: (typeof ROUND_PAIR_TYPES)[number] }> & { readonly secondPositionPercent: number } =>
+  (ROUND_PAIR_TYPES as readonly string[]).includes(section.type) &&
+  'secondPositionPercent' in section &&
+  section.secondPositionPercent !== undefined;
 
 /**
  * A ball's section by the plane `height` above its centre. `downwards` turns n to −Z, u staying +Y, for the face below a
@@ -1296,6 +1426,14 @@ export const cutOfSection = (section: Section): SolidCut => {
     return { box: box as BoxSectionSpec, ...(atSecond === true ? { atSecond } : {}) };
   }
   const plane = planeCutOf(section);
+  if (isRoundPairSpec(section)) {
+    const { atSecond } = section as typeof section & { readonly atSecond?: true };
+    return {
+      first: plane as PairedCut['first'],
+      secondPositionPercent: section.secondPositionPercent,
+      ...(atSecond === true ? { atSecond } : {}),
+    };
+  }
   if (!('plate' in section) || section.plate === undefined) return plane;
   const plate = { thicknessMm: section.plate.thicknessMm, marginMm: section.plate.marginMm };
   return typeof plane === 'number' ? { positionPercent: plane, plate } : { ...plane, plate };

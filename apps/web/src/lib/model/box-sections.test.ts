@@ -262,6 +262,7 @@ describe('a second parallel plane of a box', () => {
     const group = groupOf('cube', 'Переріз', { cubeSectionPercent: '30' }, { ...chosen, cubeSecondCut: true });
     expect(labels(group)).toEqual([
       'Тип перерізу',
+      'Перший переріз',
       'Паралельно грані',
       'Перший переріз: від грані ABCD',
       'Другий переріз: положення',

@@ -456,7 +456,11 @@ export function previewSeparation({ solids, section, size }: GeneratedModel): nu
  */
 function previewObjects(model: GeneratedModel, gap: number): PreviewObject[] {
   const { solids, section } = model;
-  const shown = solids.map(withAppearance).map((object) => withPlaneTones(model, object));
+  const shown = solids
+    .map(withAppearance)
+    .map((object, index) =>
+      section?.linked !== undefined ? withPlaneTones(model, object) : withSectionTones(model, object, solids[index] as Solid),
+    );
   if (section === undefined || gap === 0) return shown;
   if (section.plate !== undefined) return explodedAroundPlate(model, shown, gap);
   if (section.secondInterface !== undefined) return explodedAlongPlanes(model, shown);
@@ -466,7 +470,9 @@ function previewObjects(model: GeneratedModel, gap: number): PreviewObject[] {
     // Locked lugs cannot be pulled through their ledges: the upper part is shown turned to where it comes off, and withdrawn.
     const displayOffset = scaled(plane.normal, gap);
     const displayTurn = { angleDeg: -TWIST_TRAVEL_DEG, axis: connector.frame.n, pivot: connector.frame.origin };
-    return solids.map((solid) => (onPositiveSide(solid) ? { ...solid, displayOffset, displayTurn } : solid));
+    return shown.map((object, index) =>
+      onPositiveSide(solids[index] as Solid) ? { ...object, displayOffset, displayTurn } : object,
+    );
   }
   const sliding = connector?.type === 'dovetail' ? connector : undefined;
   // Parts below and above a horizontal plane slide apart upwards; numbered parts of any other plane, the tongue's part uphill.
@@ -474,7 +480,7 @@ function previewObjects(model: GeneratedModel, gap: number): PreviewObject[] {
   const direction = sliding === undefined ? plane.normal : tongueMoves ? scaled(sliding.frame.u, -1) : sliding.frame.u;
   const offset = scaled(direction, (sliding?.exitDistance ?? 0) + gap);
   const moves = (solid: Solid) => (tongueMoves ? solid.part === 'part-1' : onPositiveSide(solid));
-  return solids.map((solid) => (moves(solid) ? { ...solid, displayOffset: offset } : solid));
+  return shown.map((object, index) => (moves(solids[index] as Solid) ? { ...object, displayOffset: offset } : object));
 }
 
 const scaled = (a: Vec3, factor: number): Vec3 => [a[0] * factor, a[1] * factor, a[2] * factor];
@@ -568,7 +574,7 @@ function explodedAroundMiddle(
  */
 export const LINKED_PREVIEW_COLORS = {
   shared: '#ffffff',
-  planes: ['#ff9f43', '#2ed1a2', '#b98cff'],
+  planes: ['#f7bb6b', '#2ed1a2', '#b98cff'],
 } as const;
 
 /**
@@ -577,7 +583,10 @@ export const LINKED_PREVIEW_COLORS = {
  * file and the connectors never see them. Nothing for any other section.
  */
 function linkedPreviewOptions(model: GeneratedModel): PreviewOptions {
-  if (model.section?.linked === undefined || model.vertexLabels === undefined) return {};
+  if (model.section === undefined) return {};
+  // Any other section: its first plane orange and a second parallel one green, faces and outlines alike.
+  if (model.section.linked === undefined) return { planeColors: [...SECTION_COLORS], planeOutlines: true };
+  if (model.vertexLabels === undefined) return {};
   const positions = Object.fromEntries(model.vertexLabels.map(({ name, position }) => [name, position]));
   const halfWidth = GUIDE_HALF_WIDTH_RELATIVE * Math.max(...model.size);
   const colors = [LINKED_PREVIEW_COLORS.shared, LINKED_PREVIEW_COLORS.planes[0], LINKED_PREVIEW_COLORS.planes[1]];
@@ -590,6 +599,86 @@ function linkedPreviewOptions(model: GeneratedModel): PreviewOptions {
       color: colors[index] as string,
       halfWidth,
     })),
+  };
+}
+
+/**
+ * The colours of a section's first and second plane wherever two parallel planes, or a single one, cut a solid: the first and the
+ * second plane's of the section through a shared generatrix, its palette the one source of both.
+ */
+export const SECTION_COLORS = [LINKED_PREVIEW_COLORS.planes[0], LINKED_PREVIEW_COLORS.planes[1]] as const;
+
+/**
+ * A part's cut faces by the section they belong to, 2 for the first plane and 3 for the second, whichever lies lower: the faces
+ * on a plane, and every connector face reached from them across cut faces, as a pocket's walls are from its opening, so that the
+ * middle part shows both colours and the faces that mate at a plane show the same one. A face reached from neither takes the
+ * nearer plane. A dowel takes its own plane's colour; with a single plane, every cut face is the first plane's.
+ */
+function withSectionTones(model: GeneratedModel, object: PreviewObject, solid: Solid): PreviewObject {
+  const { section } = model;
+  const { newFaces, mesh } = object;
+  if (section === undefined || newFaces === undefined || object.appearance === 'plate') return object;
+  const planes = [
+    { plane: section.plane, index: section.sectionIndex ?? 0 },
+    ...(section.secondInterface === undefined
+      ? []
+      : [{ plane: section.secondInterface.plane, index: section.secondInterface.sectionIndex }]),
+  ];
+  const toned = (index: number) => Uint8Array.from(newFaces, (kind) => (kind === 1 ? 2 + index : kind));
+  if (planes.length === 1) return { ...object, newFaces: toned(0) };
+  if (solid.part === 'dowel') return { ...object, newFaces: toned(planes[solid.joint ?? 0]?.index ?? 0) };
+  const tolerance = PLANE_FACE_RELATIVE * Math.max(...model.size);
+  const count = triangleCount(mesh);
+  // Union-find over the cut faces that share an edge.
+  const parent = Array.from({ length: count }, (_, triangle) => triangle);
+  const root = (triangle: number): number => {
+    let current = triangle;
+    while (parent[current] !== current) {
+      parent[current] = parent[parent[current] as number] as number;
+      current = parent[current] as number;
+    }
+    return current;
+  };
+  const edges = new Map<string, number>();
+  for (let triangle = 0; triangle < count; triangle += 1) {
+    if (newFaces[triangle] !== 1) continue;
+    const corners = triangleAt(mesh, triangle);
+    corners.forEach((from, corner) => {
+      const to = corners[(corner + 1) % 3] as number;
+      const key = from < to ? `${from}:${to}` : `${to}:${from}`;
+      const other = edges.get(key);
+      if (other === undefined) edges.set(key, triangle);
+      else parent[root(triangle)] = root(other);
+    });
+  }
+  const componentIndex = new Map<number, number>();
+  const centroidOf = (triangle: number) => {
+    const points = triangleAt(mesh, triangle).map((vertex) => vertexAt(mesh, vertex));
+    return [0, 1, 2].map((axis) => points.reduce((sum, point) => sum + (point[axis] as number), 0) / 3) as unknown as Vec3;
+  };
+  for (let triangle = 0; triangle < count; triangle += 1) {
+    if (newFaces[triangle] !== 1) continue;
+    const corners = triangleAt(mesh, triangle).map((vertex) => vertexAt(mesh, vertex));
+    const on = planes.find(({ plane: { normal, offset } }) =>
+      corners.every((corner) => Math.abs(dot(normal, corner) - offset) <= tolerance),
+    );
+    if (on !== undefined) componentIndex.set(root(triangle), on.index);
+  }
+  return {
+    ...object,
+    newFaces: Uint8Array.from(newFaces, (kind, triangle) => {
+      if (kind !== 1) return kind;
+      const known = componentIndex.get(root(triangle));
+      if (known !== undefined) return 2 + known;
+      const centre = centroidOf(triangle);
+      const nearest = planes.reduce((best, next) =>
+        Math.abs(dot(next.plane.normal, centre) - next.plane.offset) <
+        Math.abs(dot(best.plane.normal, centre) - best.plane.offset)
+          ? next
+          : best,
+      );
+      return 2 + nearest.index;
+    }),
   };
 }
 

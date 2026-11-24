@@ -5,6 +5,7 @@ import {
   obliquePlaneContainsAxis,
   ROUND_CONNECTOR_PROPORTIONS,
   ROUND_CONNECTOR_STEPS_MM,
+  ROUND_PAIR_TYPES,
   type TrapezoidKind,
   TWIST_STEPS_MM,
   trapezoidKind,
@@ -161,6 +162,8 @@ export type NumericField = {
   readonly describedBy?: string;
   /** A setting of a round connector: editing it by hand ends what the section's capacity decided for it. */
   readonly editsRoundConnector?: boolean;
+  /** The field of a section's first (0) or second (1) plane, marked with that plane's colour in the preview. */
+  readonly sectionTone?: 0 | 1;
 };
 
 /** A parameter picked from fixed options, such as the base type or the regular polygon. */
@@ -283,7 +286,19 @@ export type LinkedDiagramField = {
 /** An element of the construction that a control changes, in the diagram and in the 3D preview alike. */
 export type LinkedElement = 'A' | 'B' | 'C' | 'AB' | 'AC' | 'BC' | 'alternative';
 
+/**
+ * The name of a section's first or second plane above its fields, with the colour its cut faces have in the preview; shown where
+ * two parallel planes are and the fields do not name their plane themselves.
+ */
+export type SectionMarkField = {
+  readonly type: 'section-mark';
+  readonly key: string;
+  readonly label: string;
+  readonly tone: 0 | 1;
+};
+
 export type ParameterField =
+  | SectionMarkField
   | LinkedDiagramField
   | NumericField
   | ChoiceField
@@ -1751,8 +1766,8 @@ function ballPlaneSection(choices: ParameterChoices, context: PanelContext): Par
   const plateNote = 'ball-second-cut-plate';
   const planes: ParameterField[] = twoPlanes
     ? [
-        offsetField(keys.offset, 'Перший переріз: зміщення від центра'),
-        offsetField(keys.secondCut.offset, 'Другий переріз: зміщення від центра'),
+        { ...offsetField(keys.offset, 'Перший переріз: зміщення від центра'), sectionTone: 0 },
+        { ...offsetField(keys.secondCut.offset, 'Другий переріз: зміщення від центра'), sectionTone: 1 },
         { type: 'action', key: 'ball-remove-second-cut', label: 'Прибрати другий переріз', action: 'remove-second-cut' },
       ]
     : [
@@ -1887,6 +1902,81 @@ export function previewHighlightOf(panel: ShapePanel, activeKey: string | undefi
     materials: [...new Set(parts.flatMap(({ materials }) => materials))],
     labels: [...new Set(parts.flatMap(({ labels }) => labels))],
   };
+}
+
+/** How a cylinder's or a cone's second plane is set, after its cut's own explanation. */
+const ROUND_SECOND_CUT_HELP =
+  '«Додати паралельний переріз» додає другу площину, паралельну першій. Перша лишається такою, як її задано, — площина ' +
+  'через вершину й далі проходить через вершину; друга лише паралельна їй. Положення другого перерізу — у відсотках ширини ' +
+  'фігури вздовж спільної нормалі площин: 0 % і 100 % — площини, що лише торкаються фігури з двох боків. Другий переріз ' +
+  'може лежати з будь-якого боку від першого. Дві площини ділять фігуру на три частини; у перегляді перший переріз ' +
+  'помаранчевий, другий — зелений.';
+
+/**
+ * A cylinder's or a cone's cut with the second parallel plane's controls before "Розсунути частини": the first plane's name and
+ * colour above its fields, the second's position and its removal; or the action that adds it. Two planes take no section plate,
+ * whose switch then stays, off, with the reason, as a ball's.
+ */
+function withSecondPlane(
+  kind: 'cylinder' | 'cone',
+  keys: PlanarSectionKeys,
+  fields: readonly ParameterField[],
+  twoPlanes: boolean,
+  plateOn: boolean,
+): ParameterField[] {
+  const second = keys.secondCut;
+  if (second === undefined) return [...fields];
+  const plate = keys.plate;
+  const plateNote = `${kind}-second-cut-plate`;
+  const isPlateField = (field: ParameterField) =>
+    plate !== undefined &&
+    (field.key === plate.toggle ||
+      field.key === plate.thickness ||
+      field.key === plate.margin ||
+      field.key.startsWith(`${kind}-plate-`));
+  const own = twoPlanes ? fields.filter((field) => !isPlateField(field)) : [...fields];
+  const separatedAt = own.findIndex((field) => field.key === keys.separated);
+  const at = separatedAt < 0 ? own.length : separatedAt;
+  const block: ParameterField[] = twoPlanes
+    ? [
+        {
+          type: 'number',
+          key: second.offset,
+          label: 'Другий переріз: положення',
+          suffix: '%',
+          range: sectionPositionRange,
+          sectionTone: 1,
+        },
+        { type: 'action', key: `${kind}-remove-second-cut`, label: 'Прибрати другий переріз', action: 'remove-second-cut' },
+      ]
+    : [
+        {
+          type: 'action',
+          key: `${kind}-add-second-cut`,
+          label: 'Додати паралельний переріз',
+          action: 'add-second-cut',
+          ...(plateOn ? { disabled: true } : {}),
+        },
+        ...(plateOn
+          ? [{ type: 'note' as const, key: plateNote, text: 'Паралельний переріз недоступний із січною пластиною.' }]
+          : []),
+      ];
+  const plateAfter: ParameterField[] =
+    twoPlanes && plate !== undefined
+      ? [
+          { type: 'toggle', key: plate.toggle, label: 'Січна пластина', disabled: true, describedBy: plateNote },
+          { type: 'note', key: plateNote, text: 'Січна пластина недоступна з двома паралельними перерізами.' },
+        ]
+      : [];
+  return [
+    ...(twoPlanes
+      ? [{ type: 'section-mark' as const, key: `${kind}-first-section`, label: 'Перший переріз', tone: 0 as const }]
+      : []),
+    ...own.slice(0, at),
+    ...block,
+    ...own.slice(at),
+    ...plateAfter,
+  ];
 }
 
 /** The part of a section through a shared generatrix as a warning names it. */
@@ -2148,10 +2238,15 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
     oblique: kind === 'cone' ? coneObliqueSectionHelp : obliqueSectionHelp,
     'oblique-apex': coneApexSectionHelp,
   };
-  const shownHelp = help[chosen];
+  const pairable = (ROUND_PAIR_TYPES as readonly string[]).includes(chosen);
+  const twoPlanes = pairable && secondCutChosen(kind, choices);
+  const basicHelp = help[chosen];
+  const shownHelp =
+    basicHelp === undefined || !pairable ? basicHelp : { ...basicHelp, text: `${basicHelp.text}\n\n${ROUND_SECOND_CUT_HELP}` };
   // Short enough for the summary line; the cut's type is the first thing its group shows.
-  const withPlate = chosen !== 'none' && plateOn;
-  return section(`${kind}-section`, 'Переріз', [selector, ...details[chosen]], {
+  const withPlate = chosen !== 'none' && plateOn && !twoPlanes;
+  const fields = pairable ? withSecondPlane(kind, keys, details[chosen], twoPlanes, plateOn) : details[chosen];
+  return section(`${kind}-section`, 'Переріз', [selector, ...fields], {
     initiallyOpen: false,
     help:
       withPlate && shownHelp !== undefined
@@ -2161,15 +2256,17 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
       text:
         chosen === 'none'
           ? 'немає'
-          : withPlate
-            ? 'з пластиною'
-            : axial || (apexAxial && chosen === 'oblique-apex')
-              ? 'осьовий'
-              : chosen === 'shared-generatrix'
-                ? choices[LINKED_KEYS.third]
-                  ? 'три перерізи'
-                  : 'два перерізи'
-                : namesOf(chosen).toLowerCase(),
+          : twoPlanes
+            ? 'два перерізи'
+            : withPlate
+              ? 'з пластиною'
+              : axial || (apexAxial && chosen === 'oblique-apex')
+                ? 'осьовий'
+                : chosen === 'shared-generatrix'
+                  ? choices[LINKED_KEYS.third]
+                    ? 'три перерізи'
+                    : 'два перерізи'
+                  : namesOf(chosen).toLowerCase(),
       highlighted: chosen !== 'none',
     },
   });
@@ -2704,10 +2801,13 @@ function boxPlaneSection(kind: BoxSolid, choices: ParameterChoices, context: Pan
   const planes: ParameterField[] = !isMode(chosen)
     ? []
     : [
+        ...(twoPlanes
+          ? [{ type: 'section-mark' as const, key: `${kind}-first-section`, label: 'Перший переріз', tone: 0 as const }]
+          : []),
         ...modeFields[chosen],
         ...(twoPlanes
           ? [
-              percentField(second.offset, 'Другий переріз: положення'),
+              { ...percentField(second.offset, 'Другий переріз: положення'), sectionTone: 1 as const },
               ...(chosen === 'through-line'
                 ? [note('second-from', 'Відсотки — тієї самої ширини фігури, що й для першого перерізу.')]
                 : []),

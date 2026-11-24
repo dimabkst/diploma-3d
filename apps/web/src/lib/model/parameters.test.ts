@@ -280,6 +280,8 @@ describe('resolveModelRequest', () => {
       coneDowelUpperClearanceMm: '0,5',
       ballSectionOffsetPercent: '0',
       ballSectionSecondOffsetPercent: '40',
+      cylinderSectionSecondPercent: '40',
+      coneSectionSecondPercent: '40',
       ballPlateThicknessMm: '1,6',
       ballPlateMarginMm: '10',
       ballDovetailSize: '1',
@@ -369,6 +371,8 @@ describe('resolveModelRequest', () => {
       ballPartsSeparated: true,
       ballPlate: false,
       ballSecondCut: false,
+      cylinderSecondCut: false,
+      coneSecondCut: false,
       ...boxInitialChoices('cube'),
       ...boxInitialChoices('cuboid'),
       ...boxInitialChoices('parallelepiped'),
@@ -1413,6 +1417,7 @@ describe('a cylinder section parallel to the bases', () => {
     expect(group.fields.map((field) => [field.type, field.key])).toEqual([
       ['choice', 'cylinderSection'],
       ['number', 'cylinderSectionPercent'],
+      ['action', 'cylinder-add-second-cut'],
       ['toggle', 'cylinderPartsSeparated'],
       ['toggle', 'cylinderPlate'],
     ]);
@@ -1537,6 +1542,7 @@ describe('a dovetail joining the cylinder’s parts', () => {
     expect(cut?.fields.map((field) => field.key)).toEqual([
       'cylinderSection',
       'cylinderSectionPercent',
+      'cylinder-add-second-cut',
       'cylinderPartsSeparated',
       'cylinderPlate',
     ]);
@@ -1969,6 +1975,7 @@ describe('a vertical section of the cylinder', () => {
     expect(cut.fields.map((field) => [field.type, field.key])).toEqual([
       ['choice', 'cylinderSection'],
       ['number', 'cylinderSectionOffsetPercent'],
+      ['action', 'cylinder-add-second-cut'],
       ['toggle', 'cylinderPartsSeparated'],
       ['toggle', 'cylinderPlate'],
     ]);

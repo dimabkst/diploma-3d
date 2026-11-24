@@ -1,5 +1,6 @@
 <script lang="ts">
 import type { Snippet } from 'svelte';
+import SectionSwatch from './SectionSwatch.svelte';
 
 let {
   label,
@@ -7,6 +8,7 @@ let {
   error,
   accessory,
   children,
+  sectionTone,
 }: {
   label: string;
   forId: string;
@@ -15,12 +17,17 @@ let {
   accessory?: Snippet | undefined;
   /** The control under the label row; a field whose only control is the accessory has none. */
   children?: Snippet | undefined;
+  /** A field of a section's first (0) or second (1) plane: that plane's colour beside the label, as in the preview. */
+  sectionTone?: 0 | 1 | undefined;
 } = $props();
 </script>
 
 <div class="field">
   <div class="field-header">
-    <label for={forId}>{label}</label>
+    <label for={forId}>
+      {#if sectionTone !== undefined}<SectionSwatch tone={sectionTone} />{/if}
+      {label}
+    </label>
     {@render accessory?.()}
   </div>
   {@render children?.()}

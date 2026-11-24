@@ -15,6 +15,7 @@ let {
   variant = 'slider',
   disabled = false,
   onentryblur,
+  sectionTone,
 }: {
   id: string;
   label: string;
@@ -39,6 +40,8 @@ let {
   disabled?: boolean | undefined;
   /** Called when the text entry loses focus, so that a page can drop a draft it shows instead of a converted value. */
   onentryblur?: (() => void) | undefined;
+  /** A field of a section's first (0) or second (1) plane, marked with that plane's colour; see `Field`. */
+  sectionTone?: 0 | 1 | undefined;
 } = $props();
 
 const description = $derived(
@@ -104,7 +107,7 @@ function onsliderinput(event: Event & { currentTarget: HTMLInputElement }) {
 }
 </script>
 
-<Field {label} forId={id} {error}>
+<Field {label} forId={id} {error} {sectionTone}>
   {#snippet accessory()}
     <span class="entry">
       <!-- A text field rather than type="number": it accepts the Ukrainian decimal comma and keeps partial input as typed. -->

@@ -71,6 +71,8 @@ describe('the section plate of a cone', () => {
     expect(group.fields.map((field) => field.key)).toEqual([
       'coneSection',
       'coneSectionPercent',
+      'cone-add-second-cut',
+      'cone-second-cut-plate',
       'conePartsSeparated',
       'conePlate',
       'conePlateThicknessMm',

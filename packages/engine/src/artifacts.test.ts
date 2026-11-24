@@ -825,7 +825,7 @@ describe('for a cylinder cut parallel to its bases', () => {
 
     // Each part has one cut face in the plane z = h/4, glTF y = h/4000, covering the polygon's area.
     for (const mesh of assembled.listMeshes()) {
-      const cut = mesh.listPrimitives().filter((primitive) => primitive.getMaterial()?.getName() === 'cut');
+      const cut = mesh.listPrimitives().filter((primitive) => primitive.getMaterial()?.getName() === 'plane-1');
       expect(cut).toHaveLength(1);
       const positions = cut[0]?.getAttribute('POSITION');
       for (let index = 0; index < (positions?.getCount() ?? 0); index += 1) {
@@ -851,7 +851,7 @@ describe('for a cylinder cut parallel to its bases', () => {
     expect(printFile.fileName).toBe('cylinder.3mf');
     expect(readThreeMf(printFile.bytes).model.objects).toHaveLength(1);
     const root = (await new WebIO().readBinary(previewGlb)).getRoot();
-    expect(root.listMaterials().map((material) => material.getName())).not.toContain('cut');
+    expect(root.listMaterials().map((material) => material.getName())).not.toContain('plane-1');
   });
 });
 
@@ -930,11 +930,11 @@ describe('for a cylinder joined by a dovetail', () => {
     expect(nodes.map((node) => node.getTranslation()[1])).toEqual([0, 0]);
     expect(nodes[1]?.getTranslation()[2]).toBeCloseTo(-distance / 1000, 9);
     expect(plan.exitDistance).toBeGreaterThan(40 + plan.length / 2);
-    // Tongue, groove and cut faces share the cut colour; the exterior keeps the surface colour.
+    // Tongue, groove and cut faces share the first section's colour, their outlines too; the exterior keeps its colour.
     const meshes = (await new WebIO().readBinary(previewGlb)).getRoot().listMeshes();
     for (const mesh of meshes) {
       const materials = mesh.listPrimitives().map((primitive) => primitive.getMaterial()?.getName());
-      expect(materials).toEqual(['surface', 'cut', 'edges']);
+      expect(materials).toEqual(['surface', 'plane-1', 'edges', 'plane-1-edges']);
     }
     // The preview's separation is not in the print file.
     expect(printFile.bytes).toEqual((await buildModelArtifacts(kernel, spec)).printFile.bytes);
@@ -1035,12 +1035,12 @@ describe('for a cylinder joined by plugs or dowels', () => {
     ]);
     const assembled = (await new WebIO().readBinary(previewGlb)).getRoot().listNodes();
     expect(assembled.map((node) => node.getTranslation())).toEqual(nodes.map(() => [0, 0, 0]));
-    // Dowels are entirely new faces, shown in the cut colour; the preview's separation is not in the print file.
+    // Dowels are entirely new faces, shown in their section's colour; the preview's separation is not in the print file.
     const dowelMaterials = assembled[2]
       ?.getMesh()
       ?.listPrimitives()
       .map((primitive) => primitive.getMaterial()?.getName());
-    expect(dowelMaterials?.[0]).toBe('cut');
+    expect(dowelMaterials?.[0]).toBe('plane-1');
     expect(printFile.bytes).toEqual((await buildModelArtifacts(kernel, dowels(2))).printFile.bytes);
   });
   it.each([

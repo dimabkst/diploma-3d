@@ -50,14 +50,19 @@ import {
   isBoxSectionSpec,
   isPlateCut,
   isPlateThicknessFeasible,
+  isRoundPairSpec,
   obliqueCylinderSection,
   obliqueSplitReach,
+  type PairedCut,
   type PlateCut,
+  pairedSplitReach,
   planeOfPlateCut,
+  planeOfSection,
   plateSection,
   plateThicknessRange,
   satisfies,
   sectionOffsetMm,
+  solidCut,
   verticalCylinderSection,
   verticalOffsetLimitMm,
 } from './connectors/frame.ts';
@@ -137,7 +142,12 @@ export interface ModelSection {
    * A second parallel plane: its plane along the same normal, above `plane`, which is then the lower of the two, and its own
    * connector of the same settings, fitted to its own section. The middle part lies between them.
    */
-  readonly secondInterface?: { readonly plane: Plane; readonly connector?: ConnectorPlan };
+  readonly secondInterface?: { readonly plane: Plane; readonly connector?: ConnectorPlan; readonly sectionIndex: 0 | 1 };
+  /**
+   * Beside a second parallel plane, which of the specification's planes `plane` is, 0 the first and 1 the second, whichever lies
+   * lower along the normal: what the preview colours each plane's faces by, whatever their order.
+   */
+  readonly sectionIndex?: 0 | 1;
   /**
    * The planes through a shared generatrix, the first being `plane`, each with its normal pointing from the middle part, which
    * lies on the negative side of all of them, to its own outer part, and its own connector of the same settings, fitted to its
@@ -255,6 +265,7 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
   assertObliqueSplit(spec);
   assertBoxSplit(spec);
   assertLinkedSplit(spec);
+  assertRoundPairSplit(spec);
   const plateGeometry = planPlate(spec);
   const pair = parallelPair(spec);
   const linked = linkedInterfaces(spec);
@@ -458,8 +469,10 @@ export function generateModel(kernel: GeometryKernel, input: ModelSpecInput): Ge
       ...(pair === undefined
         ? {}
         : {
+            sectionIndex: pair.lower.sectionIndex,
             secondInterface: {
               plane: pair.upper.plane,
+              sectionIndex: pair.upper.sectionIndex,
               ...(pair.upper.connector === undefined ? {} : { connector: pair.upper.connector }),
             },
           }),
@@ -637,9 +650,28 @@ function assertLinkedSplit({ shape, scale, section }: ModelSpec): void {
   }
 }
 
+/**
+ * A cylinder's or a cone's two parallel planes: the second within the solid and far enough from the first that the middle part
+ * and the part beyond it keep a usable thickness; see `pairedSplitReach`. The first plane is checked by its own cut's rules.
+ */
+function assertRoundPairSplit({ shape, scale, section }: ModelSpec): void {
+  if (section === undefined || !isRoundPairSpec(section)) return;
+  if (shape.kind !== 'cylinder' && shape.kind !== 'cone') {
+    throw new InvalidModelSpecError(['section.secondPositionPercent: only a cylinder or a cone takes this second plane.']);
+  }
+  const reach = pairedSplitReach(shape, scale, cutOfSection(section) as PairedCut);
+  if (!satisfies(reach)) {
+    throw new InvalidModelSpecError([
+      `section.secondPositionPercent: a part beside the second plane is ${reach.valueMm} mm thick, less than the ${reach.minimumMm} mm of a usable part.`,
+    ]);
+  }
+}
+
 /** A plane of two parallel ones, and the connector planned for its own section. */
 interface ParallelPlane {
   readonly plane: Plane;
+  /** Which of the specification's planes this is: 0 the first, 1 the second. */
+  readonly sectionIndex: 0 | 1;
   readonly connector?: ConnectorPlan;
 }
 
@@ -651,9 +683,13 @@ interface ParallelPlane {
 function parallelPair(spec: ModelSpec): { readonly lower: ParallelPlane; readonly upper: ParallelPlane } | undefined {
   const { shape, section, scale } = spec;
   if (section === undefined || !hasSecondPlane(section)) return undefined;
-  const views = [section, atSecondPlane(section)].map((view): ParallelPlane => {
+  const views = [section, atSecondPlane(section)].map((view, index): ParallelPlane => {
     const plan = planConnector({ ...spec, section: view });
-    return { plane: planeOfView(shape, scale, view), ...(plan === undefined ? {} : { connector: plan }) };
+    return {
+      plane: planeOfView(shape, scale, view),
+      sectionIndex: index as 0 | 1,
+      ...(plan === undefined ? {} : { connector: plan }),
+    };
   });
   const [lower, upper] = [...views].sort((a, b) => a.plane.offset - b.plane.offset) as [ParallelPlane, ParallelPlane];
   return { lower, upper };
@@ -662,7 +698,11 @@ function parallelPair(spec: ModelSpec): { readonly lower: ParallelPlane; readonl
 /** The plane of a section with two planes, seen from either of them. */
 function planeOfView(shape: ModelSpec['shape'], scale: PhysicalScale, view: NonNullable<ModelSpec['section']>): Plane {
   if (view.type === 'horizontal') return ballSection(scale, view.offsetPercent).plane;
-  if (!isBoxShape(shape)) throw new GeometryError('Only a ball, a cube, a parallelepiped and a prism take two parallel planes.');
+  if (shape.kind === 'cylinder' || shape.kind === 'cone') {
+    const { normal, offset } = planeOfSection(solidCut(shape, scale, cutOfSection(view)));
+    return { normal, offset };
+  }
+  if (!isBoxShape(shape)) throw new GeometryError('This solid takes no two parallel planes.');
   return boxSection(shape, scale, cutOfSection(view) as BoxCut).plane;
 }
 

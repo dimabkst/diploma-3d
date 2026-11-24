@@ -34,6 +34,7 @@ import HelpToggle from './HelpToggle.svelte';
 import LinkedBaseDiagram from './LinkedBaseDiagram.svelte';
 import NumberField from './NumberField.svelte';
 import ParameterSection from './ParameterSection.svelte';
+import SectionSwatch from './SectionSwatch.svelte';
 import SegmentedControl from './SegmentedControl.svelte';
 import Select from './Select.svelte';
 
@@ -199,6 +200,7 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
       error={errors[field.key]}
       disabled={field.disabled}
       describedBy={field.describedBy}
+      sectionTone={field.sectionTone}
     />
   {:else}
     {@const unit = field.unit}
@@ -216,6 +218,7 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
       suffix={field.suffix}
       error={errors[field.key]}
       onentryblur={() => delete drafts[field.key]}
+      sectionTone={field.sectionTone}
     />
   {/if}
 {/snippet}
@@ -288,6 +291,8 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
             <div class="field-slot" data-field-key={field.key}>
             {#if field.type === 'linked-diagram'}
               {@render diagramView(field)}
+            {:else if field.type === 'section-mark'}
+              <p class="section-mark"><SectionSwatch tone={field.tone} /> {field.label}</p>
             {:else if field.type === 'choice'}
               <Field label={field.label} forId={field.key}>
                 <Select id={field.key} bind:value={choices[field.key]} options={field.options} />
@@ -461,6 +466,15 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-2);
+  }
+
+  .section-mark {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin: 0;
+    color: var(--color-text);
+    font-size: var(--text-small);
   }
 
   .group-status {

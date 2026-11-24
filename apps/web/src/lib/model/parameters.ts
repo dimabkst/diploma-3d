@@ -32,6 +32,7 @@ import {
   hasFeasibleValues,
   type Interval,
   isApexChordUsable,
+  isRoundPairSpec,
   type LinkedField,
   type LinkedPart,
   linkedAlternativeUsable,
@@ -47,19 +48,23 @@ import {
   normalizeTwist,
   obliquePlaneContainsAxis,
   obliqueSplitReach,
+  type PairedCut,
   type ParameterBounds,
   type ParameterFeasibility,
   type PlateCut,
   type PlatedShape,
+  pairedSplitReach,
   planMagnets,
   plateSection,
   plateThicknessRange,
   ROUND_CONNECTOR_PROPORTIONS,
+  ROUND_PAIR_TYPES,
   type RoundConnectorIssue,
   type RoundConnectorOutcome,
   type RoundShape,
   roundConnectorFeasibility,
   roundDimensionsMm,
+  roundPlanePercent,
   type SectionedShape,
   satisfies,
   sectionOffsetMm,
@@ -292,6 +297,8 @@ export type ParameterKey =
   | 'coneDowelUpperClearanceMm'
   | 'ballSectionOffsetPercent'
   | 'ballSectionSecondOffsetPercent'
+  | 'cylinderSectionSecondPercent'
+  | 'coneSectionSecondPercent'
   | 'ballPlateThicknessMm'
   | 'ballPlateMarginMm'
   | 'ballDovetailSize'
@@ -392,6 +399,9 @@ export type ParameterChoices = {
   ballPlate: boolean;
   /** Whether the ball takes a second plane parallel to the first, which "Додати паралельний переріз" turns on. */
   ballSecondCut: boolean;
+  /** Whether a cylinder's or a cone's cut takes a second plane parallel to the first. */
+  cylinderSecondCut: boolean;
+  coneSecondCut: boolean;
 } & BoxChoices;
 
 /** The switches among the choices. */
@@ -414,6 +424,8 @@ export type ChoiceKey = Exclude<
   | 'coneApexStarted'
   | 'cylinderLinkedStarted'
   | 'ballSecondCut'
+  | 'cylinderSecondCut'
+  | 'coneSecondCut'
   | `${BoxSolid}${'SecondCut' | 'LineAngleFor' | 'PointFor' | 'TraceThrough' | 'TraceThroughText' | 'TraceFor' | 'NormalFrom'}`
 >;
 
@@ -579,6 +591,8 @@ export const initialParameterTexts = (): ParameterTexts => ({
   coneDowelUpperClearanceMm: formatDecimal(DEFAULT_DOWEL_CLEARANCES_MM.upper),
   ballSectionOffsetPercent: formatDecimal(DEFAULT_SECTION_OFFSET_PERCENT),
   ballSectionSecondOffsetPercent: formatDecimal(SECOND_CUT_PLACEHOLDER_PERCENT),
+  cylinderSectionSecondPercent: formatDecimal(SECOND_CUT_PLACEHOLDER_PERCENT),
+  coneSectionSecondPercent: formatDecimal(SECOND_CUT_PLACEHOLDER_PERCENT),
   ballPlateThicknessMm: formatDecimal(DEFAULT_SECTION_PLATE.thicknessMm),
   ballPlateMarginMm: formatDecimal(DEFAULT_SECTION_PLATE.marginMm),
   ballDovetailSize: formatDecimal(DEFAULT_DOVETAIL.sizeFactor),
@@ -663,6 +677,8 @@ export const initialParameterChoices = (): ParameterChoices => ({
   ballPartsSeparated: true,
   ballPlate: false,
   ballSecondCut: false,
+  cylinderSecondCut: false,
+  coneSecondCut: false,
   ...initialBoxChoices(),
 });
 
@@ -950,6 +966,8 @@ const validators = {
   coneDowelUpperClearanceMm: validateDiametralClearance,
   ballSectionOffsetPercent: validateSectionOffset,
   ballSectionSecondOffsetPercent: validateSectionOffset,
+  cylinderSectionSecondPercent: validateSectionPosition,
+  coneSectionSecondPercent: validateSectionPosition,
   ballPlateThicknessMm: validatePlateThickness,
   ballPlateMarginMm: validatePlateMargin,
   ballDovetailSize: validateConnectorDimension,
@@ -1182,7 +1200,11 @@ export function secondCutChosen(kind: ShapeKind, choices: ParameterChoices): boo
   const second = sectionKeys[kind]?.secondCut;
   const section = activeSection(kind, choices);
   return (
-    second !== undefined && choices[second.toggle] && (section === 'horizontal' || (section !== undefined && isBoxSolid(kind)))
+    second !== undefined &&
+    choices[second.toggle] &&
+    (section === 'horizontal' ||
+      (section !== undefined && isBoxSolid(kind)) ||
+      (section !== undefined && (ROUND_PAIR_TYPES as readonly string[]).includes(section)))
   );
 }
 
@@ -1198,9 +1220,9 @@ export function addSecondCut(kind: ShapeKind, state: ParameterState, values: Par
   const keys = sectionKeys[kind];
   const second = keys?.secondCut;
   if (keys === undefined || second === undefined) return state;
-  if (isBoxSolid(kind)) {
+  if (isBoxSolid(kind) || kind === 'cylinder' || kind === 'cone') {
     // Positions run from 10 % to 90 % of the solid's extent along the planes' normal; the first plane is where it is.
-    const first = boxFirstPercent(kind, state.choices, values) ?? 50;
+    const first = (isBoxSolid(kind) ? boxFirstPercent(kind, state.choices, values) : roundFirstPercent(kind, state)) ?? 50;
     const { min, max } = SECTION_POSITION_LIMITS;
     const start = (first + (first <= (min + max) / 2 ? max : min)) / 2;
     return {
@@ -1227,6 +1249,26 @@ export function removeSecondCut(kind: ShapeKind, state: ParameterState): Paramet
   const second = sectionKeys[kind]?.secondCut;
   if (second === undefined) return state;
   return { ...state, choices: { ...state.choices, [second.toggle]: false } };
+}
+
+/**
+ * Where a cylinder's or a cone's first plane lies across the solid, in percent of its extent along the normal: the plane its
+ * construction makes, alone; undefined while the solid or the plane is not valid.
+ */
+function roundFirstPercent(kind: 'cylinder' | 'cone', state: ParameterState): number | undefined {
+  const second = sectionKeys[kind]?.secondCut;
+  if (second === undefined) return undefined;
+  const { spec } = resolveModelRequest(kind, state.texts, { ...state.choices, [second.toggle]: false }, { exact: state.exact });
+  const section = spec?.section;
+  if (spec === undefined || section === undefined || !(ROUND_PAIR_TYPES as readonly string[]).includes(section.type)) {
+    return undefined;
+  }
+  const { connector: _connector, plate: _plate, ...plain } = section as Section & { readonly plate?: unknown };
+  try {
+    return roundPlanePercent(spec.shape as RoundShape, spec.scale, cutOfSection(plain as Section) as PairedCut['first']);
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -1642,7 +1684,14 @@ export const TWIST_WITH_PLATE_MESSAGE =
  * once they are valid.
  */
 function twistFits(kind: ShapeKind, choices: ParameterChoices, shape: ShapeInput | undefined): boolean {
-  if (kind !== 'cylinder' || activeSection(kind, choices) !== 'parallel-to-bases' || plateChosen(kind, choices)) return false;
+  if (
+    kind !== 'cylinder' ||
+    activeSection(kind, choices) !== 'parallel-to-bases' ||
+    plateChosen(kind, choices) ||
+    secondCutChosen(kind, choices)
+  ) {
+    return false;
+  }
   return shape?.kind !== 'cylinder' || twistSupported(shape as SectionedShape, 0);
 }
 
@@ -1956,6 +2005,9 @@ function sectionChecks(
     return boxChecks(keys, shape as BoxLikeShape, longestDimensionMm, section as BoxSection, edits);
   }
   if (keys === undefined || (shape.kind !== 'cylinder' && shape.kind !== 'cone' && shape.kind !== 'ball')) return undefined;
+  if (isRoundPairSpec(section) && (shape.kind === 'cylinder' || shape.kind === 'cone')) {
+    return roundPairChecks(kind, keys, shape as RoundShape, longestDimensionMm, section, edits);
+  }
   if (section.type === 'parallel-to-bases') return connectorChecks(keys, shape as RoundShape, longestDimensionMm, section, edits);
   const solid = shape as RoundShape;
   const scale = { longestDimensionMm };
@@ -2000,6 +2052,41 @@ function sectionChecks(
     roundDimensionsMm(solid, scale).radius,
     edits,
   );
+}
+
+/**
+ * A cylinder's or a cone's two parallel planes: the first by its own cut's rules, as alone; then the second within the solid and
+ * far enough from the first for usable parts, see `pairedSplitReach`; then the connector at each plane, which sees the other, as
+ * for a ball's or a box's two planes. Nothing is moved to make anything fit.
+ */
+function roundPairChecks(
+  kind: ShapeKind,
+  keys: SectionKeys,
+  shape: RoundShape,
+  longestDimensionMm: number,
+  section: Section & { readonly secondPositionPercent: number },
+  edits: ConnectorEdits | undefined,
+): SectionCheck {
+  const { secondPositionPercent: _second, connector: _connector, ...plain } = section;
+  const first = sectionChecks(kind, shape, longestDimensionMm, plain as Section, edits);
+  if (first !== undefined && Object.keys(first.errors).length > 0) return first;
+  const secondKey = keys.secondCut?.offset;
+  const ranges: SectionRanges = {
+    ...first?.ranges,
+    ...(secondKey === undefined ? {} : { [secondKey]: SECTION_POSITION_LIMITS }),
+  };
+  const reach = pairedSplitReach(shape, { longestDimensionMm }, cutOfSection(section) as PairedCut);
+  if (!satisfies(reach) && secondKey !== undefined) {
+    return {
+      errors: {
+        [secondKey]:
+          `Одна з частин біля другого перерізу була б завтовшки лише ${millimetres(reach.valueMm)}, потрібно щонайменше ` +
+          `${formatMillimetres(reach.minimumMm)} мм. Відсуньте другий переріз від першого й від краю фігури або збільште модель.`,
+      },
+      ranges,
+    };
+  }
+  return pairedConnectorChecks(keys, shape, longestDimensionMm, section, edits, ranges);
 }
 
 /** A cube's or parallelepiped's section with its connector, as the specification has it. */
@@ -3323,8 +3410,12 @@ type SectionKeys = {
     | `${BoxSolid}SectionPercent`;
   /** A second plane parallel to the first, of the solids that offer it: whether it is on, and its position. */
   readonly secondCut?: {
-    readonly toggle: 'ballSecondCut' | `${BoxSolid}SecondCut`;
-    readonly offset: 'ballSectionSecondOffsetPercent' | `${BoxSolid}SectionSecondPercent`;
+    readonly toggle: 'ballSecondCut' | 'cylinderSecondCut' | 'coneSecondCut' | `${BoxSolid}SecondCut`;
+    readonly offset:
+      | 'ballSectionSecondOffsetPercent'
+      | 'cylinderSectionSecondPercent'
+      | 'coneSectionSecondPercent'
+      | `${BoxSolid}SectionSecondPercent`;
   };
   readonly separated: ToggleKey;
   readonly connector: `${SectionSolid}Connector`;
@@ -3513,6 +3604,7 @@ export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys | Plana
     },
     axisParallel: { offset: 'cylinderAxisOffsetPercent', direction: 'cylinderAxisDirectionDeg' },
     linked: LINKED_KEYS,
+    secondCut: { toggle: 'cylinderSecondCut', offset: 'cylinderSectionSecondPercent' },
     separated: 'cylinderPartsSeparated',
     plate: { toggle: 'cylinderPlate', thickness: 'cylinderPlateThicknessMm', margin: 'cylinderPlateMarginMm' },
     connector: 'cylinderConnector',
@@ -3544,6 +3636,7 @@ export const sectionKeys: Readonly<Partial<Record<ShapeKind, SectionKeys | Plana
       inclination: 'coneObliqueInclinationDeg',
       direction: 'coneObliqueDirectionDeg',
     },
+    secondCut: { toggle: 'coneSecondCut', offset: 'coneSectionSecondPercent' },
     separated: 'conePartsSeparated',
     plate: { toggle: 'conePlate', thickness: 'conePlateThicknessMm', margin: 'conePlateMarginMm' },
     magnet: magnetKeysOf('cone'),
@@ -3665,15 +3758,17 @@ function resolveSection(
           ...boxModeKeys(keys.box, mode, choices, boxContextOf(kind as BoxSolid, choices, shape)),
           ...(secondCut === undefined ? [] : [secondCut.offset]),
         ];
+  const secondFields: IndependentKey[] = secondCut === undefined ? [] : [secondCut.offset];
   const cutFields: Readonly<Record<SectionType, readonly IndependentKey[]>> = {
-    'parallel-to-bases': planar === undefined ? [] : [planar.position, ...plateFields],
-    vertical: [keys.offset, ...plateFields],
-    horizontal: [keys.offset, ...(secondCut === undefined ? [] : [secondCut.offset]), ...plateFields],
-    oblique: planar === undefined ? [] : [...Object.values(planar.oblique), ...plateFields],
+    'parallel-to-bases': planar === undefined ? [] : [planar.position, ...plateFields, ...secondFields],
+    vertical: [keys.offset, ...plateFields, ...secondFields],
+    horizontal: [keys.offset, ...secondFields, ...plateFields],
+    oblique: planar === undefined ? [] : [...Object.values(planar.oblique), ...plateFields, ...secondFields],
     'oblique-apex': choices.coneApexAxial
-      ? [coneApexKeys.direction, ...plateFields]
-      : [...Object.values(coneApexKeys), ...plateFields],
-    'axis-parallel': planar?.axisParallel === undefined ? [] : [...Object.values(planar.axisParallel), ...plateFields],
+      ? [coneApexKeys.direction, ...plateFields, ...secondFields]
+      : [...Object.values(coneApexKeys), ...plateFields, ...secondFields],
+    'axis-parallel':
+      planar?.axisParallel === undefined ? [] : [...Object.values(planar.axisParallel), ...plateFields, ...secondFields],
     'shared-generatrix':
       planar?.linked === undefined ? [] : [planar.linked.generatrix, planar.linked.firstPlane, planar.linked.dihedral],
     'face-parallel': boxFields('face-parallel'),
@@ -3811,7 +3906,13 @@ function resolveSection(
       }
     }
   };
-  return { values, errors, section: sectionOf() };
+  // A cylinder's or a cone's second plane: its share of the solid's extent along the planes' normal.
+  const built = sectionOf();
+  const paired =
+    secondCut !== undefined && (ROUND_PAIR_TYPES as readonly string[]).includes(type) && (kind === 'cylinder' || kind === 'cone')
+      ? ({ ...built, secondPositionPercent: read(secondCut.offset) } as Section)
+      : built;
+  return { values, errors, section: paired };
 }
 
 const valid = (values: ParameterValues, shape: ShapeInput): ShapeResolution => ({ values, errors: {}, shape });
@@ -4042,6 +4143,7 @@ export const shapeParameterKeys: Readonly<
       'cylinderLinkedGeneratrixDeg',
       'cylinderLinkedFirstPlaneDeg',
       'cylinderLinkedDihedralDeg',
+      'cylinderSectionSecondPercent',
       'cylinderPlateThicknessMm',
       'cylinderPlateMarginMm',
       'cylinderDovetailSize',
@@ -4061,6 +4163,7 @@ export const shapeParameterKeys: Readonly<
       'cylinderLinkedStarted',
       'cylinderLinkedOtherSide',
       'cylinderLinkedThird',
+      'cylinderSecondCut',
       'cylinderPartsSeparated',
       'cylinderPlate',
       'cylinderConnector',
@@ -4083,6 +4186,7 @@ export const shapeParameterKeys: Readonly<
       'coneObliqueDirectionDeg',
       'coneApexInclinationDeg',
       'coneApexDirectionDeg',
+      'coneSectionSecondPercent',
       'coneDovetailSize',
       'coneDovetailLengthPercent',
       'coneDovetailClearanceMm',
@@ -4098,6 +4202,7 @@ export const shapeParameterKeys: Readonly<
       'coneSection',
       'coneApexStarted',
       'coneApexAxial',
+      'coneSecondCut',
       'conePartsSeparated',
       'conePlate',
       'coneConnector',
@@ -4231,12 +4336,21 @@ function inactiveSectionKeys(kind: ShapeKind, choices: ParameterChoices): (keyof
   const secondFields = second === undefined ? [] : [second.toggle, ...(twoPlanes ? [second.offset] : [])];
   const box = keys.box;
   const cutFields: Readonly<Record<SectionType, readonly (keyof ParameterChoices | ParameterKey)[]>> = {
-    'parallel-to-bases': planar === undefined ? [] : [planar.position, ...plateFields],
-    vertical: [keys.offset, ...plateFields],
+    'parallel-to-bases': planar === undefined ? [] : [planar.position, ...plateFields, ...secondFields],
+    vertical: [keys.offset, ...plateFields, ...secondFields],
     horizontal: [keys.offset, ...secondFields, ...plateFields],
-    oblique: [...obliqueFields, ...plateFields],
-    'oblique-apex': [...(choices.coneApexAxial ? [coneApexKeys.direction] : apexFields), 'coneApexAxial', ...plateFields],
-    'axis-parallel': [...(planar?.axisParallel === undefined ? [] : Object.values(planar.axisParallel)), ...plateFields],
+    oblique: [...obliqueFields, ...plateFields, ...secondFields],
+    'oblique-apex': [
+      ...(choices.coneApexAxial ? [coneApexKeys.direction] : apexFields),
+      'coneApexAxial',
+      ...plateFields,
+      ...secondFields,
+    ],
+    'axis-parallel': [
+      ...(planar?.axisParallel === undefined ? [] : Object.values(planar.axisParallel)),
+      ...plateFields,
+      ...secondFields,
+    ],
     'shared-generatrix': planar?.linked === undefined ? [] : Object.values(planar.linked),
     'face-parallel': box === undefined ? [] : [box.Face, box.SectionPercent, ...secondFields],
     longitudinal:

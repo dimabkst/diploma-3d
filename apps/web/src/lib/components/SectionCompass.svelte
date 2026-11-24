@@ -1,4 +1,5 @@
 <script lang="ts">
+import { SECTION_COLORS } from '@diploma-3d/engine';
 import { compassPoint } from '../model/compass.ts';
 
 let {
@@ -37,7 +38,8 @@ const description = $derived(`Площина піднімається в нап�
 </script>
 
 <!-- A sketch over the viewer, so it is in neither the preview's model nor the print file, and lets the drag through. -->
-<figure class="section-compass" data-direction={directionDeg}>
+<!-- The arrow takes the first section's colour, as its cut faces have in the preview; a second plane rises the same way. -->
+<figure class="section-compass" data-direction={directionDeg} style:--plane-color={SECTION_COLORS[0]}>
   <svg viewBox="-50 -50 100 100" role="img" aria-label={description}>
     <ellipse class="ring" rx={RING} ry={RING * Math.abs(Math.cos(camera.phi))} />
     <line class="axis" {...line(0, AXIS)} />
@@ -98,12 +100,12 @@ const description = $derived(`Площина піднімається в нап�
   }
 
   .arrow {
-    stroke: var(--color-accent);
+    stroke: var(--plane-color);
     stroke-width: 3;
     stroke-linecap: round;
   }
 
   .arrow-head {
-    fill: var(--color-accent);
+    fill: var(--plane-color);
   }
 </style>

@@ -263,15 +263,31 @@ export const sectionPlateSchema = z.strictObject({
 
 export type SectionPlate = z.infer<typeof sectionPlateSchema>;
 
+/**
+ * A second plane of a cylinder's or a cone's section, parallel to the first: its position along the planes' shared normal in
+ * percent of the whole solid's extent along it, 0 % and 100 % the supporting planes on either side, as a box's second plane. The
+ * first plane keeps its own construction, a plane through the apex its apex; the second only shares its orientation. A missing
+ * second plane is the single cut, as every configuration saved before there was a choice.
+ */
+const secondRoundPlane = { secondPositionPercent: sectionPositionSchema.optional() };
+
+/** Two parallel planes take no section plate. */
+const withoutPlateBesideSecond = <S extends { secondPositionPercent?: number | undefined; plate?: unknown }>(section: S) =>
+  section.secondPositionPercent === undefined || section.plate === undefined;
+const plateBesideSecond = { message: 'A second parallel plane does not take a section plate.', path: ['plate'] };
+
 /** The plane z = zBottom + t·h with t = positionPercent/100: parallel to the base or bases, also of an oblique solid. */
-export const parallelSectionSchema = z.strictObject({
-  type: z.literal('parallel-to-bases'),
-  positionPercent: sectionPositionSchema,
-  /** A section plate on this plane; only a cone offers one so far, not with a twist connector, which the engine checks. */
-  plate: sectionPlateSchema.optional(),
-  /** Joins the parts; without one, both cut faces stay flat. */
-  connector: connectorSchema.optional(),
-});
+export const parallelSectionSchema = z
+  .strictObject({
+    type: z.literal('parallel-to-bases'),
+    positionPercent: sectionPositionSchema,
+    /** A section plate on this plane; only a cone offers one so far, not with a twist connector, which the engine checks. */
+    plate: sectionPlateSchema.optional(),
+    /** Joins the parts; without one, both cut faces stay flat. */
+    connector: connectorSchema.optional(),
+    ...secondRoundPlane,
+  })
+  .refine(withoutPlateBesideSecond, plateBesideSecond);
 
 export type ParallelSection = z.infer<typeof parallelSectionSchema>;
 
@@ -279,14 +295,17 @@ export type ParallelSection = z.infer<typeof parallelSectionSchema>;
  * A vertical plane parallel to the axis of a cylinder or cone, at a signed distance from it along the plane's normal: at zero it
  * contains the whole axis, an axial section.
  */
-export const verticalSectionSchema = z.strictObject({
-  type: z.literal('vertical'),
-  offsetPercent: sectionOffsetSchema.default(DEFAULT_SECTION_OFFSET_PERCENT),
-  /** A section plate on this plane; only a cone offers one so far, which the engine checks. */
-  plate: sectionPlateSchema.optional(),
-  /** Joins the parts; without one, both cut faces stay flat. */
-  connector: connectorSchema.optional(),
-});
+export const verticalSectionSchema = z
+  .strictObject({
+    type: z.literal('vertical'),
+    offsetPercent: sectionOffsetSchema.default(DEFAULT_SECTION_OFFSET_PERCENT),
+    /** A section plate on this plane; only a cone offers one so far, which the engine checks. */
+    plate: sectionPlateSchema.optional(),
+    /** Joins the parts; without one, both cut faces stay flat. */
+    connector: connectorSchema.optional(),
+    ...secondRoundPlane,
+  })
+  .refine(withoutPlateBesideSecond, plateBesideSecond);
 
 export type VerticalSection = z.infer<typeof verticalSectionSchema>;
 
@@ -294,24 +313,27 @@ export type VerticalSection = z.infer<typeof verticalSectionSchema>;
  * A plane through the axis point C0 + t·(C1 − C0), t = positionPercent/100, at the angle inclinationDeg to the base
  * plane, rising along the horizontal direction directionDeg, measured from the model's +X towards +Y.
  */
-export const obliqueSectionSchema = z.strictObject({
-  type: z.literal('oblique'),
-  positionPercent: sectionPositionSchema.default(DEFAULT_OBLIQUE_SECTION.positionPercent),
-  inclinationDeg: z
-    .number()
-    .min(OBLIQUE_INCLINATION_LIMITS.min)
-    .max(OBLIQUE_INCLINATION_LIMITS.max)
-    .default(DEFAULT_OBLIQUE_SECTION.inclinationDeg),
-  directionDeg: z
-    .number()
-    .min(OBLIQUE_DIRECTION_LIMITS.min)
-    .max(OBLIQUE_DIRECTION_LIMITS.max)
-    .default(DEFAULT_OBLIQUE_SECTION.directionDeg),
-  /** A section plate on this plane; only a cone offers one so far, which the engine checks. */
-  plate: sectionPlateSchema.optional(),
-  /** Joins the parts; without one, both cut faces stay flat. */
-  connector: connectorSchema.optional(),
-});
+export const obliqueSectionSchema = z
+  .strictObject({
+    type: z.literal('oblique'),
+    positionPercent: sectionPositionSchema.default(DEFAULT_OBLIQUE_SECTION.positionPercent),
+    inclinationDeg: z
+      .number()
+      .min(OBLIQUE_INCLINATION_LIMITS.min)
+      .max(OBLIQUE_INCLINATION_LIMITS.max)
+      .default(DEFAULT_OBLIQUE_SECTION.inclinationDeg),
+    directionDeg: z
+      .number()
+      .min(OBLIQUE_DIRECTION_LIMITS.min)
+      .max(OBLIQUE_DIRECTION_LIMITS.max)
+      .default(DEFAULT_OBLIQUE_SECTION.directionDeg),
+    /** A section plate on this plane; only a cone offers one so far, which the engine checks. */
+    plate: sectionPlateSchema.optional(),
+    /** Joins the parts; without one, both cut faces stay flat. */
+    connector: connectorSchema.optional(),
+    ...secondRoundPlane,
+  })
+  .refine(withoutPlateBesideSecond, plateBesideSecond);
 
 export type ObliqueSection = z.infer<typeof obliqueSectionSchema>;
 
@@ -320,20 +342,23 @@ export type ObliqueSection = z.infer<typeof obliqueSectionSchema>;
  * directionDeg. Any such plane is well-formed up to the vertical 90°, which holds the axis of a right cone; whether it
  * splits this cone into two parts depends on the cone and the direction, which the engine checks.
  */
-export const apexSectionSchema = z.strictObject({
-  type: z.literal('oblique-apex'),
-  inclinationDeg: z.number().gt(0).max(APEX_INCLINATION_MAX_DEG),
-  directionDeg: z.number().min(OBLIQUE_DIRECTION_LIMITS.min).max(OBLIQUE_DIRECTION_LIMITS.max),
-  /**
-   * The axial section: the plane also holds the base's centre, whatever the cone. The angle then follows from the cone and the
-   * direction, and the engine derives it anew from the cone it builds; a stored angle only records what was derived.
-   */
-  axial: z.boolean().optional(),
-  /** A section plate on this plane; only a cone offers one so far, which the engine checks. */
-  plate: sectionPlateSchema.optional(),
-  /** Joins the parts; without one, both cut faces stay flat. */
-  connector: connectorSchema.optional(),
-});
+export const apexSectionSchema = z
+  .strictObject({
+    type: z.literal('oblique-apex'),
+    inclinationDeg: z.number().gt(0).max(APEX_INCLINATION_MAX_DEG),
+    directionDeg: z.number().min(OBLIQUE_DIRECTION_LIMITS.min).max(OBLIQUE_DIRECTION_LIMITS.max),
+    /**
+     * The axial section: the plane also holds the base's centre, whatever the cone. The angle then follows from the cone and the
+     * direction, and the engine derives it anew from the cone it builds; a stored angle only records what was derived.
+     */
+    axial: z.boolean().optional(),
+    /** A section plate on this plane; only a cone offers one so far, which the engine checks. */
+    plate: sectionPlateSchema.optional(),
+    /** Joins the parts; without one, both cut faces stay flat. */
+    connector: connectorSchema.optional(),
+    ...secondRoundPlane,
+  })
+  .refine(withoutPlateBesideSecond, plateBesideSecond);
 
 export type ApexSection = z.infer<typeof apexSectionSchema>;
 
@@ -343,15 +368,18 @@ export type ApexSection = z.infer<typeof apexSectionSchema>;
  * perpendicular to it, swept along a. Its normal is u × a for the line's direction u, so n·a = 0 whatever the lean, and at
  * offset zero it holds the whole axis, an axial section. For a right cylinder it is a vertical plane.
  */
-export const axisParallelSectionSchema = z.strictObject({
-  type: z.literal('axis-parallel'),
-  offsetPercent: sectionOffsetSchema.default(DEFAULT_SECTION_OFFSET_PERCENT),
-  directionDeg: z.number().min(OBLIQUE_DIRECTION_LIMITS.min).max(OBLIQUE_DIRECTION_LIMITS.max).default(90),
-  /** A section plate on this plane, centred on it. */
-  plate: sectionPlateSchema.optional(),
-  /** Joins the parts; without one, both cut faces stay flat. */
-  connector: connectorSchema.optional(),
-});
+export const axisParallelSectionSchema = z
+  .strictObject({
+    type: z.literal('axis-parallel'),
+    offsetPercent: sectionOffsetSchema.default(DEFAULT_SECTION_OFFSET_PERCENT),
+    directionDeg: z.number().min(OBLIQUE_DIRECTION_LIMITS.min).max(OBLIQUE_DIRECTION_LIMITS.max).default(90),
+    /** A section plate on this plane, centred on it. */
+    plate: sectionPlateSchema.optional(),
+    /** Joins the parts; without one, both cut faces stay flat. */
+    connector: connectorSchema.optional(),
+    ...secondRoundPlane,
+  })
+  .refine(withoutPlateBesideSecond, plateBesideSecond);
 
 export type AxisParallelSection = z.infer<typeof axisParallelSectionSchema>;
 
