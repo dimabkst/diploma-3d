@@ -364,6 +364,23 @@ function angleOfPoint({ p, along, within, outward }: LineFrame, point: Vec3, siz
 }
 
 /**
+ * The turn θ, see `LineFrame`, of the plane through a face's line and a point of the solid off that line, so that a plane given
+ * another way, or measured from another face through the same line, can be given by its angle without moving; undefined for a
+ * point on the line.
+ */
+export function boxLineAngleOfPoint(
+  shape: BoxLikeShape,
+  scale: PhysicalScale,
+  face: BoxFace,
+  line: readonly [BoxVertex, BoxVertex],
+  point: Vec3,
+): number | undefined {
+  const vertices = boxVertices(shape, scale);
+  const size = Math.max(...pointsOf(vertices).map((other) => length(minus(other, vertices.A))));
+  return angleOfPoint(lineFrame(vertices, face, line), point, size);
+}
+
+/**
  * Which planes leave both parts usable: `printed`, the application's rule at the export scale, see `boxPartMinimumMm`;
  * `proportional`, its part that does not depend on the scale, a tenth of the solid's extent along the normal. Choices are
  * offered by the proportional rule, so that a plane that exists for the solid's shape is never hidden for a small model, whose

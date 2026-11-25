@@ -71,6 +71,13 @@ export function halfSumDecimal(x: number, y: number): number {
   return Number(`${(rescale(p, scale) + rescale(q, scale)) * 5n}e-${scale + 1}`);
 }
 
+/** x + y computed on their decimal values: 0,1 + 1 is 1,1 rather than the binary 1,1000000000000001. */
+export function addDecimal(x: number, y: number): number {
+  const [p, q] = [toExactDecimal(x), toExactDecimal(y)];
+  const scale = Math.max(p.scale, q.scale);
+  return Number(`${rescale(p, scale) + rescale(q, scale)}e-${scale}`);
+}
+
 /** Formats a stepped value exactly, with the Ukrainian decimal comma. */
 export const formatSteppedDecimal = (value: number): string => String(value).replace('.', ',');
 

@@ -28,7 +28,14 @@ import {
   pyramidTopology,
   type ShapeKind,
 } from '@diploma-3d/schema';
+import { type AngleSide, angleDraft, anglePilotActive, referenceFaceOf, turnOf } from './angleConstruction.ts';
+import { faceDraft, facePilotActive, placementPercent } from './faceConstruction.ts';
 import type { ConnectorChoice, ParameterChoices, ParameterValues, SectionChoice } from './parameters.ts';
+import { isThroughPointSolid, pilotDraft, pointPercentOf, throughPointSelection } from './throughPoint.ts';
+
+/** Whether a box's plane through a line is the pilot's, through a point M, for a cube or a parallelepiped. */
+export const pilotActive = (keys: BoxKeysOf, choices: BoxChoices): boolean =>
+  isThroughPointSolid(keys.Section.slice(0, -'Section'.length) as ShapeKind) && choices[keys.LineMethod] === 'point';
 
 /**
  * The solids whose sections are planes through their named vertices: a cube, the parallelepipeds and the prisms, each a prism
@@ -46,7 +53,14 @@ export const BOX_NUMBER_FIELDS = [
   'SectionSecondPercent',
   'TraceAngleDeg',
   'LineAngleDeg',
+  'LineDihedralDeg',
   'PointPercent',
+  'PointRatioFirst',
+  'PointRatioSecond',
+  'FaceRatioFirst',
+  'FaceRatioSecond',
+  'SecondRatioFirst',
+  'SecondRatioSecond',
   'TracePointPercent',
   'PlaneInclinationDeg',
   'PlaneDirectionDeg',
@@ -95,7 +109,21 @@ type BoxChoiceFields = {
   LineFace: BoxFace;
   Line: SegmentKey;
   LineMethod: 'angle' | 'point';
-  PointEdge: SegmentKey;
+  /** M's edge, or none after a segment it does not suit, until another is chosen; see `throughPoint.ts`. */
+  PointEdge: SegmentKey | '';
+  /** Where M lies on its edge in the pilot of a cube's and a parallelepiped's plane through a point; see `throughPoint.ts`. */
+  PointMode: 'midpoint' | 'ratio';
+  /**
+   * Where a cube's or a parallelepiped's plane parallel to a face lies between that face and the opposite one, and its second
+   * parallel plane; see `faceConstruction.ts`.
+   */
+  FaceMode: 'midpoint' | 'ratio';
+  SecondMode: 'midpoint' | 'ratio';
+  /**
+   * Which of the two planes through a segment at an angle to its reference face is meant, in the construction of a cube's and a
+   * parallelepiped's plane at an angle; see `angleConstruction.ts`.
+   */
+  LineSide: AngleSide;
   /** 'none' for a plane given by its angles, otherwise the segment its normal runs along. */
   NormalAlong: 'none' | SegmentKey;
   /** 'none', or a pair of opposite edges of a triangular pyramid that the plane is parallel to. */
@@ -143,6 +171,10 @@ export const BOX_CHOICE_FIELDS = [
   'Line',
   'LineMethod',
   'PointEdge',
+  'PointMode',
+  'FaceMode',
+  'SecondMode',
+  'LineSide',
   'NormalAlong',
   'ParallelEdges',
   'NormalFrom',
@@ -355,7 +387,7 @@ export function throughLineSelection(
       : (lineChoices?.find((choice) => sameSegment(choice.line, line))?.pointEdges ?? []);
   const methods = edges.length > 0 ? (['angle', 'point'] as const) : (['angle'] as const);
   const method = (methods as readonly string[]).includes(choices[keys.LineMethod]) ? choices[keys.LineMethod] : 'angle';
-  const chosenEdge = segmentOf(choices[keys.PointEdge]);
+  const chosenEdge = choices[keys.PointEdge] === '' ? segmentOf('C-C1') : segmentOf(choices[keys.PointEdge] as SegmentKey);
   const pointEdge =
     edges.find((candidate) => sameSegment(candidate, chosenEdge)) ??
     (edges[0] as BoxSegment | undefined) ??
@@ -610,6 +642,10 @@ export const initialBoxChoices = (): BoxChoices =>
         Line: 'A-B',
         LineMethod: 'angle',
         PointEdge: pyramid ? 'S-C' : 'C-C1',
+        PointMode: 'midpoint',
+        FaceMode: 'midpoint',
+        SecondMode: 'ratio',
+        LineSide: 'first',
         NormalAlong: 'none',
         ParallelEdges: 'none',
         NormalFrom: '',
@@ -635,12 +671,19 @@ export function boxModeKeys(
 ): BoxNumberKey[] {
   switch (type) {
     case 'face-parallel':
+      if (facePilotActive(keys, choices)) {
+        return choices[keys.FaceMode] === 'ratio' ? [keys.FaceRatioFirst, keys.FaceRatioSecond] : [];
+      }
       return [keys.SectionPercent];
     case 'longitudinal':
       return traceSelection(keys, choices, context).kind === 'angle'
         ? [keys.TraceAngleDeg, keys.SectionPercent]
         : [keys.SectionPercent];
     case 'through-line':
+      if (pilotActive(keys, choices)) {
+        return choices[keys.PointMode] === 'ratio' ? [keys.PointRatioFirst, keys.PointRatioSecond] : [];
+      }
+      if (anglePilotActive(keys, choices)) return [keys.LineDihedralDeg];
       return throughLineSelection(keys, choices, context).method === 'angle' ? [keys.LineAngleDeg] : [keys.PointPercent];
     case 'through-apex': {
       const { kind } = traceSelection(keys, choices, context);
@@ -654,7 +697,28 @@ export function boxModeKeys(
 }
 
 /**
- * The section of a box's mode from its fields, which `boxModeKeys` lists and the caller has validated; a plane through a line
+ * Whether `boxSectionOf` can make the mode's plane from these values: every field `boxModeKeys` lists holds a number and, for
+ * the pilot, its construction gives a plane that cuts the solid; see `pilotDraft`.
+ */
+export function boxSectionReady(
+  keys: BoxKeysOf,
+  type: BoxSectionSpec['type'],
+  choices: BoxChoices,
+  values: Readonly<Record<string, number | undefined>>,
+  context: BoxContext,
+): boolean {
+  if (boxModeKeys(keys, type, choices, context).some((key) => values[key] === undefined)) return false;
+  if (type === 'face-parallel' && facePilotActive(keys, choices)) {
+    return faceDraft(keys, choices, values, context.topology, {}, false).status === 'valid';
+  }
+  if (type === 'through-line' && anglePilotActive(keys, choices)) {
+    return angleDraft(keys, choices, values, context, {}).status === 'valid';
+  }
+  return type !== 'through-line' || !pilotActive(keys, choices) || pilotDraft(keys, choices, values, context).status === 'valid';
+}
+
+/**
+ * The section of a box's mode from its fields, for which the caller has checked `boxSectionReady`; a plane through a line
  * takes the choices in effect, see `throughLineSelection`.
  */
 export function boxSectionOf(
@@ -668,6 +732,16 @@ export function boxSectionOf(
   const secondPlane = second ? { secondPositionPercent: read(keys.SectionSecondPercent) } : {};
   switch (type) {
     case 'face-parallel':
+      if (facePilotActive(keys, choices)) {
+        // The caller has checked the construction; see `faceDraft`. Both planes are measured from the face clicked.
+        const at = (which: 'first' | 'second') => placementPercent(keys, choices, (key) => read(key), which) as number;
+        return {
+          type,
+          face: faceSelection(keys, choices, context).face,
+          positionPercent: at('first'),
+          ...(second ? { secondPositionPercent: at('second') } : {}),
+        };
+      }
       return {
         type,
         face: faceSelection(keys, choices, context).face,
@@ -708,6 +782,37 @@ export function boxSectionOf(
       };
     }
     case 'through-line': {
+      if (anglePilotActive(keys, choices)) {
+        // The caller has checked the construction; see `angleDraft`. The engine turns the plane by θ from the reference face.
+        const { segment } = throughPointSelection(keys, choices, context);
+        const line = segment as BoxSegment;
+        return {
+          type,
+          face: referenceFaceOf(context.topology, line, choices[keys.LineFace]),
+          line: [...line],
+          method: 'angle',
+          angleDeg: turnOf(read(keys.LineDihedralDeg), choices[keys.LineSide]),
+          ...secondPlane,
+        };
+      }
+      if (pilotActive(keys, choices)) {
+        // The caller has checked that the construction is complete; see `boxSectionReady`.
+        const pilot = throughPointSelection(keys, choices, context);
+        const percent = pointPercentOf(
+          pilot.mode,
+          pilot.mode === 'ratio' ? read(keys.PointRatioFirst) : undefined,
+          pilot.mode === 'ratio' ? read(keys.PointRatioSecond) : undefined,
+        );
+        return {
+          type,
+          face: pilot.face as BoxFace,
+          line: [...(pilot.segment as BoxSegment)],
+          method: 'point',
+          pointEdge: [...(pilot.pointEdge as BoxSegment)],
+          pointPercent: percent as number,
+          ...secondPlane,
+        };
+      }
       const { face, line, method, pointEdge } = throughLineSelection(keys, choices, context);
       return method === 'angle'
         ? { type, face, line: [...line], method, angleDeg: read(keys.LineAngleDeg), ...secondPlane }

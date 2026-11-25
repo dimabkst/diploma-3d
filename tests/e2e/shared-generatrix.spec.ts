@@ -13,7 +13,7 @@ const DIHEDRAL = 'Кут між площинами';
 const partsButton = (page: Page) => page.getByRole('button', { name: 'Завантажити частини · 3MF', exact: true });
 const entry = (page: Page, label: string) => page.getByLabel(label, { exact: true });
 const checkbox = (page: Page, label: string) => page.getByRole('checkbox', { name: label, exact: true });
-const labels = (page: Page) => page.locator('model-viewer .vertex-label');
+const labels = (page: Page) => page.locator('model-viewer .point-label');
 const action = (page: Page, label: string) => page.getByRole('button', { name: label, exact: true });
 const diagram = (page: Page) => page.getByRole('figure').filter({ hasText: 'Нижня основа згори' });
 
@@ -155,8 +155,8 @@ test('cylinder: the other second plane is an explicit action, previewed while ho
   // Focusing the generatrix highlights AA₁ in the preview.
   await page.getByText('Додаткові налаштування', { exact: true }).click();
   await entry(page, GENERATRIX).focus();
-  await expect(page.locator('model-viewer .vertex-label.highlighted').first()).toBeVisible();
-  const highlighted = await page.locator('model-viewer .vertex-label.highlighted').allTextContents();
+  await expect(page.locator('model-viewer .point-label.highlighted').first()).toBeVisible();
+  const highlighted = await page.locator('model-viewer .point-label.highlighted').allTextContents();
   expect(new Set(highlighted)).toEqual(new Set(['A', 'A₁']));
   expect(errors).toEqual([]);
 });

@@ -27,7 +27,7 @@ test('a cube’s diagonal section, then a plane through an edge and a midpoint, 
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Поздовжній' });
   await entry(page, 'Слід на основі').selectOption({ label: 'Через діагональ' });
-  await expect(entry(page, 'Діагональ основи')).toHaveValue('A-C');
+  await expect(page.getByRole('button', { name: /^Діагональ/ })).toContainText('AC');
   await expect(page.getByText('Діагональний переріз: площина проходить через діагональ AC')).toBeVisible();
   const diagonal = await download(page);
   expect(diagonal.fileName).toBe('cube-longitudinal-section.3mf');
@@ -41,18 +41,18 @@ test('a cube’s diagonal section, then a plane through an edge and a midpoint, 
     positionPercent: 50,
   });
   // The vertices are named in the preview, as the fields name them; those on the plane, on both parts apart.
-  await expect(page.locator('model-viewer .vertex-label')).toHaveText(
+  await expect(page.locator('model-viewer .point-label')).toHaveText(
     ['A', 'A', 'B', 'C', 'C', 'D', 'A₁', 'A₁', 'B₁', 'C₁', 'C₁', 'D₁'],
     { timeout: 30_000 },
   );
 
   await entry(page, 'Тип перерізу').selectOption({ label: 'Через ребро або діагональ' });
-  // A plane through an edge by its angle starts in the middle of the angles that cut the cube.
-  await expect(entry(page, 'Кут повороту від грані ABCD')).toHaveValue('45');
+  // A plane through an edge at an angle, named with the face it is measured from.
+  await expect(page.getByRole('button', { name: /^Кут до ABCD/ })).toContainText('45°');
+  // Through a point: the segment and M's edge, no face first; M starts at the midpoint.
   await entry(page, 'Спосіб').selectOption({ label: 'Через точку ребра' });
-  await entry(page, 'Точка на CC₁ від C').fill('20');
-  await page.getByRole('button', { name: 'Середина ребра', exact: true }).click();
-  await expect(entry(page, 'Точка на CC₁ від C')).toHaveValue('50');
+  await expect(page.getByRole('button', { name: /^Відрізок/ })).toContainText('AB');
+  await expect(page.getByRole('button', { name: /^Точка M/ })).toContainText('Середина CC₁');
   const edge = await download(page);
   expect(edge.section).toEqual({
     type: 'through-line',
@@ -63,17 +63,43 @@ test('a cube’s diagonal section, then a plane through an edge and a midpoint, 
     pointPercent: 50,
   });
   // Every point of BB1 gives the face ABB1A1 or lies on AB: that edge is not offered for AB.
-  const edges = await entry(page, 'Ребро з точкою').locator('option').allTextContents();
-  expect(edges).toEqual(['Ребро B₁C₁', 'Ребро C₁D₁', 'Ребро D₁A₁', 'Ребро CC₁', 'Ребро DD₁']);
-  // Through the diagonal AC, AA1 is offered, its end A excluded: typed, it is said at the field, and nothing to download.
-  await entry(page, 'Ребро або діагональ грані').selectOption({ label: 'Діагональ AC' });
-  await entry(page, 'Ребро з точкою').selectOption({ label: 'Ребро AA₁' });
-  await expect(entry(page, 'Точка на AA₁ від A')).toHaveValue('50');
-  await entry(page, 'Точка на AA₁ від A').fill('0');
-  await expect(page.getByText(/лежить на прямій AC, тож площину не визначено/)).toBeVisible();
+  await page.getByRole('button', { name: /^Точка M/ }).click();
+  const edges = await entry(page, 'Ребро зі списку').locator('option').allTextContents();
+  expect(edges).toEqual(['Не обрано', 'Ребро B₁C₁', 'Ребро C₁D₁', 'Ребро A₁D₁', 'Ребро CC₁', 'Ребро DD₁']);
+  // Through the diagonal AC, AA1 is offered; its end A lies on the line: said, and nothing to download.
+  await page.getByRole('button', { name: /^Відрізок/ }).click();
+  await entry(page, 'Або зі списку').selectOption({ label: 'AC — діагональ грані' });
+  await page.getByRole('button', { name: /^Точка M/ }).click();
+  await entry(page, 'Ребро зі списку').selectOption({ label: 'Ребро AA₁' });
+  await expect(page.getByRole('button', { name: /^Точка M/ })).toContainText('Середина AA₁');
+  await page.getByRole('radio', { name: 'За відношенням' }).check();
+  await entry(page, 'AM').fill('0');
+  await entry(page, 'MA₁').fill('1');
+  await expect(page.getByText(/^Точка M лежить на прямій вибраного відрізка, тож площину не визначено/)).toBeVisible();
   await expect(partsButton(page)).toBeDisabled();
   expect(errors).toEqual([]);
 });
+
+/**
+ * A plane parallel to a face of a cube or a parallelepiped, built as its construction: a pair of faces by name, if given, and a
+ * position by its ratio from the face, the construction closed afterwards.
+ */
+async function facePlane(
+  page: Page,
+  pair: string | undefined,
+  ratio: readonly [string, string],
+  labels: readonly [string, string],
+) {
+  if (pair !== undefined) {
+    await page.getByRole('button', { name: /^Грань/ }).click();
+    await entry(page, 'Або пару граней зі списку').selectOption({ label: pair });
+  }
+  await page.getByRole('button', { name: /^Положення/ }).click();
+  await page.getByRole('radio', { name: 'За відношенням' }).check();
+  await entry(page, labels[0]).fill(ratio[0]);
+  await entry(page, labels[1]).fill(ratio[1]);
+  await page.getByRole('button', { name: 'Готово', exact: true }).click();
+}
 
 test('a parallelepiped cut by two parallel planes into three parts, with magnets at both', async ({ page }) => {
   const errors = collectErrors(page);
@@ -81,17 +107,19 @@ test('a parallelepiped cut by two parallel planes into three parts, with magnets
   await shapeSelect(page).selectOption({ label: 'Паралелепіпед' });
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно грані' });
-  await entry(page, 'Від грані ABCD').fill('30');
+  await facePlane(page, undefined, ['3', '7'], ['Від ABCD', 'До A₁B₁C₁D₁']);
   await page.getByRole('button', { name: 'Додати паралельний переріз', exact: true }).click();
-  await expect(entry(page, 'Перший переріз: від грані ABCD')).toHaveValue('30');
-  await expect(entry(page, 'Другий переріз: положення')).toHaveValue('60');
+  await expect(page.getByRole('button', { name: /^Положення/ })).toContainText('3 : 7');
+  await expect(page.getByRole('button', { name: /^Другий переріз/ })).toContainText('3 : 2');
   await entry(page, 'Тип кріплення').selectOption({ label: 'Магнітні гнізда' });
   const three = await download(page);
   expect(three.fileName).toBe('parallelepiped-two-face-parallel-sections.3mf');
   expect(three.objects).toEqual(['parallelepiped-lower-part', 'parallelepiped-middle-part', 'parallelepiped-upper-part']);
   expect(three.section).toEqual({ type: 'face-parallel', face: 'ABCD', positionPercent: 30, secondPositionPercent: 60 });
-  // Too close: the second field says so.
-  await entry(page, 'Другий переріз: положення').fill('35');
+  // Too close: the second position says so.
+  await page.getByRole('button', { name: /^Другий переріз/ }).click();
+  await entry(page, 'Другий переріз: Від ABCD').fill('7');
+  await entry(page, 'Другий переріз: До A₁B₁C₁D₁').fill('13');
   await expect(page.getByText(/Перерізи надто близько/)).toBeVisible();
   await expect(partsButton(page)).toBeDisabled();
   await page.getByRole('button', { name: 'Прибрати другий переріз', exact: true }).click();
@@ -106,9 +134,10 @@ test('a triangle cut off a corner, perpendicular to a body diagonal', async ({ p
   await shapeSelect(page).selectOption({ label: 'Прямокутний паралелепіпед' });
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Похилий' });
-  await page.getByRole('button', { name: 'Перпендикулярно ребру або діагоналі' }).click();
-  await entry(page, 'Перпендикулярно до').selectOption({ label: 'Діагональ тіла AC₁' });
-  await expect(page.getByText('Площина перпендикулярна до відрізка AC₁.')).toBeVisible();
+  await page.getByRole('button', { name: /^Перпендикулярно до/ }).click();
+  await entry(page, 'Або зі списку').selectOption({ label: 'AC₁' });
+  await page.getByRole('button', { name: 'Готово', exact: true }).click();
+  await expect(page.getByText(/^Площина перпендикулярна до відрізка AC₁: він задає лише напрям/)).toBeVisible();
   await expect(entry(page, 'Кут до площини основи')).toHaveCount(0);
   await entry(page, 'Положення').fill('15');
   const corner = await download(page);
@@ -128,13 +157,14 @@ test('the section through the diagonal AC and the midpoint of B₁C₁ of a para
   await shapeSelect(page).selectOption({ label: 'Паралелепіпед' });
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Через ребро або діагональ' });
-  await entry(page, 'Грань').selectOption({ label: 'ABCD — нижня основа' });
-  await entry(page, 'Ребро або діагональ грані').selectOption({ label: 'Діагональ AC' });
   await entry(page, 'Спосіб').selectOption({ label: 'Через точку ребра' });
-  await entry(page, 'Ребро з точкою').selectOption({ label: 'Ребро B₁C₁' });
-  // The point starts at the midpoint, which this edge allows, as it allows its ends.
-  await expect(entry(page, 'Точка на B₁C₁ від B₁')).toHaveValue('50');
-  await expect(page.getByRole('button', { name: 'Середина ребра', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: /^Відрізок/ }).click();
+  await entry(page, 'Або зі списку').selectOption({ label: 'AC — діагональ грані' });
+  await page.getByRole('button', { name: /^Точка M/ }).click();
+  await entry(page, 'Ребро зі списку').selectOption({ label: 'Ребро B₁C₁' });
+  // M starts at the midpoint, which this edge allows, as it allows its ends.
+  await expect(page.getByRole('button', { name: /^Точка M/ })).toContainText('Середина B₁C₁');
+  await page.getByRole('button', { name: 'Готово', exact: true }).click();
   const smooth = await download(page);
   expect(smooth.section).toEqual({
     type: 'through-line',
@@ -148,9 +178,15 @@ test('the section through the diagonal AC and the midpoint of B₁C₁ of a para
   await entry(page, 'Тип кріплення').selectOption({ label: 'Магнітні гнізда' });
   const magnets = await download(page);
   expect(magnets.objects.slice(0, 2)).toEqual(['parallelepiped-part-1', 'parallelepiped-part-2']);
-  for (const end of ['0', '100']) {
-    await entry(page, 'Точка на B₁C₁ від B₁').fill(end);
-    expect((await download(page)).section).toMatchObject({ pointPercent: Number(end) });
+  await page.getByRole('button', { name: /^Точка M/ }).click();
+  await page.getByRole('radio', { name: 'За відношенням' }).check();
+  for (const [first, second, percent] of [
+    ['0', '1', 0],
+    ['1', '0', 100],
+  ] as const) {
+    await entry(page, 'B₁M').fill(first);
+    await entry(page, 'MC₁').fill(second);
+    expect((await download(page)).section).toMatchObject({ pointPercent: percent });
   }
   expect(errors).toEqual([]);
 });
@@ -201,7 +237,7 @@ async function labelGeometry(page: Page): Promise<LabelGeometry[]> {
       if (/-(part-1|part-2|lower-part|middle-part|upper-part)$/.test(node.name)) nodes.push(node);
     });
     const nodeOf = (part: string) => nodes.find((node) => node.name.endsWith(`-${part}`) || node.name.endsWith(`-${part}-part`));
-    return [...document.querySelectorAll<HTMLElement>('model-viewer .vertex-label')].map((label) => {
+    return [...document.querySelectorAll<HTMLElement>('model-viewer .point-label')].map((label) => {
       const local = (label.dataset.position ?? '').split(' ').map((value) => Number.parseFloat(value));
       const anchor = apply(scene.target.matrixWorld.elements, local) as [number, number, number];
       const point = (
@@ -292,8 +328,7 @@ test('vertex labels stay on their vertices: unequal edges, both views, the camer
   const shape = { kind: 'cuboid', widthRatio: 0.25, heightRatio: 3 } as const;
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно грані' });
-  await entry(page, 'Паралельно грані').selectOption({ label: 'BCC₁B₁ — бічна грань' });
-  await entry(page, 'Від грані BCC₁B₁').fill('30');
+  await facePlane(page, 'BCC₁B₁ ∥ DAA₁D₁', ['3', '7'], ['Від BCC₁B₁', 'До DAA₁D₁']);
   // Apart: no vertex lies on the plane, so each is named once, on the part that keeps it.
   const apart = await expectLabelsOnVertices(page, shape);
   expect(apart.map((label) => label.name).sort()).toEqual(['A', 'A₁', 'B', 'B₁', 'C', 'C₁', 'D', 'D₁']);
@@ -397,7 +432,9 @@ test('three parts of the cube by two diagonal planes through BD: both interfaces
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Поздовжній' });
   await entry(page, 'Слід на основі').selectOption({ label: 'Через діагональ' });
-  await entry(page, 'Діагональ основи').selectOption({ label: 'Діагональ BD' });
+  await page.getByRole('button', { name: /^Діагональ/ }).click();
+  await entry(page, 'Або зі списку').selectOption({ label: 'BD (і B₁D₁)' });
+  await page.getByRole('button', { name: 'Готово', exact: true }).click();
   await expect(entry(page, 'Положення')).toHaveValue('50');
   await page.getByRole('button', { name: 'Додати паралельний переріз', exact: true }).click();
   // The planes x + y = const, the settled normal (1, 1, 0)/√2 in glTF axes (x, z, −y); the gap is 15 % of 80 mm.
@@ -442,7 +479,7 @@ async function recordFrames(page: Page) {
       stop: false,
     };
     (window as unknown as { frameRecord: typeof record }).frameRecord = record;
-    for (const label of document.querySelectorAll('model-viewer .vertex-label')) record.elements.add(label);
+    for (const label of document.querySelectorAll('model-viewer .point-label')) record.elements.add(label);
     const apply = (m: readonly number[], [x = 0, y = 0, z = 0]: readonly number[]) =>
       [0, 1, 2].map((row) => (m[row] ?? 0) * x + (m[4 + row] ?? 0) * y + (m[8 + row] ?? 0) * z + (m[12 + row] ?? 0));
     const sample = () => {
@@ -456,7 +493,7 @@ async function recordFrames(page: Page) {
         getCamera(): unknown;
         updateMatrixWorld(force: boolean): void;
       };
-      const labels = [...document.querySelectorAll<HTMLElement>('model-viewer .vertex-label')];
+      const labels = [...document.querySelectorAll<HTMLElement>('model-viewer .point-label')];
       for (const label of labels) if (!record.elements.has(label)) record.replaced += 1;
       if (scene._models.length > 0 && scene.renderCount > 0) {
         scene.updateMatrixWorld(true);
@@ -529,7 +566,7 @@ test('vertex labels stay on the drawn vertices in every frame while sliders are 
   await shapeSelect(page).selectOption({ label: 'Паралелепіпед' });
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно грані' });
-  await entry(page, 'Від грані ABCD').fill('30');
+  await facePlane(page, undefined, ['3', '7'], ['Від ABCD', 'До A₁B₁C₁D₁']);
   await page.getByRole('button', { name: 'Додати паралельний переріз', exact: true }).click();
   await openSection(page, 'Нахил');
   await openSection(page, 'Висота');

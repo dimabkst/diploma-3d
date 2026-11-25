@@ -30,7 +30,16 @@ import {
   type ShapeKind,
 } from '@diploma-3d/schema';
 import { formatDecimal, formatSteppedDecimal, parseDecimal, type StepRange } from '../decimal.ts';
-import { BOX_SOLIDS, type BoxSolid, boxContextOf, boxKeysOf, boxModeKeys, boxSectionOf, boxShapeOf, isBoxSolid } from './box.ts';
+import {
+  BOX_SOLIDS,
+  type BoxSolid,
+  boxContextOf,
+  boxKeysOf,
+  boxSectionOf,
+  boxSectionReady,
+  boxShapeOf,
+  isBoxSolid,
+} from './box.ts';
 import type { ParameterChoices, ParameterValues } from './parameters.ts';
 
 /** What turns the connector settings into millimetres: the assembled model's longest side M and the solid's size. */
@@ -327,8 +336,7 @@ export function boxConnectorScale(
   let boxSpanMm = previous?.boxSpanMm;
   if (choices !== undefined && type !== undefined && type !== 'none' && isBoxCut(type)) {
     const context = boxContextOf(kind, choices, shape);
-    const fields = boxModeKeys(keys, type, choices, context);
-    if (fields.every((key) => values[key] !== undefined)) {
+    if (boxSectionReady(keys, type, choices, values, context)) {
       try {
         boxSpanMm = boxSection(solid, scale, {
           box: boxSectionOf(keys, type, choices, (key) => values[key] as number, false, context),

@@ -1,7 +1,10 @@
 <script lang="ts">
 import { GLB_MEDIA_TYPE, type VertexLabel } from '@diploma-3d/engine';
 import { onMount, untrack } from 'svelte';
+import { CONSTRUCTION_HOVER_ATTRIBUTE, type ConstructionPick, type ConstructionView } from '../model/throughPoint.ts';
 import type { PreviewHighlight } from '../shapes.ts';
+import ConstructionOverlay from './ConstructionOverlay.svelte';
+import PointLabel from './PointLabel.svelte';
 
 const NO_HIGHLIGHT: PreviewHighlight = { materials: [], labels: [] };
 
@@ -9,11 +12,14 @@ let {
   glb,
   viewKey,
   alt,
+  onshow,
   onload,
   onerror,
   oncamerachange,
   labels = [],
   highlight: givenHighlight,
+  construction,
+  onconstructionpick,
 }: {
   glb: Uint8Array<ArrayBuffer>;
   /**
@@ -27,6 +33,9 @@ let {
    */
   viewKey: string;
   alt: string;
+  /** A model replaces the one on screen: called just before its first frame, with its own look and labels already in place. */
+  onshow?: ((glb: Uint8Array<ArrayBuffer>) => void) | undefined;
+  /** A model has loaded and is drawn. */
   onload: (glb: Uint8Array<ArrayBuffer>) => void;
   onerror: (glb: Uint8Array<ArrayBuffer>) => void;
   /** The camera's direction in radians: θ around the vertical axis from the model's −Y side, φ from straight above. */
@@ -36,7 +45,69 @@ let {
    * guides (`guide-…`) kept bright while the others recede, and the labels by their shown names.
    */
   highlight?: PreviewHighlight | undefined;
+  /**
+   * The construction view: the assembled solid drawn translucent, its edges, the segment, M and the section over it, and a tap
+   * choosing an element; undefined for the ordinary preview. See `ConstructionOverlay`.
+   */
+  construction?: ConstructionView | undefined;
+  onconstructionpick?: ((pick: ConstructionPick) => void) | undefined;
 } = $props();
+
+/** The parts of model-viewer's scene-graph API the construction view changes, to set every material back afterwards. */
+type LookMaterial = {
+  readonly name: string;
+  readonly pbrMetallicRoughness: {
+    readonly baseColorFactor: readonly number[];
+    setBaseColorFactor(rgba: [number, number, number, number]): void;
+  };
+  readonly isLoaded: boolean;
+  ensureLoaded(): Promise<void>;
+  getAlphaMode(): string;
+  setAlphaMode(mode: 'OPAQUE' | 'BLEND' | 'MASK'): void;
+};
+
+/**
+ * How opaque each kind of material stays in the construction view: the original solid's faces faint; the mesh's own outlines,
+ * the cut faces and their outlines gone, as the view draws the solid's real edges and the sections of the construction being
+ * edited itself. So every model built for the construction looks the same there, the original translucent solid, whichever
+ * section it was cut by. BLEND also stops a material writing depth, so a material gone hides nothing behind it.
+ */
+const constructionAlpha = (name: string): number | undefined =>
+  name === 'surface' ? 0.18 : name === 'edges' || name === 'cut' || /^plane-\d(-edges)?$/.test(name) ? 0 : undefined;
+
+const originalLook = new WeakMap<object, { readonly alpha: number; readonly mode: string }>();
+
+function setLook(material: LookMaterial, alpha: number, translucent: boolean): void {
+  const [r = 0, g = 0, b = 0, a = 1] = material.pbrMetallicRoughness.baseColorFactor;
+  const original = originalLook.get(material) ?? { alpha: a, mode: material.getAlphaMode() };
+  originalLook.set(material, original);
+  material.setAlphaMode(translucent ? 'BLEND' : (original.mode as 'OPAQUE' | 'BLEND' | 'MASK'));
+  material.pbrMetallicRoughness.setBaseColorFactor([r, g, b, translucent ? alpha : original.alpha]);
+}
+
+/**
+ * Every material translucent for the construction view, or back as it was; nothing of the model or its files changes. Loaded
+ * materials, those a model draws, change at once, so that a model's first frame already has its look; others once loaded.
+ */
+function applyLook(element: HTMLElement, translucent: boolean): Promise<void> {
+  const materials = (element as unknown as { model?: { materials: readonly LookMaterial[] } }).model?.materials ?? [];
+  const later: Promise<void>[] = [];
+  for (const material of materials) {
+    const alpha = constructionAlpha(material.name);
+    if (alpha === undefined) continue;
+    if (material.isLoaded) setLook(material, alpha, translucent);
+    else later.push(material.ensureLoaded().then(() => setLook(material, alpha, translucent)));
+  }
+  return Promise.all(later).then(() => undefined);
+}
+
+const lookSafely = (element: HTMLElement, translucent: boolean) => {
+  try {
+    void applyLook(element, translucent).catch(() => undefined);
+  } catch {
+    // A model replaced meanwhile only loses its look until the next one.
+  }
+};
 
 /** The parts of model-viewer's camera and hotspot API used here. */
 type CameraElement = HTMLElement & {
@@ -56,6 +127,7 @@ const DEFAULT_ORBIT = '35deg 62deg auto';
 type SceneMaterial = {
   readonly name: string;
   readonly pbrMetallicRoughness: { readonly baseColorFactor: readonly number[] };
+  readonly isLoaded: boolean;
   ensureLoaded(): Promise<void>;
   setEmissiveFactor(rgb: [number, number, number]): void;
 };
@@ -68,14 +140,10 @@ const RECEDING_GUIDE = 0.25;
  * Lights the highlighted materials in their own colour: a plane's faces glow, the guides concerned stay bright and the others
  * recede; with nothing highlighted, every guide is bright and no plane glows. Only display materials change.
  */
-async function applyHighlight(element: CameraElement, { materials: names }: PreviewHighlight): Promise<void> {
+function applyHighlight(element: CameraElement, { materials: names }: PreviewHighlight): Promise<void> {
   const materials = (element as unknown as { model?: { materials: readonly SceneMaterial[] } }).model?.materials ?? [];
   const lit = new Set(names);
-  for (const material of materials) {
-    const guide = material.name.startsWith('guide-');
-    if (!guide && !material.name.startsWith('plane-')) continue;
-    // model-viewer loads a material's properties on demand; reading them before throws.
-    await material.ensureLoaded();
+  const light = (material: SceneMaterial, guide: boolean) => {
     const [r = 0, g = 0, b = 0] = material.pbrMetallicRoughness.baseColorFactor;
     const factor = guide
       ? lit.size === 0 || lit.has(material.name)
@@ -85,12 +153,26 @@ async function applyHighlight(element: CameraElement, { materials: names }: Prev
         ? LIT_PLANE
         : 0;
     material.setEmissiveFactor([r * factor, g * factor, b * factor]);
+  };
+  const later: Promise<void>[] = [];
+  for (const material of materials) {
+    const guide = material.name.startsWith('guide-');
+    if (!guide && !material.name.startsWith('plane-')) continue;
+    // model-viewer loads a material's properties on demand; reading them before throws. A loaded one changes at once.
+    if (material.isLoaded) light(material, guide);
+    else later.push(material.ensureLoaded().then(() => light(material, guide)));
   }
+  return Promise.all(later).then(() => undefined);
 }
 
 /** The highlight, never in the way of showing the model: a model replaced meanwhile only loses its emphasis. */
-const highlightSafely = (element: CameraElement, shown: PreviewHighlight) =>
-  applyHighlight(element, shown).catch(() => undefined);
+const highlightSafely = (element: CameraElement, shown: PreviewHighlight) => {
+  try {
+    void applyHighlight(element, shown).catch(() => undefined);
+  } catch {
+    // As for the look.
+  }
+};
 
 const highlight = $derived(givenHighlight ?? NO_HIGHLIGHT);
 
@@ -176,14 +258,17 @@ onMount(() => {
 
 // Keyboard focus lands on an element inside model-viewer's shadow root that exposes no CSS part; without this rule it
 // shows the browser's default ring instead of the shared focus outline. It is inset because the viewer clips overflow.
-const FOCUS_STYLES = `.userInput:focus { outline: none; }
-.userInput:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }`;
+// Over an element of the construction that a tap would choose, the pointer cursor; model-viewer sets its grab cursor inline
+// on that element, which only an important rule overrides.
+const SHADOW_STYLES = `.userInput:focus { outline: none; }
+.userInput:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+:host([${CONSTRUCTION_HOVER_ATTRIBUTE}]) .userInput { cursor: pointer !important; }`;
 
 $effect(() => {
   const shadowRoot = viewer?.shadowRoot;
   if (shadowRoot == null) return;
   const sheet = new CSSStyleSheet();
-  sheet.replaceSync(FOCUS_STYLES);
+  sheet.replaceSync(SHADOW_STYLES);
   shadowRoot.adoptedStyleSheets = [...shadowRoot.adoptedStyleSheets, sheet];
 });
 
@@ -232,17 +317,28 @@ function finish(element: CameraElement) {
 $effect(() => {
   if (viewer === undefined) return;
   const element = viewer;
-  const showLabels = () => {
+  // Before the new model's first frame: its labels, its look and the page's construction drawn on it all take their places, so
+  // that the frame shows them together.
+  const show = () => {
     if (loading === undefined || element.getAttribute('src') !== loading.url) return;
-    const { labels: next } = loading;
+    const { labels: next, glb: current } = loading;
     // The hotspots kept move now, before the frame; new ones are added with their positions when Svelte adds them.
     for (const label of next) element.updateHotspot({ name: slotOf(label), position: positionOf(label) });
     shownLabels = next;
+    lookSafely(
+      element,
+      untrack(() => constructing),
+    );
+    highlightSafely(
+      element,
+      untrack(() => highlight),
+    );
+    onshow?.(current);
   };
   const handleLoad = (event: Event) => {
     if (loading === undefined || (event as CustomEvent<{ url?: string }>).detail?.url !== loading.url) return;
     const { glb: current, key, url } = loading;
-    showLabels();
+    show();
     // model-viewer itself keeps the viewing direction and refits the zoom whenever the model is replaced. The first
     // model already starts from the default orbit attribute.
     if (framedKey !== undefined && framedKey !== key) void frame(element, DEFAULT_ORBIT);
@@ -251,10 +347,6 @@ $effect(() => {
     shownUrl = url;
     finish(element);
     onload(current);
-    void highlightSafely(
-      element,
-      untrack(() => highlight),
-    );
   };
   const handleError = () => {
     if (loading === undefined) return;
@@ -263,18 +355,23 @@ $effect(() => {
     finish(element);
     onerror(current);
   };
-  element.addEventListener('before-render', showLabels);
+  element.addEventListener('before-render', show);
   element.addEventListener('load', handleLoad);
   element.addEventListener('error', handleError);
   return () => {
-    element.removeEventListener('before-render', showLabels);
+    element.removeEventListener('before-render', show);
     element.removeEventListener('load', handleLoad);
     element.removeEventListener('error', handleError);
   };
 });
 
 $effect(() => {
-  if (viewer !== undefined) void highlightSafely(viewer, highlight);
+  if (viewer !== undefined) highlightSafely(viewer, highlight);
+});
+
+const constructing = $derived(construction !== undefined);
+$effect(() => {
+  if (viewer !== undefined) lookSafely(viewer, constructing);
 });
 
 $effect(() => {
@@ -290,12 +387,16 @@ onMount(() => () => {
 </script>
 
 {#if elementDefined}
-  <!-- The built-in "legacy" environment has a directional key light, so adjacent flat faces get clearly different tones. -->
+  <!-- The built-in "legacy" environment has a directional key light, so adjacent flat faces get clearly different tones.
+       With panning on, model-viewer by default makes a short click a "tap" that moves the centre of rotation to the
+       clicked point, or zooms out on a click beside the model; disable-tap turns off only that, keeping turning, zooming
+       and panning. -->
   <model-viewer
     bind:this={viewer}
     class="viewer"
     {alt}
     camera-controls
+    disable-tap
     camera-orbit={DEFAULT_ORBIT}
     environment-image="legacy"
     tone-mapping="neutral"
@@ -303,18 +404,21 @@ onMount(() => () => {
   >
     <div slot="progress-bar"></div>
     {#each shownLabels as label (slotOf(label))}
-      <!-- Decorative for screen readers: the panel names the vertices a section uses in its own fields. -->
-      <span
+      <!-- While constructing, the overlay draws the labels above its own lines and fills instead: these stay in place, hidden. -->
+      <PointLabel
         {...{ slot: slotOf(label) }}
-        class="vertex-label"
-        class:hidden={!inView(label)}
-        class:highlighted={highlight.labels.includes(label.name)}
+        text={label.name}
+        tone={inView(label) ? 'visible' : 'faded'}
+        highlighted={highlight.labels.includes(label.name)}
+        style={constructing ? 'visibility: hidden' : undefined}
         data-position={positionOf(label)}
         data-parts={label.parts.join(' ')}
-        aria-hidden="true">{label.name}</span
-      >
+      />
     {/each}
   </model-viewer>
+  {#if construction !== undefined && viewer !== undefined}
+    <ConstructionOverlay {viewer} view={construction} onpick={(pick) => onconstructionpick?.(pick)} />
+  {/if}
 {/if}
 
 <style>
@@ -327,26 +431,4 @@ onMount(() => () => {
     --poster-color: transparent;
   }
 
-  /* model-viewer centres each hotspot on its point; the label stays small and readable over either face colour. */
-  .vertex-label {
-    padding: 0 var(--space-1);
-    font-family: var(--font-heading);
-    font-size: var(--text-tiny);
-    font-variant-ligatures: none;
-    line-height: 1.5;
-    color: var(--color-text);
-    background: var(--color-bg);
-    border: 1px solid var(--color-border-strong);
-    border-radius: var(--radius-input);
-    pointer-events: none;
-    white-space: nowrap;
-  }
-
-  .vertex-label.hidden {
-    opacity: 0.35;
-  }
-
-  .vertex-label.highlighted {
-    border-color: var(--color-accent);
-  }
 </style>

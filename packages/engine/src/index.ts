@@ -33,6 +33,7 @@ export {
   boxFaceOrientations,
   boxFaceParallelPercent,
   boxLineAngleBounds,
+  boxLineAngleOfPoint,
   boxParallelFaces,
   boxPartMinimumMm,
   boxPlane,

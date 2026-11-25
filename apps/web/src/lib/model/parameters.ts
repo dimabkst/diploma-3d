@@ -83,6 +83,7 @@ import {
   BASE_ANGLE_LIMITS,
   BASE_SHIFT_LIMITS,
   BOX_SECTION_TYPES,
+  type BoxFace,
   type BoxSectionSpec,
   type BoxSegment,
   type BoxVertex,
@@ -153,6 +154,15 @@ import {
 } from '@diploma-3d/schema';
 import { formatDecimal, formatSteppedDecimal, halfSumDecimal, parseDecimal, type StepRange, snapDecimal } from '../decimal.ts';
 import {
+  type AngleSide,
+  angleDraft,
+  angleFromPoint,
+  anglePilotActive,
+  pointOffSegment,
+  referenceFaceOf,
+  referenceFaces,
+} from './angleConstruction.ts';
+import {
   BOX_CHOICE_FIELDS,
   BOX_NUMBER_FIELDS,
   BOX_SOLIDS,
@@ -165,16 +175,22 @@ import {
   boxKeysOf,
   boxModeKeys,
   boxSectionOf,
+  boxSectionReady,
+  boxTopologyFor,
+  faceName,
   faceSelection,
   initialBoxChoices,
   isBoxSolid,
   normalSelection,
   pairOf,
   pairSelection,
+  pilotActive,
   segmentKey,
   segmentName,
+  segmentOf,
   throughLineSelection,
   traceSelection,
+  vertexName,
 } from './box.ts';
 import {
   type ConnectorScale,
@@ -188,6 +204,29 @@ import {
   planeAngleRange,
   type ScaledConnectorKey,
 } from './connectorScale.ts';
+import { diagonalFamilies, familyOf } from './diagonalConstruction.ts';
+import {
+  chooseFace,
+  choosePair,
+  faceDraft,
+  facePilotActive,
+  oppositeFace,
+  type Placement,
+  placementKeys,
+  placementPercent,
+  startingSecondRatio,
+} from './faceConstruction.ts';
+import { entryOf, normalEntries } from './normalConstruction.ts';
+import {
+  type ConstructionField,
+  choosePointEdge,
+  chooseSegment,
+  isThroughPointSolid,
+  type PilotDraft,
+  type PointMode,
+  pilotDraft,
+  throughPointSelection,
+} from './throughPoint.ts';
 import {
   anglesFromOffsets,
   DIRECTION_LIMITS,
@@ -491,6 +530,11 @@ export type ModelRequest = {
   readonly connectorStatus?: ConnectorStatus | undefined;
   /** Whether the lower base of the solid cuts the chosen section plate off, which the panel then says. */
   readonly plateClipped?: boolean | undefined;
+  /**
+   * The pilot's construction, while its mode is chosen: a draft that gives no section is said at the construction and shows the
+   * plain solid, whose specification is then not for download; see `PilotDraft`.
+   */
+  readonly pilotDraft?: PilotDraft | undefined;
 } & (
   | {
       readonly spec: ModelSpec;
@@ -619,7 +663,14 @@ const boxTexts = (solid: BoxSolid): Record<BoxNumberKey, string> => {
     SectionSecondPercent: BOX_SECOND_CUT_PLACEHOLDER_PERCENT,
     TraceAngleDeg: 0,
     LineAngleDeg: BOX_LINE_ANGLE_PLACEHOLDER_DEG,
+    LineDihedralDeg: BOX_LINE_ANGLE_PLACEHOLDER_DEG,
     PointPercent: 50,
+    PointRatioFirst: 1,
+    PointRatioSecond: 1,
+    FaceRatioFirst: 1,
+    FaceRatioSecond: 1,
+    SecondRatioFirst: 7,
+    SecondRatioSecond: 3,
     TracePointPercent: 50,
     PlaneInclinationDeg: DEFAULT_OBLIQUE_SECTION.inclinationDeg,
     PlaneDirectionDeg: DEFAULT_OBLIQUE_SECTION.directionDeg,
@@ -857,6 +908,13 @@ export const validateLineAngle = (text: string, exact?: number): Validation => {
   return read.value > 0 && read.value < 180 ? read : { error: 'Кут має бути більшим за 0° і меншим за 180°.' };
 };
 
+/** A part of M's ratio on its edge: any finite number not below zero; that both are not zero is checked with the section. */
+const validateRatioPart = (text: string, exact?: number): Validation => {
+  const read = readNumber(text, '1', exact);
+  if ('error' in read) return read;
+  return read.value >= 0 ? read : { error: 'Частина відношення не може бути від’ємною.' };
+};
+
 /** Each box solid's own validators, by field. */
 const boxValidators = (solid: BoxSolid): Record<BoxNumberKey, (text: string, exact?: number) => Validation> => {
   const byField: Record<(typeof BOX_NUMBER_FIELDS)[number], (text: string, exact?: number) => Validation> = {
@@ -864,8 +922,16 @@ const boxValidators = (solid: BoxSolid): Record<BoxNumberKey, (text: string, exa
     SectionSecondPercent: validateSectionPosition,
     TraceAngleDeg: angleWithin({ min: 0, max: 180 }, '30'),
     LineAngleDeg: validateLineAngle,
+    // The smaller dihedral angle to the reference face: 0° and 90° are kept, for the construction to say what they give.
+    LineDihedralDeg: angleWithin({ min: 0, max: 90 }, '45'),
     PointPercent: (text, exact) =>
       validateNumber(text, inclusiveRange({ min: 0, max: 100 }), { min: 0, max: 100 }, '50', ' %', exact),
+    PointRatioFirst: validateRatioPart,
+    PointRatioSecond: validateRatioPart,
+    FaceRatioFirst: validateRatioPart,
+    FaceRatioSecond: validateRatioPart,
+    SecondRatioFirst: validateRatioPart,
+    SecondRatioSecond: validateRatioPart,
     TracePointPercent: (text, exact) =>
       validateNumber(text, inclusiveRange({ min: 0, max: 100 }), { min: 0, max: 100 }, '50', ' %', exact),
     PlaneInclinationDeg: angleWithin({ min: 0, max: 90 }, '45'),
@@ -1135,35 +1201,66 @@ export function resolveModelRequest(
     return { values, errors, spec: undefined, key: undefined };
   }
   // The cut and the connector are checked before the specification is parsed: their settings have no fixed limits here.
-  const checked =
+  let checked =
     section.section === 'none'
       ? undefined
       : sectionChecks(kind, resolved.shape, size.value, section.section, options.connectorEdits, options.edited);
+  // The pilot's plane that cuts the solid but leaves a part too thin to print at this size is a draft's problem too, said at
+  // the construction; the section's checks name it at the construction's first field.
+  let construction = section.pilotDraft;
+  if (construction?.status === 'valid' && isBoxSolid(kind) && checked !== undefined) {
+    const box = boxKeysOf(kind);
+    // The through-point plane's problems are named at its ratio, a face's planes' at their positions.
+    const said: readonly (readonly [ParameterKey, 'first' | 'second'])[] =
+      activeSection(kind, choices) === 'face-parallel'
+        ? [
+            [box.SectionPercent, 'first'],
+            [box.SectionSecondPercent, 'second'],
+          ]
+        : [
+            [box.PointRatioFirst, 'first'],
+            [box.LineAngleDeg, 'first'],
+          ];
+    for (const [key, position] of said) {
+      const thin = checked.errors[key];
+      if (thin === undefined) continue;
+      construction = { status: 'invalid', problem: 'thin', message: thin, position };
+      checked = undefined;
+      break;
+    }
+  }
+  const draft = construction !== undefined && construction.status !== 'valid';
   if (checked !== undefined) {
     for (const [key, message] of Object.entries(checked.errors) as [ParameterKey, string][]) {
       errors[key] = errors[key] === undefined ? message : `${errors[key]} ${message}`;
     }
   }
   const sectionRanges = checked?.ranges;
-  const connectorStatus = twistElsewhere(kind, choices, resolved.shape)
-    ? { context: '', corrections: [], unavailable: twistElsewhereMessage(kind, choices) }
-    : checked?.resolved?.status;
+  const connectorStatus = draft
+    ? undefined
+    : twistElsewhere(kind, choices, resolved.shape)
+      ? { context: '', corrections: [], unavailable: twistElsewhereMessage(kind, choices) }
+      : checked?.resolved?.status;
   Object.assign(values, checked?.resolved?.values);
+  const own = construction === undefined ? {} : { pilotDraft: construction };
   if (Object.keys(errors).length > 0) {
     const plateClipped = checked?.plateClipped;
-    return { values, errors, sectionRanges, connectorStatus, plateClipped, spec: undefined, key: undefined };
+    return { values, errors, sectionRanges, connectorStatus, plateClipped, ...own, spec: undefined, key: undefined };
   }
-  const built = checked?.resolved?.section ?? section.section;
+  const built = draft ? 'none' : (checked?.resolved?.section ?? section.section);
   const spec = modelSpecSchema.parse({
     shape: resolved.shape,
     scale: { longestDimensionMm: size.value },
     ...(built === 'none' ? {} : { section: built }),
   });
   // The plain cut shown for an unavailable connector is not the plain cut chosen without one: only the latter is for download.
-  const key = `${JSON.stringify(spec)}${connectorStatus?.unavailable === undefined ? '' : ':connector-unavailable'}`;
+  // Nor is the plain solid shown for a construction that gives no section.
+  const key =
+    `${JSON.stringify(spec)}${connectorStatus?.unavailable === undefined ? '' : ':connector-unavailable'}` +
+    (draft ? ':construction-draft' : '');
   const settingsInput: ModelSettingsInput = inclinationInputOf(kind, values, options.tiltModes);
   const plateClipped = checked?.plateClipped;
-  return { values, errors, sectionRanges, connectorStatus, plateClipped, spec, key, settingsInput };
+  return { values, errors, sectionRanges, connectorStatus, plateClipped, ...own, spec, key, settingsInput };
 }
 
 /** What a twist connector became when a section plate was turned on: no connector, said so rather than done silently. */
@@ -1224,6 +1321,20 @@ export function addSecondCut(kind: ShapeKind, state: ParameterState, values: Par
     // Positions run from 10 % to 90 % of the solid's extent along the planes' normal; the first plane is where it is.
     const first = (isBoxSolid(kind) ? boxFirstPercent(kind, state.choices, values) : roundFirstPercent(kind, state)) ?? 50;
     const { min, max } = SECTION_POSITION_LIMITS;
+    if (isBoxSolid(kind) && facePilotActive(boxKeysOf(kind), state.choices as unknown as BoxChoices)) {
+      // The face construction's second plane starts as a ratio from the same face, in lowest terms.
+      const box = boxKeysOf(kind);
+      const [a, b] = startingSecondRatio(first, SECTION_POSITION_LIMITS);
+      const exact = { ...state.exact };
+      delete exact[box.SecondRatioFirst];
+      delete exact[box.SecondRatioSecond];
+      return {
+        ...state,
+        texts: { ...state.texts, [box.SecondRatioFirst]: a, [box.SecondRatioSecond]: b },
+        choices: { ...state.choices, [box.SecondMode]: 'ratio', [second.toggle]: true },
+        exact,
+      };
+    }
     const start = (first + (first <= (min + max) / 2 ? max : min)) / 2;
     return {
       ...state,
@@ -1279,11 +1390,13 @@ function boxFirstPercent(kind: BoxSolid, choices: ParameterChoices, values: Para
   const keys = boxKeysOf(kind);
   const type = activeSection(kind, choices);
   if (type === undefined || !isBoxSectionType(type)) return undefined;
+  if (type === 'face-parallel' && facePilotActive(keys, choices as unknown as BoxChoices)) {
+    return placementPercent(keys, choices as unknown as BoxChoices, (key) => values[key], 'first');
+  }
   if (type === 'face-parallel' || type === 'longitudinal' || type === 'inclined') return values[keys.SectionPercent];
   const context = boxContextFrom(kind, values, choices);
   const { shape } = context;
-  const fields = boxModeKeys(keys, type, choices, context);
-  if (shape === undefined || values.printSizeMm === undefined || fields.some((key) => values[key] === undefined))
+  if (shape === undefined || values.printSizeMm === undefined || !boxSectionReady(keys, type, choices, values, context))
     return undefined;
   const spec = boxSectionOf(keys, type, choices, (key) => values[key] as number, false, context);
   try {
@@ -1515,7 +1628,7 @@ export function boxCutHorizontal(kind: ShapeKind, choices: ParameterChoices, val
   const context = boxContextFrom(kind, values, choices);
   const { shape } = context;
   if (type === undefined || !isBoxSectionType(type) || shape === undefined || values.printSizeMm === undefined) return false;
-  if (boxModeKeys(keys, type, choices, context).some((key) => values[key] === undefined)) return false;
+  if (!boxSectionReady(keys, type, choices, values, context)) return false;
   const spec = boxSectionOf(keys, type, choices, (key) => values[key] as number, false, context);
   return boxPlaneHorizontal(shape as BoxLikeShape, values.printSizeMm, spec as Section);
 }
@@ -1531,6 +1644,8 @@ function representFace(kind: BoxSolid, state: ParameterState, values: ParameterV
   const keys = boxKeysOf(kind);
   const face = state.choices[keys.Face];
   if (activeSection(kind, state.choices) !== 'face-parallel') return undefined;
+  // The face construction keeps the face clicked, either of a pair: it is what its positions are read from.
+  if (facePilotActive(keys, state.choices as unknown as BoxChoices)) return undefined;
   const { shape, orientations } = boxContextFrom(kind, values, state.choices);
   const representative = orientations?.[face];
   if (shape === undefined || representative === undefined || representative === face || values.printSizeMm === undefined) {
@@ -1581,12 +1696,18 @@ export function settleBoxChoices(kind: ShapeKind, state: ParameterState, values:
   const context = boxContextFrom(kind, values, choices);
   const lines = throughLineSelection(keys, choices, context);
   const trace = traceSelection(keys, choices, context);
+  // The construction's segment, M's edge and reference face are the user's, chosen on the model or by name: never replaced.
+  const pilot = pilotActive(keys, choices) || anglePilotActive(keys, choices as unknown as BoxChoices);
   const settled = {
     [keys.Face]: faceSelection(keys, choices, context).face,
-    [keys.LineFace]: lines.face,
-    [keys.Line]: segmentKey(lines.line),
-    [keys.LineMethod]: lines.method,
-    [keys.PointEdge]: segmentKey(lines.pointEdge),
+    ...(pilot
+      ? {}
+      : {
+          [keys.LineFace]: lines.face,
+          [keys.Line]: segmentKey(lines.line),
+          [keys.LineMethod]: lines.method,
+          [keys.PointEdge]: segmentKey(lines.pointEdge),
+        }),
     [keys.Trace]: trace.kind,
     ...(trace.segment === undefined ? {} : { [keys.TraceSegment]: segmentKey(trace.segment) }),
     ...(trace.vertex === undefined ? {} : { [keys.TraceVertex]: trace.vertex }),
@@ -1609,6 +1730,8 @@ export function startLineAngle(kind: ShapeKind, state: ParameterState, values: P
   const keys = boxKeysOf(kind);
   const { choices } = state;
   if (activeSection(kind, choices) !== 'through-line') return undefined;
+  // The construction's angle is the user's alone: kept as typed, also where it gives no section, which the construction says.
+  if (anglePilotActive(keys, choices as unknown as BoxChoices)) return undefined;
   const context = boxContextFrom(kind, values, choices);
   const { shape } = context;
   const { face, line, method } = throughLineSelection(keys, choices, context);
@@ -1650,6 +1773,8 @@ export function startPoint(kind: ShapeKind, state: ParameterState, values: Param
   if (activeSection(kind, choices) !== 'through-line') return undefined;
   const context = boxContextFrom(kind, values, choices);
   const { shape } = context;
+  // The pilot's M is the user's alone: kept as chosen, also where it gives no section, which the construction then says.
+  if (pilotActive(keys, choices)) return undefined;
   const { face, line, method, pointEdge } = throughLineSelection(keys, choices, context);
   if (method !== 'point') return undefined;
   const marker = `${face}:${segmentKey(line)}:${segmentKey(pointEdge)}`;
@@ -2098,10 +2223,10 @@ type BoxSection = Extract<Section, { type: BoxSectionSpec['type'] }>;
  * pyramid's apex its trace's position or point; a plane through the apex and a line of the base has no field of its own, and
  * only the model's size can make it fit.
  */
-const boxPlaneField = (box: BoxKeysOf, section: BoxSection): ParameterKey => {
+const boxPlaneField = (box: BoxKeysOf, section: BoxSection, pilot = false): ParameterKey => {
   switch (section.type) {
     case 'through-line':
-      return section.method === 'angle' ? box.LineAngleDeg : box.PointPercent;
+      return section.method === 'angle' ? box.LineAngleDeg : pilot ? box.PointRatioFirst : box.PointPercent;
     case 'through-apex':
       return section.trace === 'angle'
         ? box.SectionPercent
@@ -2130,7 +2255,9 @@ function boxChecks(
   const scale = { longestDimensionMm };
   const { connector: _connector, ...spec } = section;
   const ranges: SectionRanges = {};
-  const field = boxPlaneField(box, section);
+  // The pilot's M is set by its edge's midpoint or ratio: its problems are said at the ratio, which the construction shows.
+  const pilot = isThroughPointSolid(shape.kind) && section.type === 'through-line' && section.method === 'point';
+  const field = boxPlaneField(box, section, pilot);
   if (section.type === 'through-line' && section.method === 'angle') {
     const bounds = boxLineAngleBounds(shape, scale, section.face, section.line);
     ranges[box.LineAngleDeg] = bounds;
@@ -2145,6 +2272,28 @@ function boxChecks(
     }
     const angle = section.angleDeg as number;
     if (angle < bounds.min - CONSTRAINT_ROUNDOFF_MM || angle > bounds.max + CONSTRAINT_ROUNDOFF_MM) {
+      if (isThroughPointSolid(shape.kind)) {
+        // The construction's angle is the smaller one to the face, α, on one side: the usable turns there, as such angles.
+        const first = angle <= 90;
+        const [low, high] = first ? [bounds.min, Math.min(bounds.max, 90)] : [180 - bounds.max, 180 - Math.max(bounds.min, 90)];
+        const topology = boxTopologyFor(shape.kind as BoxSolid, {
+          prismBaseType: 'regular',
+          prismBaseSides: 4,
+          pyramidBaseType: 'regular',
+          pyramidBaseSides: 4,
+        });
+        return {
+          errors: {
+            [field]:
+              low > high
+                ? 'У цьому положенні перерізу жоден кут не лишає обом частинам придатної товщини. Спробуйте «Інше положення ' +
+                  'перерізу» або збільште модель.'
+                : `За цього кута одна з частин була б надто тонкою. У цьому положенні допустимо від ${formatDecimal(Math.ceil(low * 10) / 10)}° ` +
+                  `до ${formatDecimal(Math.floor(high * 10) / 10)}° до грані ${faceName(topology, section.face)}.`,
+          },
+          ranges,
+        };
+      }
       const shown = planeAngleRange(bounds, 1);
       return {
         errors: {
@@ -2211,7 +2360,8 @@ function boxChecks(
   if (section.type === 'through-line' && section.method === 'point') {
     const edge = section.pointEdge as BoxSegment;
     const range = boxPointRange(shape, scale, section.face, section.line, edge);
-    const interval = range === null ? null : pointInterval(range);
+    // The pilot has excluded M on the line already; its ratio is not moved in by a field's step from there.
+    const interval = range === null ? null : pilot ? { min: range.min, max: range.max } : pointInterval(range);
     ranges[box.PointPercent] = interval;
     const name = segmentName(edge);
     if (range === null || interval === null) {
@@ -2227,12 +2377,15 @@ function boxChecks(
       const onLine =
         (range.minOpen && percent <= range.min + CONSTRAINT_ROUNDOFF_MM) ||
         (range.maxOpen && percent >= range.max - CONSTRAINT_ROUNDOFF_MM);
+      const shown = `${formatDecimal(Math.ceil(interval.min * 10) / 10)} % до ${formatDecimal(Math.floor(interval.max * 10) / 10)} %`;
       return {
         errors: {
           [field]: onLine
             ? collinear(edge)
-            : `За цього положення точки одна з частин була б надто тонкою. На ребрі ${name} допустимо від ` +
-              `${formatDecimal(Math.ceil(interval.min * 10) / 10)} % до ${formatDecimal(Math.floor(interval.max * 10) / 10)} %.`,
+            : pilot
+              ? `За цього положення M одна з частин була б надто тонкою. M має лежати від ${shown} довжини ${name}, ` +
+                `рахуючи від ${vertexName(edge[0])}.`
+              : `За цього положення точки одна з частин була б надто тонкою. На ребрі ${name} допустимо від ${shown}.`,
         },
         ranges,
       };
@@ -2254,11 +2407,27 @@ function boxChecks(
   const allowed = edge <= 50 ? { min: edge, max: 100 - edge } : null;
   // A plane through a line or through the apex is placed by its own fields; the others by their position along n.
   if (section.type !== 'through-line' && section.type !== 'through-apex') ranges[box.SectionPercent] = allowed;
+  // The face construction's positions are ratios between the face and the opposite one: its limits are said as shares of that gap.
+  const facePilot = isThroughPointSolid(shape.kind) && section.type === 'face-parallel';
+  const gap = (() => {
+    if (!facePilot || section.type !== 'face-parallel' || section.face === undefined) return '';
+    const topology = boxTopologyFor(shape.kind as BoxSolid, {
+      prismBaseType: 'regular',
+      prismBaseSides: 4,
+      pyramidBaseType: 'regular',
+      pyramidBaseSides: 4,
+    });
+    const opposite = oppositeFace(topology, section.face);
+    return ` відстані від ${faceName(topology, section.face)} до ${opposite === undefined ? 'протилежної грані' : faceName(topology, opposite)}`;
+  })();
   const allowedText = (shown: Interval | null) =>
     shown === null
       ? 'Модель замала для двох придатних частин уздовж цього напряму: збільште її.'
-      : `Допустимі значення — від ${formatDecimal(Math.ceil(shown.min * 10) / 10)} % до ${formatDecimal(Math.floor(shown.max * 10) / 10)} %: ` +
-        'усі частини мають лишатися придатними до друку.';
+      : facePilot
+        ? `Переріз надто близько до грані: тонша частина була б непридатною до друку. Він має лежати від ` +
+          `${formatDecimal(Math.ceil(shown.min * 10) / 10)} % до ${formatDecimal(Math.floor(shown.max * 10) / 10)} %${gap}.`
+        : `Допустимі значення — від ${formatDecimal(Math.ceil(shown.min * 10) / 10)} % до ${formatDecimal(Math.floor(shown.max * 10) / 10)} %: ` +
+          'усі частини мають лишатися придатними до друку.';
   const reach = boxSplitReach(shape, scale, { box: spec as BoxSectionSpec });
   if (!satisfies(reach)) {
     return {
@@ -3736,7 +3905,12 @@ function resolveSection(
   exact: ParameterExact | undefined,
   scale: ConnectorScale,
   shape: ShapeInput | undefined,
-): { values: ParameterValues; errors: ParameterErrors; section: Section | 'none' | undefined } {
+): {
+  values: ParameterValues;
+  errors: ParameterErrors;
+  section: Section | 'none' | undefined;
+  pilotDraft?: PilotDraft;
+} {
   const keys = sectionKeys[kind];
   const type = activeSection(kind, choices);
   if (keys === undefined || type === undefined) return { values: {}, errors: {}, section: 'none' };
@@ -3751,12 +3925,20 @@ function resolveSection(
   const secondCut = secondCutChosen(kind, choices) ? keys.secondCut : undefined;
   const plate = keys.plate !== undefined && plateChosen(kind, choices) ? keys.plate : undefined;
   const plateFields: IndependentKey[] = plate === undefined ? [] : [plate.thickness, plate.margin];
+  const facePilot = keys.box !== undefined && type === 'face-parallel' && facePilotActive(keys.box, choices);
+  // The face construction's second plane has its own position, at the midpoint or a ratio, from the same face.
+  const secondKeys = (box: BoxKeysOf): IndependentKey[] =>
+    !facePilot
+      ? [secondCut?.offset as IndependentKey]
+      : choices[box.SecondMode] === 'ratio'
+        ? [box.SecondRatioFirst, box.SecondRatioSecond]
+        : [];
   const boxFields = (mode: BoxSectionSpec['type']): IndependentKey[] =>
     keys.box === undefined
       ? []
       : [
           ...boxModeKeys(keys.box, mode, choices, boxContextOf(kind as BoxSolid, choices, shape)),
-          ...(secondCut === undefined ? [] : [secondCut.offset]),
+          ...(secondCut === undefined ? [] : secondKeys(keys.box)),
         ];
   const secondFields: IndependentKey[] = secondCut === undefined ? [] : [secondCut.offset];
   const cutFields: Readonly<Record<SectionType, readonly IndependentKey[]>> = {
@@ -3779,6 +3961,43 @@ function resolveSection(
   };
   const cutKeys = cutFields[type];
   const { values, errors } = validateFields([...cutKeys, ...fields], texts, exact);
+  // The pilot's construction is checked before any plane is made. Its problems, the ratio's as typed among them, are a draft's
+  // that the construction says beside its fields; meanwhile the plain solid is shown, never an earlier section.
+  let construction: PilotDraft | undefined;
+  if (type === 'through-line' && keys.box !== undefined && pilotActive(keys.box, choices)) {
+    const { PointRatioFirst: first, PointRatioSecond: second } = keys.box;
+    construction = pilotDraft(keys.box, choices, values, boxContextOf(kind as BoxSolid, choices, shape), {
+      [first]: errors[first],
+      [second]: errors[second],
+    });
+    delete errors[first];
+    delete errors[second];
+    if (construction.status !== 'valid') return { values, errors, section: 'none', pilotDraft: construction };
+  }
+  // The same for the plane at an angle to the segment's reference face.
+  if (type === 'through-line' && keys.box !== undefined && anglePilotActive(keys.box, choices as unknown as BoxChoices)) {
+    const box = keys.box;
+    construction = angleDraft(box, choices as unknown as BoxChoices, values, boxContextOf(kind as BoxSolid, choices, shape), {
+      [box.LineDihedralDeg]: errors[box.LineDihedralDeg],
+    });
+    delete errors[box.LineDihedralDeg];
+    if (construction.status !== 'valid') return { values, errors, section: 'none', pilotDraft: construction };
+  }
+  // The same for the plane parallel to a face, its second plane's position included.
+  if (facePilot && keys.box !== undefined) {
+    const box = keys.box;
+    const ratioKeys = [box.FaceRatioFirst, box.FaceRatioSecond, box.SecondRatioFirst, box.SecondRatioSecond];
+    construction = faceDraft(
+      box,
+      choices,
+      values,
+      boxTopologyFor(kind as BoxSolid, choices),
+      Object.fromEntries(ratioKeys.map((key) => [key, errors[key]])),
+      secondCut !== undefined,
+    );
+    for (const key of ratioKeys) delete errors[key];
+    if (construction.status !== 'valid') return { values, errors, section: 'none', pilotDraft: construction };
+  }
   // The fields show millimetres: their errors name millimetres too.
   const units = connectorUnits(scale, connectorType === 'dowel' ? 'dowel' : 'plug', type);
   for (const key of fields) {
@@ -3912,7 +4131,7 @@ function resolveSection(
     secondCut !== undefined && (ROUND_PAIR_TYPES as readonly string[]).includes(type) && (kind === 'cylinder' || kind === 'cone')
       ? ({ ...built, secondPositionPercent: read(secondCut.offset) } as Section)
       : built;
-  return { values, errors, section: paired };
+  return { values, errors, section: paired, ...(construction === undefined ? {} : { pilotDraft: construction }) };
 }
 
 const valid = (values: ParameterValues, shape: ShapeInput): ShapeResolution => ({ values, errors: {}, shape });
@@ -4352,7 +4571,27 @@ function inactiveSectionKeys(kind: ShapeKind, choices: ParameterChoices): (keyof
       ...secondFields,
     ],
     'shared-generatrix': planar?.linked === undefined ? [] : Object.values(planar.linked),
-    'face-parallel': box === undefined ? [] : [box.Face, box.SectionPercent, ...secondFields],
+    'face-parallel':
+      box === undefined
+        ? []
+        : facePilotActive(box, choices as BoxChoices)
+          ? [
+              box.Face,
+              box.FaceMode,
+              ...(choices[box.FaceMode] === 'ratio' ? [box.FaceRatioFirst, box.FaceRatioSecond] : []),
+              ...(second === undefined
+                ? []
+                : [
+                    second.toggle,
+                    ...(twoPlanes
+                      ? [
+                          box.SecondMode,
+                          ...(choices[box.SecondMode] === 'ratio' ? [box.SecondRatioFirst, box.SecondRatioSecond] : []),
+                        ]
+                      : []),
+                  ]),
+            ]
+          : [box.Face, box.SectionPercent, ...secondFields],
     longitudinal:
       box === undefined
         ? []
@@ -4379,7 +4618,17 @@ function inactiveSectionKeys(kind: ShapeKind, choices: ParameterChoices): (keyof
             box.LineFace,
             box.Line,
             box.LineMethod,
-            ...(choices[box.LineMethod] === 'angle' ? [box.LineAngleDeg] : [box.PointEdge, box.PointPercent]),
+            ...(choices[box.LineMethod] === 'angle'
+              ? anglePilotActive(box, choices as BoxChoices)
+                ? [box.LineDihedralDeg, box.LineSide]
+                : [box.LineAngleDeg]
+              : pilotActive(box, choices as BoxChoices)
+                ? [
+                    box.PointEdge,
+                    box.PointMode,
+                    ...(choices[box.PointMode] === 'ratio' ? [box.PointRatioFirst, box.PointRatioSecond] : []),
+                  ]
+                : [box.PointEdge, box.PointPercent]),
             ...secondFields,
           ],
     inclined:
@@ -4400,7 +4649,29 @@ function inactiveSectionKeys(kind: ShapeKind, choices: ParameterChoices): (keyof
     ...(plate === undefined ? [] : [plate.toggle, plate.thickness, plate.margin]),
     ...(second === undefined ? [] : [second.toggle, second.offset]),
   ];
-  const cuts = [...new Set([...Object.values(cutFields).flat(), ...allPlateFields])].filter((key) => !active.has(key));
+  // Every field of a box's planes, by whichever way of a mode reads it, so that one another way reads is inactive too.
+  const allBoxPlaneFields =
+    box === undefined
+      ? []
+      : [
+          box.LineAngleDeg,
+          box.LineDihedralDeg,
+          box.LineSide,
+          box.PointPercent,
+          box.PointEdge,
+          box.PointMode,
+          box.PointRatioFirst,
+          box.PointRatioSecond,
+          box.FaceMode,
+          box.FaceRatioFirst,
+          box.FaceRatioSecond,
+          box.SecondMode,
+          box.SecondRatioFirst,
+          box.SecondRatioSecond,
+        ];
+  const cuts = [...new Set([...Object.values(cutFields).flat(), ...allPlateFields, ...allBoxPlaneFields])].filter(
+    (key) => !active.has(key),
+  );
   // Whether the first plane through the apex was set up is no setting, and starts over with the section.
   const always: (keyof ParameterChoices)[] = [
     'coneApexStarted',
@@ -4474,3 +4745,169 @@ export function switchTiltMode(solid: TiltSolid, state: ParameterState, values: 
   }
   return { ...state, texts, exact, tiltModes: { ...modes, [solid]: 'angle' } };
 }
+
+/** A choice in the pilot's construction, from the model or from its fields; see `throughPoint.ts`. */
+export type PilotChoice =
+  | { readonly kind: 'segment'; readonly segment: BoxSegment }
+  | { readonly kind: 'point-edge'; readonly edge: BoxSegment }
+  | { readonly kind: 'mode'; readonly mode: PointMode }
+  /** A face clicked on the model, either of its pair. */
+  | { readonly kind: 'face'; readonly face: BoxFace }
+  /** A pair of opposite faces chosen by name, by its first face. */
+  | { readonly kind: 'face-pair'; readonly face: BoxFace }
+  /** A plane parallel to a face at the midpoint or at a ratio: the first plane's position, or the second one's. */
+  | { readonly kind: 'placement'; readonly which: Placement; readonly mode: PointMode }
+  /** A plane through a segment by a point M or at an angle; the segment is the same. */
+  | { readonly kind: 'method'; readonly method: 'point' | 'angle' }
+  /** The face a plane's angle is measured from: either face of an edge. */
+  | { readonly kind: 'angle-face'; readonly face: BoxFace }
+  /** The other plane through the segment at the same angle to the same face. */
+  | { readonly kind: 'angle-side' }
+  /** A base diagonal for a longitudinal plane, of either base, its ends in either order. */
+  | { readonly kind: 'diagonal'; readonly segment: BoxSegment }
+  /** The segment an inclined plane is perpendicular to: any two vertices, in either order. */
+  | { readonly kind: 'normal'; readonly segment: BoxSegment };
+
+/**
+ * The state with a plane through a segment given at an angle to a face as the plane it is now: its angle and side from that face, an
+ * exact value behind the shown text. Undefined where there is no such plane, a point off the segment given, to read them from.
+ */
+function angleState(
+  kind: BoxSolid,
+  state: ParameterState,
+  values: ParameterValues,
+  face: BoxFace,
+  segment: BoxSegment,
+  point: (shape: BoxLikeShape, scale: { longestDimensionMm: number }) => readonly [number, number, number] | undefined,
+): ParameterState | undefined {
+  const keys = boxKeysOf(kind);
+  const { shape } = boxContextFrom(kind, values, state.choices);
+  if (shape === undefined || values.printSizeMm === undefined) return undefined;
+  const scale = { longestDimensionMm: values.printSizeMm };
+  const off = point(shape, scale);
+  const angle = off === undefined ? undefined : angleFromPoint(shape, scale, face, segment, off);
+  if (angle === undefined) return undefined;
+  return {
+    ...state,
+    texts: { ...state.texts, [keys.LineDihedralDeg]: formatDecimal(angle.angleDeg) },
+    exact: { ...state.exact, [keys.LineDihedralDeg]: angle.angleDeg },
+    choices: { ...state.choices, [keys.LineFace]: face, [keys.LineSide]: angle.side satisfies AngleSide },
+  };
+}
+
+/**
+ * The state after a choice in the pilot's construction: a segment, M's edge or M's mode. Only that choice changes: the others,
+ * the ratio's texts and everything else stay, also where the construction then gives no section.
+ */
+export function applyPilotChoice(
+  kind: ShapeKind,
+  state: ParameterState,
+  values: ParameterValues,
+  choice: PilotChoice,
+): ParameterState {
+  if (!isBoxSolid(kind) || !isThroughPointSolid(kind)) return state;
+  const keys = boxKeysOf(kind);
+  const choices = state.choices as unknown as BoxChoices;
+  switch (choice.kind) {
+    case 'segment': {
+      const context = boxContextFrom(kind, values, state.choices);
+      return { ...state, choices: { ...state.choices, ...chooseSegment(kind, choices, choice.segment, context) } };
+    }
+    case 'point-edge':
+      return { ...state, choices: { ...state.choices, ...choosePointEdge(kind, choices, choice.edge) } };
+    case 'mode':
+      return { ...state, choices: { ...state.choices, [keys.PointMode]: choice.mode } };
+    case 'face':
+    case 'face-pair': {
+      const topology = boxTopologyFor(kind, state.choices);
+      return choice.kind === 'face'
+        ? chooseFace(keys, topology, state, choice.face)
+        : choosePair(keys, topology, state, choice.face);
+    }
+    case 'placement':
+      return { ...state, choices: { ...state.choices, [placementKeys(keys, choice.which).mode]: choice.mode } };
+    case 'method': {
+      const next = { ...state, choices: { ...state.choices, [keys.LineMethod]: choice.method } };
+      if (choice.method !== 'angle' || choices[keys.LineMethod] === 'angle') return next;
+      // From a plane through M to one at an angle, as the same plane: its angle and side read through M, from the segment's
+      // reference face. The point's edge, mode and ratio stay for a way back.
+      const context = boxContextFrom(kind, values, state.choices);
+      const selection = throughPointSelection(keys, choices, context);
+      const draft = pilotDraft(keys, choices, values, context);
+      const { segment, pointEdge } = selection;
+      if (draft.status !== 'valid' || segment === undefined || pointEdge === undefined) return next;
+      const face = referenceFaceOf(context.topology, segment, choices[keys.LineFace]);
+      return (
+        angleState(kind, next, values, face, segment, (shape, scale) => {
+          const vertices = boxVertices(shape, scale);
+          const [from, to] = [vertices[pointEdge[0]], vertices[pointEdge[1]]];
+          const t = draft.percent / 100;
+          return [from[0] + t * (to[0] - from[0]), from[1] + t * (to[1] - from[1]), from[2] + t * (to[2] - from[2])];
+        }) ?? next
+      );
+    }
+    case 'angle-face': {
+      const context = boxContextFrom(kind, values, state.choices);
+      const { segment } = throughPointSelection(keys, choices, context);
+      if (segment === undefined || !referenceFaces(context.topology, segment).includes(choice.face)) return state;
+      const current = referenceFaceOf(context.topology, segment, choices[keys.LineFace]);
+      const next = { ...state, choices: { ...state.choices, [keys.LineFace]: choice.face } };
+      if (choice.face === current) return next;
+      // A valid plane stays where it is: only its angle is now read from the other face, and its side with it.
+      const draft = angleDraft(keys, choices, values, context, {});
+      if (draft.status !== 'valid' || values.printSizeMm === undefined) return next;
+      const plane = boxSectionOf(keys, 'through-line', choices, (key) => values[key] as number, false, context);
+      return (
+        angleState(kind, next, values, choice.face, segment, (shape, scale) =>
+          pointOffSegment(shape, scale, plane as Parameters<typeof pointOffSegment>[2], segment),
+        ) ?? next
+      );
+    }
+    case 'normal': {
+      const context = boxContextFrom(kind, values, state.choices);
+      const entry = entryOf(normalEntries(context.topology), choice.segment);
+      if (entry === undefined || choices[keys.NormalAlong] === entry.key) return state;
+      const next = {
+        ...state,
+        choices: { ...state.choices, [keys.NormalAlong]: entry.key, [keys.ParallelEdges]: 'none' as const },
+      };
+      // The positions run along the normal: a segment of the same direction keeps them, one pointing the other way reads them
+      // from the other side, so that the plane stays where it was in both cases.
+      const current = choices[keys.NormalAlong];
+      const { shape } = context;
+      if (current === 'none' || shape === undefined || values.printSizeMm === undefined) return next;
+      const vertices = boxVertices(shape, { longestDimensionMm: values.printSizeMm });
+      const direction = ([first, second]: readonly [BoxVertex, BoxVertex]) => {
+        const [p, q] = [vertices[first], vertices[second]];
+        return [q[0] - p[0], q[1] - p[1], q[2] - p[2]] as const;
+      };
+      const [a, b] = [direction(segmentOf(current)), direction(entry.segment)];
+      const cross = Math.hypot(a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]);
+      const dotted = a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+      if (cross > 1e-9 * Math.hypot(...a) * Math.hypot(...b) || dotted > 0) return next;
+      const texts = { ...next.texts };
+      const exact = { ...next.exact };
+      for (const key of [keys.SectionPercent, keys.SectionSecondPercent]) {
+        const value = values[key];
+        if (value === undefined) continue;
+        texts[key] = formatDecimal(100 - value);
+        exact[key] = 100 - value;
+      }
+      return { ...next, texts, exact };
+    }
+    case 'diagonal': {
+      // A family by either of its diagonals: an upper one, or the one in effect, changes nothing, the plane's position included.
+      const context = boxContextFrom(kind, values, state.choices);
+      const family = familyOf(diagonalFamilies(traceSelection(keys, choices, context).segments), choice.segment);
+      if (family === undefined || choices[keys.TraceSegment] === family.key) return state;
+      return { ...state, choices: { ...state.choices, [keys.TraceSegment]: family.key } };
+    }
+    case 'angle-side':
+      return {
+        ...state,
+        choices: { ...state.choices, [keys.LineSide]: choices[keys.LineSide] === 'first' ? 'second' : 'first' },
+      };
+  }
+}
+
+export type { ConstructionField };

@@ -15,7 +15,6 @@ import {
   type ParameterChoices,
   type ParameterState,
   type ParameterTexts,
-  pointAtMidpoint,
   removeSecondCut,
   resetShapeParameters,
   resolveModelRequest,
@@ -25,6 +24,7 @@ import {
   throughHeightFoot,
   traceThrough,
 } from './parameters.ts';
+import { PILOT_MESSAGES } from './throughPoint.ts';
 
 const texts = (overrides: Partial<ParameterTexts> = {}): ParameterTexts => ({ ...initialParameterTexts(), ...overrides });
 const choices = (overrides: Partial<ParameterChoices> = {}): ParameterChoices => ({ ...initialParameterChoices(), ...overrides });
@@ -77,25 +77,18 @@ describe('the sections of a cube and the parallelepipeds', () => {
     expect(shapePanel('cube', choices()).type).toBe('parameters');
   });
 
-  it('a plane parallel to a face: the face by its letters, the position from it, the lower base at first', () => {
-    const chosen = { cubeSection: 'face-parallel' } as const;
-    const group = groupOf('cube', 'Переріз', { cubeSectionPercent: '30' }, chosen);
-    expect(labels(group)).toEqual([
-      'Тип перерізу',
-      'Паралельно грані',
-      'Від грані ABCD',
-      'Додати паралельний переріз',
-      'Розсунути частини',
-    ]);
-    expect(optionsOf(group, 'cubeFace').map((option) => option.label)).not.toContain('A₁B₁C₁D₁ — верхня основа');
-    expect(request('cube', { cubeSectionPercent: '30' }, chosen).spec?.section).toEqual({
+  it('a plane parallel to a face: its face and its ratio of distances in one construction, the lower base at first', () => {
+    const chosen = { cubeSection: 'face-parallel', cubeFaceMode: 'ratio' } as const;
+    const ratio = { cubeFaceRatioFirst: '3', cubeFaceRatioSecond: '7' };
+    const group = groupOf('cube', 'Переріз', ratio, chosen);
+    expect(labels(group)).toEqual(['Тип перерізу', 'cube-face-construction', 'Додати паралельний переріз', 'Розсунути частини']);
+    expect(request('cube', ratio, chosen).spec?.section).toEqual({
       type: 'face-parallel',
       face: 'ABCD',
       positionPercent: 30,
     });
     expect(group.status).toEqual({ text: 'паралельно грані', highlighted: true });
   });
-
   it('a longitudinal plane: at an angle to AB, or through a diagonal, then parallel to it once moved', () => {
     const chosen = { cuboidSection: 'longitudinal' } as const;
     expect(request('cuboid', { cuboidTraceAngleDeg: '30', cuboidSectionPercent: '40' }, chosen).spec?.section).toEqual({
@@ -128,53 +121,51 @@ describe('the sections of a cube and the parallelepipeds', () => {
     expect(moved.choices.cuboidTraceThrough).toBe(false);
     const apart = groupOf('cuboid', 'Переріз', moved.texts, moved.choices);
     expect(apart.status).toEqual({ text: 'поздовжній', highlighted: true });
-    expect(labels(apart)).toContain('Площина паралельна діагоналі BD, але не проходить через неї.');
+    expect(labels(apart)).toContain('Площина паралельна діагональному перерізу через BD, але не проходить через діагональ.');
     expect(request('cuboid', moved.texts, moved.choices).spec?.section).toMatchObject({ positionPercent: 65 });
     const again = settled('cuboid', traceThrough('cuboid', moved));
     expect(again.texts.cuboidSectionPercent).toBe('50');
   });
 
-  it('a plane through an edge by its angle starts in the middle of the usable angles, once per line', () => {
+  it('a plane through an edge at an angle to a face: the smaller angle to that face, kept as typed, said when too thin', () => {
     const chosen = { cubeSection: 'through-line' } as const;
-    const state: ParameterState = { texts: texts({ cubeLineAngleDeg: '10' }), choices: choices(chosen) };
-    const values = request('cube', {}, chosen).values;
-    const started = startLineAngle('cube', state, values) as ParameterState;
-    expect(started.texts.cubeLineAngleDeg).toBe('45');
-    expect(started.choices.cubeLineAngleFor).toBe('ABCD:A-B');
-    expect(startLineAngle('cube', { ...started, texts: { ...started.texts, cubeLineAngleDeg: '60' } }, values)).toBeUndefined();
-    const result = request('cube', started.texts, started.choices);
-    expect(result.spec?.section).toEqual({
+    const state: ParameterState = { texts: texts({ cubeLineDihedralDeg: '10' }), choices: choices(chosen) };
+    const values = request('cube', state.texts, chosen).values;
+    // Nothing moves the angle of the construction: neither a start nor a later correction.
+    expect(startLineAngle('cube', state, values)).toBeUndefined();
+    expect(request('cube', { cubeLineDihedralDeg: '45' }, chosen).spec?.section).toEqual({
       type: 'through-line',
       face: 'ABCD',
       line: ['A', 'B'],
       method: 'angle',
       angleDeg: 45,
     });
-    const group = groupOf('cube', 'Переріз', started.texts, started.choices);
-    expect(labels(group)).toContain('Кут повороту від грані ABCD');
-    expect(labels(group)).not.toContain('Кут до основи');
-    const angle = sectionNumberFields(group).find((field) => field.key === 'cubeLineAngleDeg');
-    expect(angle?.range?.min).toBeGreaterThan(0);
-    expect(angle?.range?.max).toBeLessThan(90);
-    // Beyond the adjacent face the plane no longer cuts the cube.
-    expect(request('cube', { cubeLineAngleDeg: '95' }, chosen).errors.cubeLineAngleDeg).toMatch(
-      /^За цього кута одна з частин була б надто тонкою\. Для прямої AB допустимо від \d/,
+    const group = groupOf('cube', 'Переріз', {}, chosen);
+    expect(group.fields.find((field) => field.type === 'through-point')).toMatchObject({
+      method: 'angle',
+      angle: { title: 'Кут до ABCD', value: '45°', faces: [{ value: 'ABCD' }, { value: 'ABB1A1' }] },
+    });
+    // Near the adjacent face the part beyond the plane is a sliver: said at the construction, as such angles from ABCD.
+    const thin = request('cube', { cubeLineDihedralDeg: '88' }, chosen);
+    expect(thin.errors).toEqual({});
+    expect(thin.pilotDraft).toMatchObject({ status: 'invalid', problem: 'thin' });
+    expect((thin.pilotDraft as { message: string }).message).toMatch(
+      /^За цього кута одна з частин була б надто тонкою\. У цьому положенні допустимо від \d+(,\d)?° до \d+(,\d)?° до грані ABCD\.$/,
     );
   });
-
   it('keeps the line and the point’s edge to the chosen face, and offers its edges and diagonals', () => {
+    // A prism's plane through a line by its fields: a face, then its lines.
     const state: ParameterState = {
       texts: texts(),
-      choices: choices({ parallelepipedSection: 'through-line', parallelepipedLineFace: 'BCC1B1' }),
+      choices: choices({ prismSection: 'through-line', prismLineFace: 'BCC1B1' }),
     };
-    const values = request('parallelepiped', {}, state.choices).values;
-    const settled = settleBoxChoices('parallelepiped', state, values) as ParameterState;
-    expect(settled.choices.parallelepipedLine).toBe('B-C');
-    // Every point of DA gives the base through BC; the first edge that gives another plane takes its place.
-    expect(settled.choices.parallelepipedPointEdge).toBe('D1-A1');
-    expect(settleBoxChoices('parallelepiped', settled, values)).toBeUndefined();
-    const group = groupOf('parallelepiped', 'Переріз', {}, settled.choices);
-    expect(optionsOf(group, 'parallelepipedLine').map((option) => option.label)).toEqual([
+    const values = request('prism', {}, state.choices).values;
+    const settled = settleBoxChoices('prism', state, values) as ParameterState;
+    expect(settled.choices.prismLine).toBe('B-C');
+    expect(settled.choices.prismPointEdge).not.toBe('');
+    expect(settleBoxChoices('prism', settled, values)).toBeUndefined();
+    const group = groupOf('prism', 'Переріз', {}, settled.choices);
+    expect(optionsOf(group, 'prismLine').map((option) => option.label)).toEqual([
       'Ребро BC',
       'Ребро CC₁',
       'Ребро C₁B₁',
@@ -182,14 +173,17 @@ describe('the sections of a cube and the parallelepipeds', () => {
       'Діагональ BC₁',
       'Діагональ CB₁',
     ]);
+    // A parallelepiped's construction keeps its own segment and face: nothing is settled for it.
+    const construction: ParameterState = {
+      texts: texts(),
+      choices: choices({ parallelepipedSection: 'through-line', parallelepipedLineFace: 'BCC1B1' }),
+    };
+    const own = settleBoxChoices('parallelepiped', construction, request('parallelepiped', {}, construction.choices).values);
+    expect(own?.choices.parallelepipedLine ?? 'A-B').toBe('A-B');
   });
-
-  it('a plane through an edge and a point of another: the midpoint a click away, a point on the line refused', () => {
+  it('a plane through an edge and a point of another: M at the midpoint or a ratio, a point on the line refused', () => {
     const chosen = { cubeSection: 'through-line', cubeLineMethod: 'point' } as const;
-    const state: ParameterState = { texts: texts({ cubePointPercent: '20' }), choices: choices(chosen) };
-    const middle = pointAtMidpoint('cube', state);
-    expect(middle.texts.cubePointPercent).toBe('50');
-    expect(request('cube', middle.texts, chosen).spec?.section).toEqual({
+    expect(request('cube', {}, chosen).spec?.section).toEqual({
       type: 'through-line',
       face: 'ABCD',
       line: ['A', 'B'],
@@ -197,13 +191,21 @@ describe('the sections of a cube and the parallelepipeds', () => {
       pointEdge: ['C', 'C1'],
       pointPercent: 50,
     });
-    const group = groupOf('cube', 'Переріз', middle.texts, chosen);
-    expect(labels(group)).toContain('Точка на CC₁ від C');
-    expect(group.fields.find((field) => field.key === 'cube-line-midpoint')).toMatchObject({ disabled: true });
-    // A on AA1 lies on the diagonal AC itself.
-    const onLine = request('cube', { cubePointPercent: '0' }, { ...chosen, cubeLine: 'A-C', cubePointEdge: 'A-A1' });
-    expect(onLine.errors.cubePointPercent).toMatch(/^Точка на ребрі AA₁ лежить на прямій AC, тож площину не визначено/);
-    expect(onLine.spec).toBeUndefined();
+    const group = groupOf('cube', 'Переріз', {}, chosen);
+    expect(group.fields.find((field) => field.type === 'through-point')).toMatchObject({
+      segment: { title: 'AB' },
+      point: { title: 'Середина CC₁', mode: 'midpoint', labels: ['CM', 'MC₁'] },
+    });
+    // A on AA1, AM : MA1 = 0 : 1, lies on the diagonal AC itself.
+    const onLine = request(
+      'cube',
+      { cubePointRatioFirst: '0', cubePointRatioSecond: '1' },
+      { ...chosen, cubeLine: 'A-C', cubePointEdge: 'A-A1', cubePointMode: 'ratio' },
+    );
+    // Said at the construction, which shows the plain solid meanwhile: no field error to block it.
+    expect(onLine.pilotDraft).toEqual({ status: 'invalid', problem: 'collinear', message: PILOT_MESSAGES.collinear });
+    expect(onLine.errors).toEqual({});
+    expect(onLine.spec?.section).toBeUndefined();
   });
 
   it('an inclined plane by its angles, or perpendicular to an edge or a diagonal from the collapsed further way', () => {
@@ -214,106 +216,122 @@ describe('the sections of a cube and the parallelepipeds', () => {
       directionDeg: 120,
       positionPercent: 50,
     });
+    // A cube's segment in its own field, listed by name in three groups; the lateral edges once, as they are parallel.
     const group = groupOf('cube', 'Переріз', {}, chosen);
-    const further = group.fields.find((field) => field.key === 'cube-normal-along') as unknown as {
-      label: string;
-      fields: { key: string; options?: { label: string }[] }[];
-    };
+    const field = group.fields.find((candidate) => candidate.type === 'normal-construction');
+    const segments = field?.type === 'normal-construction' ? field.options : [];
+    expect(segments.map(({ label }) => label)).toContain('Бічні ребра (AA₁)');
+    expect(segments.map(({ label }) => label)).not.toContain('AA₁');
+    expect(segments).toContainEqual({ value: 'A-C', label: 'AC', group: 'Діагоналі граней' });
+    expect(segments).toContainEqual({ value: 'A-C1', label: 'AC₁', group: 'Діагоналі тіла' });
+    // The lateral edges as one, the eight base edges, twelve face diagonals and four body diagonals.
+    expect(segments).toHaveLength(1 + 8 + 12 + 4);
+    // A prism keeps the collapsed list of the same choice.
+    const further = groupOf('prism', 'Переріз', {}, { prismSection: 'inclined' }).fields.find(
+      (candidate) => candidate.key === 'prism-normal-along',
+    ) as unknown as { label: string; fields: { options?: { label: string }[] }[] };
     expect(further.label).toBe('Перпендикулярно ребру або діагоналі');
-    const segments = (further.fields[0]?.options ?? []).map((option) => option.label);
-    expect(segments).toContain('Бічні ребра');
-    expect(segments).not.toContain('Ребро AA₁');
-    expect(segments).toContain('Діагональ грані AC');
-    expect(segments).toContain('Діагональ тіла AC₁');
-    // Not chosen, the lateral edges as one, the eight base edges, twelve face diagonals and four body diagonals.
-    expect(segments).toHaveLength(1 + 1 + 8 + 12 + 4);
+    expect((further.fields[0]?.options ?? []).map(({ label }) => label)).toContain('Бічні ребра');
     // The triangle near the corner A, perpendicular to the body diagonal.
     const perpendicular = { ...chosen, cubeNormalAlong: 'A-C1' } as const;
     const triangle = request('cube', { cubeSectionPercent: '16' }, perpendicular);
     expect(triangle.errors).toEqual({});
     expect(triangle.spec?.section).toMatchObject({ type: 'inclined', normalAlong: ['A', 'C1'], positionPercent: 16 });
-    expect(labels(groupOf('cube', 'Переріз', {}, perpendicular))).toContain('Площина перпендикулярна до відрізка AC₁.');
+    expect(labels(groupOf('cube', 'Переріз', {}, perpendicular))).toContain(
+      'Площина перпендикулярна до відрізка AC₁: він задає лише напрям, а положення площини — поле нижче, тож сам відрізок вона ' +
+        'може й не перетинати.',
+    );
   });
 
   it('refuses a position that leaves a part thinner than its tenth of the extent, with the positions allowed', () => {
-    const tooFar = request('cube', { cubeSectionPercent: '95' }, { cubeSection: 'face-parallel' });
-    expect(tooFar.errors.cubeSectionPercent).toBe('Допустимі значення — від 10 % до 90 %.');
+    const chosen = { cubeSection: 'face-parallel', cubeFaceMode: 'ratio' } as const;
+    const tooFar = request('cube', { cubeFaceRatioFirst: '95', cubeFaceRatioSecond: '5' }, chosen);
+    expect(tooFar.errors).toEqual({});
+    expect(tooFar.pilotDraft).toMatchObject({ status: 'invalid', problem: 'thin', position: 'first' });
+    expect((tooFar.pilotDraft as { message: string }).message).toMatch(/від 10 % до 90 % відстані від ABCD до A₁B₁C₁D₁\.$/);
     // A small solid keeps both parts at least 1,2 mm thick: the positions narrow.
-    const small = request('cube', { printSizeMm: '10', cubeSectionPercent: '11' }, { cubeSection: 'face-parallel' });
-    expect(small.sectionRanges?.cubeSectionPercent).toEqual({ min: 12, max: 88 });
-    expect(small.errors.cubeSectionPercent).toMatch(/^Допустимі значення — від 12 % до 88 %: усі частини/);
+    const small = request('cube', { printSizeMm: '10', cubeFaceRatioFirst: '11', cubeFaceRatioSecond: '89' }, chosen);
+    expect((small.pilotDraft as { message: string }).message).toMatch(/від 12 % до 88 %/);
+    // A prism keeps its percentages.
+    const prism = request('prism', { prismSectionPercent: '95' }, { prismSection: 'face-parallel' });
+    expect(prism.errors.prismSectionPercent).toBe('Допустимі значення — від 10 % до 90 %.');
   });
 });
 
 describe('a second parallel plane of a box', () => {
   it('starts halfway between the first plane and the farther end, and gives three parts', () => {
-    const chosen = { cubeSection: 'face-parallel' } as const;
-    const at = (first: string) => {
-      const state: ParameterState = { texts: texts({ cubeSectionPercent: first }), choices: choices(chosen) };
+    const chosen = { cubeSection: 'face-parallel', cubeFaceMode: 'ratio' } as const;
+    const at = (first: string, second: string) => {
+      const typed = { cubeFaceRatioFirst: first, cubeFaceRatioSecond: second };
+      const state: ParameterState = { texts: texts(typed), choices: choices(chosen) };
       const added = addSecondCut('cube', state, request('cube', state.texts, chosen).values);
       expect(added.choices.cubeSecondCut).toBe(true);
-      return added.texts.cubeSectionSecondPercent;
+      expect(added.choices.cubeSecondMode).toBe('ratio');
+      return `${added.texts.cubeSecondRatioFirst} : ${added.texts.cubeSecondRatioSecond}`;
     };
-    expect(at('50')).toBe('70');
-    expect(at('30')).toBe('60');
-    expect(at('80')).toBe('45');
-    const two = request('cube', { cubeSectionPercent: '30', cubeSectionSecondPercent: '60' }, { ...chosen, cubeSecondCut: true });
-    expect(two.spec?.section).toEqual({ type: 'face-parallel', face: 'ABCD', positionPercent: 30, secondPositionPercent: 60 });
-    const group = groupOf('cube', 'Переріз', { cubeSectionPercent: '30' }, { ...chosen, cubeSecondCut: true });
-    expect(labels(group)).toEqual([
-      'Тип перерізу',
-      'Перший переріз',
-      'Паралельно грані',
-      'Перший переріз: від грані ABCD',
-      'Другий переріз: положення',
-      'Прибрати другий переріз',
-      'Розсунути частини',
-    ]);
+    expect(at('1', '1')).toBe('7 : 3');
+    expect(at('3', '7')).toBe('3 : 2');
+    expect(at('4', '1')).toBe('1 : 1');
+    const two = { ...chosen, cubeSecondCut: true };
+    const typed = { cubeFaceRatioFirst: '3', cubeFaceRatioSecond: '7', cubeSecondRatioFirst: '3', cubeSecondRatioSecond: '2' };
+    expect(request('cube', typed, two).spec?.section).toEqual({
+      type: 'face-parallel',
+      face: 'ABCD',
+      positionPercent: 30,
+      secondPositionPercent: 60,
+    });
+    const group = groupOf('cube', 'Переріз', typed, two);
+    expect(labels(group)).toEqual(['Тип перерізу', 'cube-face-construction', 'Прибрати другий переріз', 'Розсунути частини']);
     expect(group.status).toEqual({ text: 'два перерізи', highlighted: true });
-    const removed = removeSecondCut('cube', { texts: texts(), choices: choices({ ...chosen, cubeSecondCut: true }) });
+    const removed = removeSecondCut('cube', { texts: texts(), choices: choices(two) });
     expect(request('cube', removed.texts, removed.choices).spec?.section).toEqual({
       type: 'face-parallel',
       face: 'ABCD',
       positionPercent: 50,
     });
   });
-
   it('beside a plane through a line, starts from where the line puts the first plane', () => {
     const chosen = { cubeSection: 'through-line', cubeLineFace: 'ABB1A1', cubeLine: 'A-B1' } as const;
-    const state: ParameterState = { texts: texts({ cubeLineAngleDeg: '90' }), choices: choices(chosen) };
+    const state: ParameterState = { texts: texts({ cubeLineDihedralDeg: '90' }), choices: choices(chosen) };
     // The diagonal section AB1C1D passes through the cube's centre: 50 %, so the second plane starts at 70 %.
     const added = addSecondCut('cube', state, request('cube', state.texts, chosen).values);
     expect(added.texts.cubeSectionSecondPercent).toBe('70');
   });
-
-  it('refuses a middle part that is too thin, on the second plane’s field', () => {
+  it('refuses a middle part that is too thin, at the second plane’s position', () => {
     const close = request(
       'cube',
-      { cubeSectionPercent: '50', cubeSectionSecondPercent: '55' },
+      { cubeSecondRatioFirst: '11', cubeSecondRatioSecond: '9' },
       { cubeSection: 'face-parallel', cubeSecondCut: true },
     );
-    expect(close.errors.cubeSectionSecondPercent).toMatch(/^Перерізи надто близько: середня частина має завтовшки 4 мм/);
-    expect(close.spec).toBeUndefined();
-  });
-
-  it('fits a dowel to both planes, and says which plane cannot take magnets', () => {
-    const chosen = { cubeSection: 'face-parallel', cubeSecondCut: true } as const;
-    const dowels = request(
-      'cube',
-      { cubeSectionPercent: '30', cubeSectionSecondPercent: '70' },
-      { ...chosen, cubeConnector: 'dowel' },
+    expect(close.errors).toEqual({});
+    expect(close.pilotDraft).toMatchObject({ status: 'invalid', problem: 'thin', position: 'second' });
+    expect((close.pilotDraft as { message: string }).message).toMatch(
+      /^Перерізи надто близько: середня частина має завтовшки 4 мм/,
     );
+    expect(close.spec?.section).toBeUndefined();
+  });
+  it('fits a dowel to both planes, and says which plane cannot take magnets', () => {
+    const chosen = { cubeSection: 'face-parallel', cubeSecondCut: true, cubeFaceMode: 'ratio' } as const;
+    const planes = { cubeFaceRatioFirst: '3', cubeFaceRatioSecond: '7', cubeSecondRatioFirst: '7', cubeSecondRatioSecond: '3' };
+    const dowels = request('cube', planes, { ...chosen, cubeConnector: 'dowel' });
     expect(dowels.errors).toEqual({});
     expect(dowels.connectorStatus?.unavailable).toBeUndefined();
     expect(dowels.spec?.section).toMatchObject({ secondPositionPercent: 70, connector: { type: 'dowel' } });
     const thin = request(
       'cube',
       // At 60 mm the middle part is 6,6 mm thick: two pockets 3,1 mm deep leave 0,4 mm between them.
-      { printSizeMm: '60', cubeSectionPercent: '45', cubeSectionSecondPercent: '56', cubeMagnetThicknessMm: '3' },
+      {
+        printSizeMm: '60',
+        cubeFaceRatioFirst: '45',
+        cubeFaceRatioSecond: '55',
+        cubeSecondRatioFirst: '56',
+        cubeSecondRatioSecond: '44',
+        cubeMagnetThicknessMm: '3',
+      },
       { ...chosen, cubeConnector: 'magnet' },
     );
     expect(thin.connectorStatus?.unavailable).toMatch(/^Біля першого перерізу: Середня частина затонка/);
-    const connector = groupOf('cube', 'Кріплення', { cubeSectionPercent: '30' }, { ...chosen, cubeConnector: 'dowel' });
+    const connector = groupOf('cube', 'Кріплення', planes, { ...chosen, cubeConnector: 'dowel' });
     expect(labels(connector)).toContain(
       'Кріплення однакове на обох перерізах: між нижньою й середньою та між середньою й верхньою частинами.',
     );
@@ -350,22 +368,20 @@ describe('a box’s section among its other settings', () => {
 
 describe('the choices of a plane through a line lead only to usable planes', () => {
   const through = { cubeSection: 'through-line', cubeLineMethod: 'point' } as const;
+  // The pilot's list of M's edges, which the model's picking offers too.
   const edgeLabels = (chosen: Partial<ParameterChoices>, kind: BoxSolid = 'cube', overrides: Partial<ParameterTexts> = {}) =>
-    optionsOf(groupOf(kind, 'Переріз', overrides, chosen), `${kind}PointEdge`).map((option) => option.label);
+    (
+      groupOf(kind, 'Переріз', overrides, chosen).fields.find((field) => field.type === 'through-point') as unknown as {
+        point: { options: { label: string }[] };
+      }
+    ).point.options.map((option) => option.label);
 
   it('leaves out an edge all of whose points give a face, and keeps one that only an end of fails', () => {
-    // Through AB of the side face ABB1A1, any point of BC or DA gives the base.
-    const side = edgeLabels({ ...through, cubeLineFace: 'ABB1A1', cubeLine: 'A-B' });
-    expect(side).not.toContain('Ребро BC');
-    expect(side).not.toContain('Ребро DA');
-    expect(side.length).toBeGreaterThan(0);
-    // Through AB of the base, A1B1 gives the side face, and so do AA1 and BB1 wherever they do not meet AB.
-    expect(edgeLabels(through)).toEqual(['Ребро B₁C₁', 'Ребро C₁D₁', 'Ребро D₁A₁', 'Ребро CC₁', 'Ребро DD₁']);
-    // Through AC, AA1 stays: only A, at 0 %, lies on the line; its field starts a step above it.
+    // Through AB, any point of BC or DA gives the base, and of AA1 or BB1 the side face: no face to choose first.
+    expect(edgeLabels(through)).toEqual(['Ребро B₁C₁', 'Ребро C₁D₁', 'Ребро A₁D₁', 'Ребро CC₁', 'Ребро DD₁']);
+    // Through AC, AA1 stays: only A, at 0 : 1, lies on the line.
     const diagonal = { ...through, cubeLine: 'A-C', cubePointEdge: 'A-A1' } as const;
     expect(edgeLabels(diagonal)).toEqual(expect.arrayContaining(['Ребро AA₁', 'Ребро B₁C₁']));
-    const point = sectionNumberFields(groupOf('cube', 'Переріз', {}, diagonal)).find((field) => field.key === 'cubePointPercent');
-    expect(point?.range).toMatchObject({ min: 5, max: 100 });
   });
 
   it('the screenshot’s section through AC and the midpoint of B1C1, and its ends, on the cube and the parallelepipeds', () => {
@@ -387,14 +403,21 @@ describe('the choices of a plane through a line lead only to usable planes', () 
       const keys = boxKeysOf(kind);
       const chosen = {
         [keys.Section]: 'through-line',
-        [keys.LineFace]: 'ABCD',
         [keys.Line]: 'A-C',
         [keys.LineMethod]: 'point',
         [keys.PointEdge]: 'B1-C1',
       } as Partial<ParameterChoices>;
       expect(edgeLabels(chosen, kind, shape)).toContain('Ребро B₁C₁');
-      for (const percent of ['0', '50', '100']) {
-        const result = request(kind, { ...shape, [keys.PointPercent]: percent }, chosen);
+      for (const [mode, first, second, percent] of [
+        ['ratio', '0', '1', 0],
+        ['midpoint', '1', '1', 50],
+        ['ratio', '1', '0', 100],
+      ] as const) {
+        const result = request(
+          kind,
+          { ...shape, [keys.PointRatioFirst]: first, [keys.PointRatioSecond]: second },
+          { ...chosen, [keys.PointMode]: mode },
+        );
         expect(result.errors).toEqual({});
         expect(result.spec?.section).toEqual({
           type: 'through-line',
@@ -402,50 +425,42 @@ describe('the choices of a plane through a line lead only to usable planes', () 
           line: ['A', 'C'],
           method: 'point',
           pointEdge: ['B1', 'C1'],
-          pointPercent: Number(percent),
+          pointPercent: percent,
         });
       }
     }
   });
 
-  it('replaces the choices a new face leaves without a usable plane, all together and before any model is made', () => {
-    const before = { ...through, cubeLine: 'A-C', cubePointEdge: 'A-A1' } as const;
-    // On the side face ABB1A1 there is no diagonal AC, and AA1 lies in that face.
-    const state: ParameterState = { texts: texts(), choices: choices({ ...before, cubeLineFace: 'ABB1A1' }) };
+  it('keeps the chosen segment and M’s edge: no face to settle, nothing replaced behind the user’s back', () => {
+    const state: ParameterState = {
+      texts: texts(),
+      choices: choices({ ...through, cubeLine: 'A-C', cubePointEdge: 'A-A1', cubeLineFace: 'ABB1A1' }),
+    };
     const values = request('cube', {}, state.choices).values;
-    const settled = settleBoxChoices('cube', state, values) as ParameterState;
-    expect(settled.choices.cubeLine).toBe('A-B');
-    expect(settled.choices.cubeLineMethod).toBe('point');
-    const group = groupOf('cube', 'Переріз', {}, settled.choices);
-    expect(optionsOf(group, 'cubePointEdge').map((option) => option.value)).toContain(settled.choices.cubePointEdge);
-    expect(settleBoxChoices('cube', settled, values)).toBeUndefined();
-    // The request of the unsettled choices already makes the plane of the settled ones: no removed option reaches a model.
-    expect(request('cube', {}, state.choices).spec?.section).toEqual(request('cube', {}, settled.choices).spec?.section);
+    const settled = settleBoxChoices('cube', state, values);
+    expect(settled?.choices.cubeLine ?? 'A-C').toBe('A-C');
+    expect(settled?.choices.cubePointEdge ?? 'A-A1').toBe('A-A1');
+    expect(request('cube', {}, state.choices).spec?.section).toMatchObject({ face: 'ABCD', line: ['A', 'C'] });
   });
 
-  it('moves a point that its new edge does not allow, once, and keeps one that it does', () => {
-    // At 0 % the point on AA1 is A, on the diagonal AC.
-    const chosen = { ...through, cubeLine: 'A-C', cubePointEdge: 'A-A1' } as const;
-    const state: ParameterState = { texts: texts({ cubePointPercent: '0' }), choices: choices(chosen) };
-    const values = request('cube', state.texts, chosen).values;
-    const started = startPoint('cube', state, values) as ParameterState;
-    expect(started.texts.cubePointPercent).toBe('50');
-    expect(started.choices.cubePointFor).toBe('ABCD:A-C:A-A1');
-    expect(startPoint('cube', { ...started, texts: { ...started.texts, cubePointPercent: '0' } }, values)).toBeUndefined();
-    // Through AB and CC1 the wedge below is too thin near C: 5 % goes to the middle, 30 % stays.
-    const low = { ...through, cubePointEdge: 'C-C1' } as const;
-    const kept = startPoint(
-      'cube',
-      { texts: texts({ cubePointPercent: '30' }), choices: choices(low) },
-      request('cube', { cubePointPercent: '30' }, low).values,
+  it('never moves M: a point on the line or a part too thin stays as typed, said at the construction', () => {
+    // At 0 : 1 the point on AA1 is A, on the diagonal AC.
+    const chosen = { ...through, cubeLine: 'A-C', cubePointEdge: 'A-A1', cubePointMode: 'ratio' } as const;
+    const onLine = { cubePointRatioFirst: '0', cubePointRatioSecond: '1' };
+    const state: ParameterState = { texts: texts(onLine), choices: choices(chosen) };
+    expect(startPoint('cube', state, request('cube', state.texts, chosen).values)).toBeUndefined();
+    // Through AB and CC1 the wedge below is too thin near C: 1 : 19 stays, and the section's own check says why.
+    const low = { ...through, cubePointEdge: 'C-C1', cubePointMode: 'ratio' } as const;
+    const thinTexts = { cubePointRatioFirst: '1', cubePointRatioSecond: '19' };
+    const thin = request('cube', thinTexts, low);
+    expect(thin.errors).toEqual({});
+    expect(thin.pilotDraft).toMatchObject({ status: 'invalid', problem: 'thin' });
+    expect((thin.pilotDraft as { message: string }).message).toMatch(
+      /^За цього положення M одна з частин була б надто тонкою\. M має лежати від 11,2 % до 100 % довжини CC₁, рахуючи від C\./,
     );
-    expect(kept?.texts.cubePointPercent).toBe('30');
-    const thin = request('cube', { cubePointPercent: '5' }, low);
-    expect(thin.errors.cubePointPercent).toMatch(
-      /^За цього положення точки одна з частин була б надто тонкою\. На ребрі CC₁ допустимо від 11,2 % до 100 %\./,
-    );
-    const moved = startPoint('cube', { texts: texts({ cubePointPercent: '5' }), choices: choices(low) }, thin.values);
-    expect(moved?.texts.cubePointPercent).toBe('50');
+    expect(startPoint('cube', { texts: texts(thinTexts), choices: choices(low) }, thin.values)).toBeUndefined();
+    const kept = { cubePointRatioFirst: '3', cubePointRatioSecond: '7' };
+    expect(request('cube', kept, low).spec?.section).toMatchObject({ pointEdge: ['C', 'C1'], pointPercent: 30 });
   });
 
   it('falls back to the angle where no edge of the line has a usable point, and offers only the angle there', () => {
@@ -468,7 +483,7 @@ describe('the choices of a plane through a line lead only to usable planes', () 
     const smooth = edgeLabels({ ...chosen, cubeConnector: 'none' });
     expect(edgeLabels(chosen, 'cube', { cubeMagnetDiameterMm: '40' })).toEqual(smooth);
     const result = request('cube', { cubeMagnetDiameterMm: '40' }, chosen);
-    expect(result.errors.cubePointPercent).toBeUndefined();
+    expect(result.errors.cubePointRatioFirst).toBeUndefined();
     expect(Object.keys(result.errors).some((key) => key.startsWith('cubeMagnet'))).toBe(true);
     expect(result.spec).toBeUndefined();
   });
@@ -482,49 +497,46 @@ describe('a plane parallel to a face, by one face of each opposite pair', () => 
     ['parallelepiped', { parallelepipedOffsetXRatio: '2', parallelepipedOffsetYRatio: '-1,5', parallelepipedBaseAngleDeg: '35' }],
   ];
 
-  it('offers three faces, and the other modes all six', () => {
+  it('offers the three pairs of opposite faces by name, and a plane through a segment all of its segments', () => {
     for (const [kind, shape] of parallelepipeds) {
       const keys = boxKeysOf(kind);
       const parallel = groupOf(kind, 'Переріз', shape, { [keys.Section]: 'face-parallel' } as Partial<ParameterChoices>);
-      expect(optionsOf(parallel, keys.Face).map((option) => option.label)).toEqual([
-        'ABCD — нижня основа',
-        'ABB₁A₁ — бічна грань',
-        'BCC₁B₁ — бічна грань',
+      const construction = parallel.fields.find((field) => field.type === 'face-construction');
+      expect(construction?.type === 'face-construction' ? construction.face.options.map(({ label }) => label) : []).toEqual([
+        'ABCD ∥ A₁B₁C₁D₁',
+        'ABB₁A₁ ∥ CDD₁C₁',
+        'BCC₁B₁ ∥ DAA₁D₁',
       ]);
+      // A plane through a segment offers every edge and every face's diagonal, with no face to choose first.
       const through = groupOf(kind, 'Переріз', shape, { [keys.Section]: 'through-line' } as Partial<ParameterChoices>);
-      expect(optionsOf(through, keys.LineFace)).toHaveLength(6);
+      const segments = through.fields.find((field) => field.type === 'through-point');
+      expect(segments?.type === 'through-point' ? segments.segment.options : []).toHaveLength(24);
     }
   });
-
-  it('turns an earlier opposite face into its representative, keeping both planes where they are', () => {
+  it('keeps the face clicked, either of its pair, and both planes measured from it', () => {
     for (const [kind, shape] of parallelepipeds) {
       const keys = boxKeysOf(kind);
       const chosen = {
         [keys.Section]: 'face-parallel',
         [keys.Face]: 'CDD1C1',
+        [keys.FaceMode]: 'ratio',
         [keys.SecondCut]: true,
       } as Partial<ParameterChoices>;
       const state: ParameterState = {
-        texts: texts({ ...shape, [keys.SectionPercent]: '30', [keys.SectionSecondPercent]: '62,5' }),
+        texts: texts({
+          ...shape,
+          [keys.FaceRatioFirst]: '3',
+          [keys.FaceRatioSecond]: '7',
+          [keys.SecondRatioFirst]: '62,5',
+          [keys.SecondRatioSecond]: '37,5',
+        }),
         choices: choices(chosen),
       };
       const before = request(kind, state.texts, state.choices);
-      const settled = settleBoxChoices(kind, state, before.values) as ParameterState;
-      expect(settled.choices[keys.Face]).toBe('ABB1A1');
-      expect(settled.texts[keys.SectionPercent]).toBe('70');
-      expect(settled.texts[keys.SectionSecondPercent]).toBe('37,5');
-      expect(settleBoxChoices(kind, settled, request(kind, settled.texts, settled.choices).values)).toBeUndefined();
-      // The parts are the same solids: the planes did not move, nor did the order of the parts.
-      const volumes = (texts_: ParameterTexts, chosen_: ParameterChoices) => {
-        const result = resolveModelRequest(kind, texts_, chosen_, { connectorEdits: {} });
-        return result.spec;
-      };
-      const [a, b] = [volumes(state.texts, state.choices), volumes(settled.texts, settled.choices)];
-      expect(a?.section).toMatchObject({ face: 'CDD1C1', positionPercent: 30, secondPositionPercent: 62.5 });
-      expect(b?.section).toMatchObject({ face: 'ABB1A1', positionPercent: 70, secondPositionPercent: 37.5 });
+      expect(settleBoxChoices(kind, state, before.values)?.choices[keys.Face] ?? 'CDD1C1').toBe('CDD1C1');
+      expect(before.spec?.section).toMatchObject({ face: 'CDD1C1', positionPercent: 30, secondPositionPercent: 62.5 });
     }
   });
-
   it('keeps another mode’s position: the shared field is converted only for a plane parallel to a face', () => {
     const state: ParameterState = {
       texts: texts({ cubeSectionPercent: '30' }),
@@ -704,13 +716,16 @@ describe('leaving a plane perpendicular to the lateral edges for its angles', ()
     ['a right prism', 'prism', { prismBaseSides: 5 }, {}],
     ['an oblique prism', 'prism', { prismBaseSides: 3 }, { prismOffsetXRatio: '0,4', prismOffsetYRatio: '-0,2' }],
     ['a parallelepiped', 'parallelepiped', {}, { parallelepipedOffsetXRatio: '0,3' }],
-  ] as const)('%s: the same planes, the angles shown again, and the preset offered again', (_, kind, base, shape) => {
+  ] as const)('%s: the same planes, the angles shown again, and the lateral edges offered again', (_, kind, base, shape) => {
     const keys = boxKeysOf(kind);
+    // A prism offers the lateral edges by a shortcut; a parallelepiped among the segments of «Перпендикулярно до», always there.
+    const lateral = kind === 'prism' ? `${kind}-normal-lateral` : `${kind}-normal`;
     const manual = settled(kind, {
       texts: texts({ ...shape, [keys.PlaneInclinationDeg]: '30', [keys.PlaneDirectionDeg]: '60', [keys.SectionPercent]: '40' }),
       choices: choices({ ...base, [keys.Section]: 'inclined' } as Partial<ParameterChoices>),
     });
-    expect(fieldKeys(kind, manual)).toContain(`${kind}-normal-lateral`);
+    expect(fieldKeys(kind, manual)).toContain(lateral);
+    expect(fieldKeys(kind, manual).includes(`${kind}-normal-lateral`)).toBe(kind === 'prism');
     let state = manual;
     for (let round = 0; round < 3; round += 1) {
       const perpendicular = settled(kind, normalAlongLateral(kind, state));
@@ -729,9 +744,7 @@ describe('leaving a plane perpendicular to the lateral edges for its angles', ()
       const back = settled(kind, normalAlongManual(kind, leaning));
       expect(back.choices[keys.NormalAlong]).toBe('none');
       expect(back.choices[keys.NormalFrom]).toBe('');
-      expect(fieldKeys(kind, back)).toEqual(
-        expect.arrayContaining([keys.PlaneInclinationDeg, keys.PlaneDirectionDeg, `${kind}-normal-lateral`]),
-      );
+      expect(fieldKeys(kind, back)).toEqual(expect.arrayContaining([keys.PlaneInclinationDeg, keys.PlaneDirectionDeg, lateral]));
       expect(fieldKeys(kind, back)).not.toContain(`${kind}-normal-manual`);
       expectSamePlanes(before, planesOf(kind, back));
       // Nothing else changed: the solid, the position, the separation.

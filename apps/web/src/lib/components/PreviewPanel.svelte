@@ -1,9 +1,15 @@
 <script lang="ts">
-import type { VertexLabel } from '@diploma-3d/engine';
+import type { BoxLikeShape, GeneratedModel, VertexLabel } from '@diploma-3d/engine';
 import type { Section } from '@diploma-3d/schema';
 import { vertexName } from '../model/box.ts';
 import { type ModelState, visibleArtifacts } from '../model/modelState.ts';
 import type { ParameterKey } from '../model/parameters.ts';
+import {
+  type ConstructionDraft,
+  type ConstructionPick,
+  type ConstructionView,
+  constructionGeometry,
+} from '../model/throughPoint.ts';
 import { formatSize, type PreviewHighlight } from '../shapes.ts';
 import Button from './Button.svelte';
 import ModelViewer from './ModelViewer.svelte';
@@ -18,6 +24,8 @@ let {
   onfocusfield,
   onretry,
   highlight,
+  construction,
+  onconstructionpick,
 }: {
   shapeName: string;
   model: ModelState;
@@ -32,6 +40,12 @@ let {
   onretry: () => void;
   /** What the control in use changes, by material and by vertex name as the model has it, such as A1. */
   highlight?: PreviewHighlight | undefined;
+  /**
+   * The construction being edited, or one that gives no section: the assembled solid is shown for it, translucent, whatever the
+   * separation switch says, which is kept for afterwards; see `ConstructionView`. Its geometry is drawn on the model on screen.
+   */
+  construction?: (Omit<ConstructionView, 'geometry'> & { readonly draft: ConstructionDraft }) | undefined;
+  onconstructionpick?: ((pick: ConstructionPick) => void) | undefined;
 } = $props();
 
 // The labels are shown as a textbook writes them, A₁ for A1; so are the highlighted ones.
@@ -55,14 +69,24 @@ let shownSection = $state.raw<Section | undefined>();
 let cameraDirection = $state.raw({ theta: 0, phi: 0 });
 
 const artifacts = $derived(visibleArtifacts(model));
+// Picking works on the original assembled solid: while constructing, the parts come together, and go apart again afterwards.
+const apart = $derived(separated && construction === undefined);
 // Either preview of a section is ready with the model, so toggling the separation only swaps them.
-const glb = $derived(separated ? (artifacts?.separatedPreviewGlb ?? artifacts?.previewGlb) : artifacts?.previewGlb);
+const glb = $derived(apart ? (artifacts?.separatedPreviewGlb ?? artifacts?.previewGlb) : artifacts?.previewGlb);
 // The vertices go with the preview shown, also with the parts apart; named as a textbook writes them, A₁ for A1.
 const labels = $derived<readonly VertexLabel[]>(
   (
-    (separated && artifacts?.separatedPreviewGlb !== undefined ? artifacts?.separatedVertexLabels : artifacts?.vertexLabels) ?? []
+    (apart && artifacts?.separatedPreviewGlb !== undefined ? artifacts?.separatedVertexLabels : artifacts?.vertexLabels) ?? []
   ).map((label) => ({ ...label, name: vertexName(label.name as Parameters<typeof vertexName>[0]) })),
 );
+// The model whose preview is on screen, which the construction's lines are drawn from, so that both always match.
+let shownModel = $state.raw<GeneratedModel>();
+const constructionView = $derived.by((): ConstructionView | undefined => {
+  if (construction === undefined || shownModel === undefined) return undefined;
+  const { draft, ...view } = construction;
+  const geometry = constructionGeometry(shownModel.spec.shape as BoxLikeShape, shownModel.spec.scale, draft);
+  return geometry === undefined ? undefined : { ...view, geometry };
+});
 // The parts of the shown model: two of a single cut, three between two parallel planes.
 const partCount = $derived(
   artifacts?.model.solids.filter((solid) => solid.part !== undefined && solid.part !== 'dowel' && solid.part !== 'plate')
@@ -79,9 +103,26 @@ $effect.pre(() => {
   }
 });
 
+// Each GLB with the model it shows, so that the model on screen is the one of the GLB just shown, not the latest one built.
+const modelsByGlb = new WeakMap<Uint8Array, GeneratedModel>();
+$effect.pre(() => {
+  if (artifacts === undefined) return;
+  for (const shown of [artifacts.previewGlb, artifacts.separatedPreviewGlb]) {
+    if (shown !== undefined) modelsByGlb.set(shown, artifacts.model);
+  }
+});
+
+/** Just before a GLB's first frame: what is drawn over it follows in the same frame. */
+function showModel(shown: Uint8Array<ArrayBuffer>) {
+  const next = modelsByGlb.get(shown);
+  if (next === undefined || next === shownModel) return;
+  shownModel = next;
+  shownSection = next.spec.section;
+}
+
 function showLoaded(loaded: Uint8Array<ArrayBuffer>) {
   loadedGlb = loaded;
-  shownSection = artifacts?.model.spec.section;
+  showModel(loaded);
 }
 
 // Whether some earlier model is already on screen, so an update needs only a small indicator instead of an overlay.
@@ -110,6 +151,9 @@ const assembled = $derived(shownArtifacts?.model.section !== undefined);
           alt={`Інтерактивна 3D-модель: ${shapeName.toLowerCase()}${artifacts?.model.section === undefined ? '' : partCount === 3 ? ', три частини перерізу' : ', дві частини перерізу'}`}
           {labels}
           highlight={shownHighlight}
+          construction={constructionView}
+          onconstructionpick={(pick) => onconstructionpick?.(pick)}
+          onshow={showModel}
           onload={showLoaded}
           onerror={(failed) => (failedGlb = failed)}
           oncamerachange={(direction) => (cameraDirection = direction)}

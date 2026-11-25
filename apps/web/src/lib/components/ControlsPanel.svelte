@@ -10,8 +10,10 @@ import {
   type ParameterKey,
   type ParameterTexts,
   type ParameterValues,
+  type PilotChoice,
   type TrapezoidAlignment,
 } from '../model/parameters.ts';
+import type { ConstructionField } from '../model/throughPoint.ts';
 import type { TiltMode, TiltSolid } from '../model/tilt.ts';
 import {
   type ActionField,
@@ -28,15 +30,19 @@ import {
 } from '../shapes.ts';
 import Button from './Button.svelte';
 import Checkbox from './Checkbox.svelte';
+import DiagonalConstruction from './DiagonalConstruction.svelte';
+import FaceConstruction from './FaceConstruction.svelte';
 import Field from './Field.svelte';
 import FieldDisclosure from './FieldDisclosure.svelte';
 import HelpToggle from './HelpToggle.svelte';
 import LinkedBaseDiagram from './LinkedBaseDiagram.svelte';
+import NormalConstruction from './NormalConstruction.svelte';
 import NumberField from './NumberField.svelte';
 import ParameterSection from './ParameterSection.svelte';
 import SectionSwatch from './SectionSwatch.svelte';
 import SegmentedControl from './SegmentedControl.svelte';
 import Select from './Select.svelte';
+import ThroughPointConstruction from './ThroughPointConstruction.svelte';
 
 let {
   panel,
@@ -52,6 +58,9 @@ let {
   onaction,
   onroundedit,
   onactivefield,
+  onconstruction,
+  onpilotchoice,
+  oncancelpending,
 }: {
   panel: ShapePanel;
   texts: ParameterTexts;
@@ -72,7 +81,21 @@ let {
   onroundedit: () => void;
   /** The control being hovered, or else focused, by its field's key; undefined for none. */
   onactivefield?: ((key: string | undefined) => void) | undefined;
+  /** Opens a field of the pilot's construction, or closes it; see `ThroughPointField`. */
+  onconstruction?: ((open: ConstructionField | undefined) => void) | undefined;
+  onpilotchoice?: ((choice: PilotChoice) => void) | undefined;
+  oncancelpending?: (() => void) | undefined;
 } = $props();
+
+/** Closing a group closes the construction inside it, and with it the model's picking. */
+function closeConstructionIn(section: Section) {
+  const open = section.fields.some(
+    (field) =>
+      ((field.type === 'through-point' || field.type === 'face-construction') && field.open !== undefined) ||
+      ((field.type === 'diagonal-construction' || field.type === 'normal-construction') && field.open),
+  );
+  if (open) onconstruction?.(undefined);
+}
 
 // The control in use: hovered, or else focused. A diagram and the preview show what it changes.
 let hoveredField = $state<string>();
@@ -282,7 +305,13 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
         {@const initiallyOpen = section.initiallyOpen}
         <ParameterSection
           title={section.title}
-          bind:open={() => openSections[sectionKey] ?? initiallyOpen, (open) => (openSections[sectionKey] = open)}
+          bind:open={
+            () => openSections[sectionKey] ?? initiallyOpen,
+            (open) => {
+              openSections[sectionKey] = open;
+              if (!open) closeConstructionIn(section);
+            }
+          }
           status={section.status?.text ?? (tilt === undefined || state === undefined ? undefined : tilt.status[state])}
           highlighted={section.status?.highlighted ?? state === 'moved'}
           invalid={hasError(section)}
@@ -291,6 +320,37 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
             <div class="field-slot" data-field-key={field.key}>
             {#if field.type === 'linked-diagram'}
               {@render diagramView(field)}
+            {:else if field.type === 'through-point'}
+              <ThroughPointConstruction
+                {field}
+                bind:texts
+                {values}
+                onopen={(open) => onconstruction?.(open)}
+                onchoice={(choice) => onpilotchoice?.(choice)}
+                oncancelpending={() => oncancelpending?.()}
+              />
+            {:else if field.type === 'diagonal-construction'}
+              <DiagonalConstruction
+                {field}
+                onopen={(open) => onconstruction?.(open)}
+                onchoice={(choice) => onpilotchoice?.(choice)}
+                oncancelpending={() => oncancelpending?.()}
+              />
+            {:else if field.type === 'normal-construction'}
+              <NormalConstruction
+                {field}
+                onopen={(open) => onconstruction?.(open)}
+                onchoice={(choice) => onpilotchoice?.(choice)}
+                oncancelpending={() => oncancelpending?.()}
+              />
+            {:else if field.type === 'face-construction'}
+              <FaceConstruction
+                {field}
+                bind:texts
+                {values}
+                onopen={(open) => onconstruction?.(open)}
+                onchoice={(choice) => onpilotchoice?.(choice)}
+              />
             {:else if field.type === 'section-mark'}
               <p class="section-mark"><SectionSwatch tone={field.tone} /> {field.label}</p>
             {:else if field.type === 'choice'}
