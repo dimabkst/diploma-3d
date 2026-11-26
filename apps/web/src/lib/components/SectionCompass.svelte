@@ -54,6 +54,8 @@ const description = $derived(`Площина піднімається в нап�
 
 <style>
   .section-compass {
+    /* A shade darker on the light theme, as the section's lines in the construction. */
+    --plane-line: color-mix(in oklch, var(--plane-color), black var(--section-line-shade));
     position: absolute;
     z-index: 1;
     top: var(--space-2);
@@ -100,12 +102,12 @@ const description = $derived(`Площина піднімається в нап�
   }
 
   .arrow {
-    stroke: var(--plane-color);
+    stroke: var(--plane-line);
     stroke-width: 3;
     stroke-linecap: round;
   }
 
   .arrow-head {
-    fill: var(--plane-color);
+    fill: var(--plane-line);
   }
 </style>

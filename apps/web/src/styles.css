@@ -2,22 +2,31 @@
 @import "@fontsource-variable/jetbrains-mono";
 
 :root {
-  --color-bg: #141414;
-  --color-surface: #1b1b1b;
-  --color-surface-raised: #1d1d1d;
-  --color-border: #ffffff1a;
-  --color-border-strong: #ffffff2e;
-  --color-text: #ffffff;
-  --color-text-muted: #d0d0d0;
-  --color-text-dim: #8d8d8d;
-  --color-link: #2685ff;
-  --color-link-hover: #59a3ff;
+  /*
+   * The light theme, the default; the dark one below overrides the colours only. The yellow accent of the dark theme is barely
+   * visible on white (1,2 : 1), so the light one takes a vivid blue for focus outlines, highlights and selected states, apart
+   * from the sections' orange and green: 5,5 : 1 on white, 5 : 1 on the background, and so for white text on it.
+   */
+  --color-bg: #f2f3f5;
+  --color-surface: #ffffff;
+  --color-surface-raised: #ffffff;
+  --color-border: #0000001a;
+  --color-border-strong: #00000038;
+  --color-text: #141414;
+  --color-text-muted: #3f3f46;
+  --color-text-dim: #696970;
+  --color-link: #0a5bd1;
+  --color-link-hover: #0846a3;
   --color-primary: #0a6ee6;
   --color-primary-hover: #0961cc;
-  --color-accent: #ffe533;
-  --color-error: #ff6b6b;
+  --color-accent: #0057ff;
+  --color-error: #c42b2b;
   --color-on-primary: #ffffff;
-  --color-on-accent: #141414;
+  --color-on-accent: #ffffff;
+  /* The preview: its grid, the permanent outlines of the solid, and how much darker a section's lines are than its faces. */
+  --color-grid: #0000000f;
+  --color-model-outline: #23272e;
+  --section-line-shade: 30%;
   --font-body: "Roboto Flex Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-heading: "JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
   --text-h1: clamp(1.5rem, 3.6vw, 2.5rem);
@@ -46,8 +55,29 @@
   background: var(--color-bg);
   font-family: var(--font-body);
   font-synthesis: none;
-  color-scheme: dark;
+  color-scheme: light;
   text-rendering: optimizeLegibility;
+}
+
+:root[data-theme="dark"] {
+  --color-bg: #141414;
+  --color-surface: #1b1b1b;
+  --color-surface-raised: #1d1d1d;
+  --color-border: #ffffff1a;
+  --color-border-strong: #ffffff2e;
+  --color-text: #ffffff;
+  --color-text-muted: #d0d0d0;
+  --color-text-dim: #8d8d8d;
+  --color-link: #2685ff;
+  --color-link-hover: #59a3ff;
+  --color-accent: #ffe533;
+  --color-error: #ff6b6b;
+  --color-on-accent: #141414;
+  --color-grid: #ffffff0a;
+  /* The outlines' colour in the preview's file, so that the dark theme shows them as built. */
+  --color-model-outline: #f3f5f9;
+  --section-line-shade: 0%;
+  color-scheme: dark;
 }
 
 *,

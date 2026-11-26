@@ -54,7 +54,6 @@ const runs = $derived(
     background: var(--color-surface-raised);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-input);
-    color-scheme: dark;
     transition: border-color 200ms ease;
   }
 

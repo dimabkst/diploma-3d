@@ -28,13 +28,12 @@ const labelAt = ({ x, y }: LinkedPoint) => {
 };
 
 const emphasis = (element: LinkedElement) => (active.length === 0 ? undefined : active.includes(element) ? 'active' : 'receding');
-// The same colours as the preview: the shared generatrix, then the first, second and third plane.
+// The same colours as the preview: the first, second and third plane; the shared generatrix in the outlines' colour.
 const [first, second, third] = LINKED_PREVIEW_COLORS.planes;
 </script>
 
 <figure
   class="diagram"
-  style:--shared-color={LINKED_PREVIEW_COLORS.shared}
   style:--first-color={first}
   style:--second-color={second}
   style:--third-color={third}
@@ -69,7 +68,11 @@ const [first, second, third] = LINKED_PREVIEW_COLORS.planes;
 </figure>
 
 <style>
+  /* The planes' lines a shade darker on the light theme, where their pale colours fade; the shared generatrix as the outlines. */
   .diagram {
+    --first-line: color-mix(in oklch, var(--first-color), black var(--section-line-shade));
+    --second-line: color-mix(in oklch, var(--second-color), black var(--section-line-shade));
+    --third-line: color-mix(in oklch, var(--third-color), black var(--section-line-shade));
     display: grid;
     justify-items: center;
     gap: var(--space-2);
@@ -103,27 +106,27 @@ const [first, second, third] = LINKED_PREVIEW_COLORS.planes;
   }
 
   .chord.first {
-    stroke: var(--first-color);
+    stroke: var(--first-line);
   }
 
   .chord.second {
-    stroke: var(--second-color);
+    stroke: var(--second-line);
   }
 
   .chord.third {
-    stroke: var(--third-color);
+    stroke: var(--third-line);
   }
 
   .point.shared {
-    fill: var(--shared-color);
+    fill: var(--color-model-outline);
   }
 
   .point.first {
-    fill: var(--first-color);
+    fill: var(--first-line);
   }
 
   .point.second {
-    fill: var(--second-color);
+    fill: var(--second-line);
   }
 
   .point {

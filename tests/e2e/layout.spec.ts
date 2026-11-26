@@ -50,9 +50,10 @@ const insideWindow = (page: Page, box: Box) => {
 };
 
 /**
- * The distances in CSS pixels from each side of the preview to the nearest pixel of the model, found on a screenshot:
- * the light solid and its white edges against the near-black background, whose grid lines stay far darker. Decoding
- * happens in the page, so no image library is needed.
+ * The distances in CSS pixels from each side of the preview to the nearest pixel of the model, found on a screenshot: the
+ * pixels far from the background's brightness, the most common one. On the dark theme that is the light solid and its white
+ * edges, on the light one its dark edges and shaded faces; the grid and the axes stay close to the background on either.
+ * Decoding happens in the page, so no image library is needed.
  */
 async function modelMargins(page: Page): Promise<{ left: number; top: number; right: number; bottom: number }> {
   const image = (await previewViewport(page).screenshot({ animations: 'disabled' })).toString('base64');
@@ -63,13 +64,18 @@ async function modelMargins(page: Page): Promise<{ left: number; top: number; ri
     if (context === null) throw new Error('No 2D context.');
     context.drawImage(bitmap, 0, 0);
     const { data: pixels, width, height } = context.getImageData(0, 0, bitmap.width, bitmap.height);
+    const luminanceAt = (offset: number) =>
+      0.2126 * (pixels[offset] ?? 0) + 0.7152 * (pixels[offset + 1] ?? 0) + 0.0722 * (pixels[offset + 2] ?? 0);
+    const counts = new Map<number, number>();
+    for (let offset = 0; offset < pixels.length; offset += 4) {
+      const level = Math.round(luminanceAt(offset));
+      counts.set(level, (counts.get(level) ?? 0) + 1);
+    }
+    const background = [...counts].reduce((best, entry) => (entry[1] > best[1] ? entry : best))[0];
     let [minX, minY, maxX, maxY] = [width, height, -1, -1];
     for (let y = 0; y < height; y += 1) {
       for (let x = 0; x < width; x += 1) {
-        const offset = (y * width + x) * 4;
-        const luminance =
-          0.2126 * (pixels[offset] ?? 0) + 0.7152 * (pixels[offset + 1] ?? 0) + 0.0722 * (pixels[offset + 2] ?? 0);
-        if (luminance > 110) {
+        if (Math.abs(luminanceAt((y * width + x) * 4) - background) > 90) {
           minX = Math.min(minX, x);
           maxX = Math.max(maxX, x);
           minY = Math.min(minY, y);

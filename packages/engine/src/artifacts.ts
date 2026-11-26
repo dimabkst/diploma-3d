@@ -569,7 +569,7 @@ function explodedAroundMiddle(
 
 /**
  * The colours of a section through a shared generatrix, sRGB: each plane's cut faces, and the shared generatrix AA1. The page's
- * base diagram takes the same.
+ * base diagram takes the planes' colours; it shows the generatrices, as the preview its outlines, in its theme's outline colour.
  */
 export const LINKED_PREVIEW_COLORS = {
   shared: '#ffffff',

@@ -458,7 +458,10 @@ const labels = $derived.by(() => {
 </div>
 
 <style>
+  /* The sections' lines a shade darker than their fills on the light theme, where the pale faces' colours fade into it. */
   .overlay {
+    --section-line: color-mix(in oklch, var(--section-color), black var(--section-line-shade));
+    --second-line: color-mix(in oklch, var(--second-color), black var(--section-line-shade));
     position: absolute;
     inset: 0;
     width: 100%;
@@ -469,7 +472,7 @@ const labels = $derived.by(() => {
 
   .section {
     fill: color-mix(in srgb, var(--section-color) 25%, transparent);
-    stroke: var(--section-color);
+    stroke: var(--section-line);
     stroke-width: 2.5px;
     stroke-linejoin: round;
   }
@@ -502,7 +505,7 @@ const labels = $derived.by(() => {
 
   .section.second {
     fill: color-mix(in srgb, var(--second-color) 25%, transparent);
-    stroke: var(--second-color);
+    stroke: var(--second-line);
   }
 
   .labels {
@@ -578,7 +581,7 @@ const labels = $derived.by(() => {
   /* Chosen, the plane through it: in the section's colour, as a segment of the plane is. */
   .offered.in-plane,
   .trace-line.in-plane {
-    stroke: var(--section-color);
+    stroke: var(--section-line);
     stroke-width: 4px;
   }
 
@@ -608,7 +611,7 @@ const labels = $derived.by(() => {
 
   /* The segment lies in the plane: drawn in its section's colour. */
   .segment {
-    stroke: var(--section-color);
+    stroke: var(--section-line);
     stroke-width: 5px;
     stroke-linecap: round;
   }

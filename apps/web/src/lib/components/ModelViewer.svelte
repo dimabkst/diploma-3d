@@ -1,6 +1,7 @@
 <script lang="ts">
 import { GLB_MEDIA_TYPE, type VertexLabel } from '@diploma-3d/engine';
 import { onMount, untrack } from 'svelte';
+import type { Theme } from '../model/theme.ts';
 import { CONSTRUCTION_HOVER_ATTRIBUTE, type ConstructionPick, type ConstructionView } from '../model/throughPoint.ts';
 import type { PreviewHighlight } from '../shapes.ts';
 import ConstructionOverlay from './ConstructionOverlay.svelte';
@@ -20,6 +21,7 @@ let {
   highlight: givenHighlight,
   construction,
   onconstructionpick,
+  theme,
 }: {
   glb: Uint8Array<ArrayBuffer>;
   /**
@@ -51,6 +53,8 @@ let {
    */
   construction?: ConstructionView | undefined;
   onconstructionpick?: ((pick: ConstructionPick) => void) | undefined;
+  /** The page's theme: the model's outlines and guides take its outline colour, `--color-model-outline`. */
+  theme: Theme;
 } = $props();
 
 /** The parts of model-viewer's scene-graph API the construction view changes, to set every material back afterwards. */
@@ -104,24 +108,61 @@ function applyLook(element: HTMLElement, translucent: boolean): Promise<void> {
 
 /** The part of model-viewer's three.js scene that holds the model's outlines. */
 type OutlineScene = {
-  traverse(visit: (object: { isLineSegments?: boolean; visible: boolean }) => void): void;
+  traverse(
+    visit: (object: {
+      isLineSegments?: boolean;
+      visible: boolean;
+      material?: { color?: { setStyle(style: string): void } };
+    }) => void,
+  ): void;
   queueRender?: () => void;
 };
 
 /**
- * Shows the model's outlines, or hides them for the construction view. three.js's loader draws a glTF line with a copy of its
- * material made at load, which model-viewer's material API never reaches: translucency left them opaque, covered only where the
- * construction draws the same edge, so a replaced section's rim showed beside the new one until its model loaded. model-viewer
- * offers no public access to its scene; without it the outlines stay as they were.
+ * The model's outlines are lines: three.js's loader draws a glTF line with a copy of its material made at load, which
+ * model-viewer's material API never reaches. model-viewer offers no public access to its scene either; without it the outlines
+ * stay as the preview's file has them, white.
  */
-function showOutlines(element: HTMLElement, visible: boolean): void {
+function outlineScene(element: HTMLElement): OutlineScene | undefined {
   const key = Object.getOwnPropertySymbols(element).find((symbol) => symbol.description === 'scene');
   const scene = key === undefined ? undefined : (element as unknown as Record<symbol, OutlineScene | undefined>)[key];
-  if (typeof scene?.traverse !== 'function') return;
-  scene.traverse((object) => {
+  return typeof scene?.traverse === 'function' ? scene : undefined;
+}
+
+/**
+ * Shows the model's outlines, or hides them for the construction view: translucency alone left them opaque, covered only where
+ * the construction draws the same edge, so a replaced section's rim showed beside the new one until its model loaded.
+ */
+function showOutlines(element: HTMLElement, visible: boolean): void {
+  const scene = outlineScene(element);
+  scene?.traverse((object) => {
     if (object.isLineSegments === true) object.visible = visible;
   });
-  scene.queueRender?.();
+  scene?.queueRender?.();
+}
+
+/** The theme's outline colour as CSS `#rrggbb`, which styles.css defines for the page; undefined if it is not one. */
+function outlineStyle(element: HTMLElement): string | undefined {
+  const style = getComputedStyle(element).getPropertyValue('--color-model-outline').trim();
+  return /^#[0-9a-f]{6}$/i.test(style) ? style : undefined;
+}
+
+/** The outlines in the theme's colour, light on the dark theme and dark on the light one; the file keeps its own. */
+function paintOutlines(element: HTMLElement, style: string | undefined): void {
+  if (style === undefined) return;
+  const scene = outlineScene(element);
+  scene?.traverse((object) => {
+    if (object.isLineSegments === true) object.material?.color?.setStyle(style);
+  });
+  scene?.queueRender?.();
+}
+
+/** glTF's colour factors are linear: the sRGB `#rrggbb` decoded. */
+function linearRgb(style: string): [number, number, number] {
+  return [1, 3, 5].map((offset) => {
+    const value = Number.parseInt(style.slice(offset, offset + 2), 16) / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  }) as [number, number, number];
 }
 
 const lookSafely = (element: HTMLElement, translucent: boolean) => {
@@ -150,7 +191,10 @@ const DEFAULT_ORBIT = '35deg 62deg auto';
 /** The parts of model-viewer's scene-graph API used to highlight materials. */
 type SceneMaterial = {
   readonly name: string;
-  readonly pbrMetallicRoughness: { readonly baseColorFactor: readonly number[] };
+  readonly pbrMetallicRoughness: {
+    readonly baseColorFactor: readonly number[];
+    setBaseColorFactor(rgba: [number, number, number, number]): void;
+  };
   readonly isLoaded: boolean;
   ensureLoaded(): Promise<void>;
   setEmissiveFactor(rgb: [number, number, number]): void;
@@ -162,12 +206,18 @@ const RECEDING_GUIDE = 0.25;
 
 /**
  * Lights the highlighted materials in their own colour: a plane's faces glow, the guides concerned stay bright and the others
- * recede; with nothing highlighted, every guide is bright and no plane glows. Only display materials change.
+ * recede; with nothing highlighted, every guide is bright and no plane glows. The guides, along the cut faces' rims, take the
+ * outlines' colour of the theme, `guideColor`, linear. Only display materials change.
  */
-function applyHighlight(element: CameraElement, { materials: names }: PreviewHighlight): Promise<void> {
+function applyHighlight(
+  element: CameraElement,
+  { materials: names }: PreviewHighlight,
+  guideColor: [number, number, number] | undefined,
+): Promise<void> {
   const materials = (element as unknown as { model?: { materials: readonly SceneMaterial[] } }).model?.materials ?? [];
   const lit = new Set(names);
   const light = (material: SceneMaterial, guide: boolean) => {
+    if (guide && guideColor !== undefined) material.pbrMetallicRoughness.setBaseColorFactor([...guideColor, 1]);
     const [r = 0, g = 0, b = 0] = material.pbrMetallicRoughness.baseColorFactor;
     const factor = guide
       ? lit.size === 0 || lit.has(material.name)
@@ -192,7 +242,8 @@ function applyHighlight(element: CameraElement, { materials: names }: PreviewHig
 /** The highlight, never in the way of showing the model: a model replaced meanwhile only loses its emphasis. */
 const highlightSafely = (element: CameraElement, shown: PreviewHighlight) => {
   try {
-    void applyHighlight(element, shown).catch(() => undefined);
+    const style = outlineStyle(element);
+    void applyHighlight(element, shown, style === undefined ? undefined : linearRgb(style)).catch(() => undefined);
   } catch {
     // As for the look.
   }
@@ -356,6 +407,7 @@ $effect(() => {
       element,
       untrack(() => constructing),
     );
+    paintOutlines(element, outlineStyle(element));
     highlightSafely(
       element,
       untrack(() => highlight),
@@ -394,6 +446,17 @@ $effect(() => {
 
 $effect(() => {
   if (viewer !== undefined) highlightSafely(viewer, highlight);
+});
+
+// Another theme recolours the model on screen at once; the model, its look, the camera and the construction stay.
+$effect(() => {
+  void theme;
+  if (viewer === undefined) return;
+  paintOutlines(viewer, outlineStyle(viewer));
+  highlightSafely(
+    viewer,
+    untrack(() => highlight),
+  );
 });
 
 const constructing = $derived(construction !== undefined);

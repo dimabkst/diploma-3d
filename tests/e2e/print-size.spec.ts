@@ -281,14 +281,16 @@ test('print size in the header: 90 mm survives a prism reset in the field and in
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto('/');
 
-  // The field sits in the header, right before the download, and not in the shape's sidebar; "мм" is beside it.
+  // The field sits in the header, right before the download and the theme, and not in the shape's sidebar; "мм" is beside it.
   const header = page.getByRole('banner');
   await expect(header.getByLabel('Найбільший габарит', { exact: true })).toBeVisible();
   await expect(page.getByRole('complementary', { name: 'Налаштування моделі' }).getByRole('textbox')).toHaveCount(0);
   const order = await header.evaluate((element) =>
-    [...element.querySelectorAll('input, button')].map((control) => control.id || control.textContent?.trim()),
+    [...element.querySelectorAll('input, button')].map(
+      (control) => control.id || control.getAttribute('title') || control.textContent?.trim(),
+    ),
   );
-  expect(order.slice(-2)).toEqual(['printSizeMm', 'Завантажити 3MF']);
+  expect(order.slice(-3)).toEqual(['printSizeMm', 'Завантажити 3MF', 'Темна тема']);
   await expect(header.getByText('мм', { exact: true })).toBeVisible();
 
   // A validation message appears next to the field and leaves the workspace where it is.

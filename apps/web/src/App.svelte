@@ -8,6 +8,7 @@ import ControlsPanel from './lib/components/ControlsPanel.svelte';
 import NumberField from './lib/components/NumberField.svelte';
 import PreviewPanel from './lib/components/PreviewPanel.svelte';
 import Select from './lib/components/Select.svelte';
+import ThemeToggle from './lib/components/ThemeToggle.svelte';
 import { saveFile } from './lib/download.ts';
 import { angleConstructionDraftOf, anglePilotActive, referenceFaceOf, referenceFaces } from './lib/model/angleConstruction.ts';
 import {
@@ -80,6 +81,7 @@ import {
   traceThrough,
 } from './lib/model/parameters.ts';
 import { loadPrintSizeText, savePrintSize } from './lib/model/printSize.ts';
+import { applyTheme, loadTheme, saveTheme, type Theme } from './lib/model/theme.ts';
 import {
   type ConstructionDraft,
   type ConstructionField,
@@ -109,6 +111,14 @@ import {
 const EDIT_DEBOUNCE_MS = 150;
 
 let selectedShape = $state<string>('cube');
+// The page's theme, as index.html already applied it before the first paint; kept apart from every shape and its reset.
+let theme = $state<Theme>(loadTheme());
+
+function toggleTheme() {
+  theme = theme === 'light' ? 'dark' : 'light';
+  applyTheme(theme);
+  saveTheme(theme);
+}
 // The print size is the only setting remembered between visits.
 let parameterTexts = $state({ ...initialParameterTexts(), ...withStoredPrintSize() });
 let parameterChoices = $state(initialParameterChoices());
@@ -965,6 +975,7 @@ function downloadPrintFile() {
         {/snippet}
         {sectioned ? 'Завантажити частини · 3MF' : 'Завантажити 3MF'}
       </Button>
+      <ThemeToggle {theme} ontoggle={toggleTheme} />
     </div>
   </AppHeader>
 
@@ -1001,6 +1012,7 @@ function downloadPrintFile() {
         highlight={previewHighlightOf(panel, activeField)}
         construction={constructionForPreview}
         onconstructionpick={pickOnModel}
+        {theme}
       />
     </div>
   </main>

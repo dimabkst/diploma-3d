@@ -1,7 +1,8 @@
 import { formatDecimal } from '../decimal.ts';
 import { validatePrintSize } from './parameters.ts';
+import { safeLocalStorage } from './storage.ts';
 
-/** The one browser setting of the editor: the last valid print size, shared by every shape. */
+/** A browser setting of the editor, beside the theme: the last valid print size, shared by every shape. */
 export const PRINT_SIZE_STORAGE_KEY = 'diploma-3d.print-size-mm';
 
 /**
@@ -25,14 +26,5 @@ export function savePrintSize(sizeMm: number, storage: Pick<Storage, 'setItem'> 
     storage?.setItem(PRINT_SIZE_STORAGE_KEY, String(sizeMm));
   } catch {
     // Quota exceeded or storage disabled: the size simply is not remembered.
-  }
-}
-
-/** Accessing `localStorage` itself throws where site data is blocked. */
-function safeLocalStorage(): Storage | undefined {
-  try {
-    return globalThis.localStorage;
-  } catch {
-    return undefined;
   }
 }

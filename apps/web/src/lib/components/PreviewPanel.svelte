@@ -4,6 +4,7 @@ import type { Section } from '@diploma-3d/schema';
 import { vertexName } from '../model/box.ts';
 import { type ModelState, visibleArtifacts } from '../model/modelState.ts';
 import type { ParameterKey } from '../model/parameters.ts';
+import type { Theme } from '../model/theme.ts';
 import {
   type ConstructionDraft,
   type ConstructionPick,
@@ -26,6 +27,7 @@ let {
   highlight,
   construction,
   onconstructionpick,
+  theme,
 }: {
   shapeName: string;
   model: ModelState;
@@ -46,6 +48,8 @@ let {
    */
   construction?: (Omit<ConstructionView, 'geometry'> & { readonly draft: ConstructionDraft }) | undefined;
   onconstructionpick?: ((pick: ConstructionPick) => void) | undefined;
+  /** The page's theme, which the model's outlines follow; the model itself and its files stay the same. */
+  theme: Theme;
 } = $props();
 
 // The labels are shown as a textbook writes them, A₁ for A1; so are the highlighted ones.
@@ -157,6 +161,7 @@ const assembled = $derived(shownArtifacts?.model.section !== undefined);
           onload={showLoaded}
           onerror={(failed) => (failedGlb = failed)}
           oncamerachange={(direction) => (cameraDirection = direction)}
+          {theme}
         />
       </div>
     {/if}
@@ -240,7 +245,7 @@ const assembled = $derived(shownArtifacts?.model.section !== undefined);
     position: absolute;
     inset: 0;
     background-image:
-      linear-gradient(#ffffff0a 1px, transparent 1px), linear-gradient(90deg, #ffffff0a 1px, transparent 1px);
+      linear-gradient(var(--color-grid) 1px, transparent 1px), linear-gradient(90deg, var(--color-grid) 1px, transparent 1px);
     background-size: 32px 32px;
     border-radius: inherit;
   }
