@@ -399,6 +399,8 @@ type Frame = {
   readonly m: string | null;
   readonly outline: string | null;
   readonly labels: number;
+  /** The model's own outlines drawn, which the construction replaces with its edges and sections; null without the scene. */
+  readonly outlines: number | null;
 };
 
 /** Records, every frame, what the preview shows of the construction: the solid's look, M, the first section and the labels. */
@@ -411,6 +413,25 @@ async function startSampling(page: Page): Promise<void> {
     record.frames = [];
     const alpha = (material: { isLoaded: boolean; pbrMetallicRoughness: { baseColorFactor: number[] } } | undefined) =>
       material?.isLoaded === true ? (material.pbrMetallicRoughness.baseColorFactor[3] ?? null) : null;
+    // model-viewer's three.js scene, private: the outlines are lines there, out of reach of its material API.
+    const sceneKey = Object.getOwnPropertySymbols(viewer).find((symbol) => symbol.description === 'scene');
+    const scene =
+      sceneKey === undefined
+        ? undefined
+        : (
+            viewer as unknown as Record<
+              symbol,
+              { traverse(visit: (object: { isLineSegments?: boolean; visible: boolean }) => void): void }
+            >
+          )[sceneKey];
+    const outlines = () => {
+      if (scene === undefined) return null;
+      let shown = 0;
+      scene.traverse((object) => {
+        if (object.isLineSegments === true && object.visible) shown += 1;
+      });
+      return shown;
+    };
     const step = () => {
       const materials = viewer.model?.materials ?? [];
       const m = document.querySelector('.overlay .m');
@@ -421,6 +442,7 @@ async function startSampling(page: Page): Promise<void> {
         m: m === null ? null : `${m.getAttribute('cx')},${m.getAttribute('cy')}`,
         outline: document.querySelector('.overlay .section')?.getAttribute('points') ?? null,
         labels: document.querySelectorAll('.labels .point-label').length,
+        outlines: outlines(),
       });
       record.sampling = requestAnimationFrame(step);
     };
@@ -475,6 +497,8 @@ test('every frame of an edit shows the translucent solid with its labels, and M 
     // The original solid, faint, in every frame: never opaque, never its cut faces.
     expect(frame.surface).toBeCloseTo(0.18, 6);
     for (const hidden of frame.hidden) expect(hidden ?? 0).toBe(0);
+    // Nor its outlines, so that a replaced section's rim never shows beside the new one while its model is built.
+    expect(frame.outlines).toBe(0);
     expect(frame.labels).toBeGreaterThanOrEqual(8);
   }
   // Wherever M moved, its section moved in that same frame.

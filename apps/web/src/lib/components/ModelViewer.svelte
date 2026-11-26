@@ -68,9 +68,10 @@ type LookMaterial = {
 
 /**
  * How opaque each kind of material stays in the construction view: the original solid's faces faint; the mesh's own outlines,
- * those of its cut faces among them, and the cut faces gone, as the view draws the solid's real edges and the sections of the construction being
- * edited itself. So every model built for the construction looks the same there, the original translucent solid, whichever
- * section it was cut by. BLEND also stops a material writing depth, so a material gone hides nothing behind it.
+ * those of its cut faces among them, and the cut faces gone, as the view draws the solid's real edges and the sections of the
+ * construction being edited itself. So every model built for the construction looks the same there, the original translucent
+ * solid, whichever section it was cut by. BLEND also stops a material writing depth, so a material gone hides nothing behind it.
+ * The outlines themselves are lines, which this does not reach; see `showOutlines`.
  */
 const constructionAlpha = (name: string): number | undefined =>
   name === 'surface' ? 0.18 : name === 'edges' || name === 'cut' || /^plane-\d$/.test(name) ? 0 : undefined;
@@ -101,8 +102,31 @@ function applyLook(element: HTMLElement, translucent: boolean): Promise<void> {
   return Promise.all(later).then(() => undefined);
 }
 
+/** The part of model-viewer's three.js scene that holds the model's outlines. */
+type OutlineScene = {
+  traverse(visit: (object: { isLineSegments?: boolean; visible: boolean }) => void): void;
+  queueRender?: () => void;
+};
+
+/**
+ * Shows the model's outlines, or hides them for the construction view. three.js's loader draws a glTF line with a copy of its
+ * material made at load, which model-viewer's material API never reaches: translucency left them opaque, covered only where the
+ * construction draws the same edge, so a replaced section's rim showed beside the new one until its model loaded. model-viewer
+ * offers no public access to its scene; without it the outlines stay as they were.
+ */
+function showOutlines(element: HTMLElement, visible: boolean): void {
+  const key = Object.getOwnPropertySymbols(element).find((symbol) => symbol.description === 'scene');
+  const scene = key === undefined ? undefined : (element as unknown as Record<symbol, OutlineScene | undefined>)[key];
+  if (typeof scene?.traverse !== 'function') return;
+  scene.traverse((object) => {
+    if (object.isLineSegments === true) object.visible = visible;
+  });
+  scene.queueRender?.();
+}
+
 const lookSafely = (element: HTMLElement, translucent: boolean) => {
   try {
+    showOutlines(element, !translucent);
     void applyLook(element, translucent).catch(() => undefined);
   } catch {
     // A model replaced meanwhile only loses its look until the next one.
