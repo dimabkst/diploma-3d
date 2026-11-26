@@ -3,6 +3,7 @@ import { BOX_TOPOLOGY, type BoxFace, type BoxSectionSpec, type BoxVertex } from 
 import { describe, expect, it } from 'vitest';
 import { type BoxSolid, boxKeysOf } from './box.ts';
 import {
+  angleSideRefusal,
   applyPilotChoice,
   initialParameterChoices,
   initialParameterTexts,
@@ -224,4 +225,132 @@ describe('a plane through a segment at an angle to a face that holds it', () => 
       }
     },
   );
+});
+
+describe('«Інше положення перерізу»: offered and made only towards a usable plane, by the checks its geometry is built after', () => {
+  /** The trapezoidal prism as it opens, B₁D₁ at 45° to A₁B₁C₁D₁: the base is not symmetric about B₁D₁. */
+  const trapezoid = (side: 'first' | 'second', overrides: Partial<ParameterTexts> = {}): ParameterState => ({
+    texts: texts({ prismLineDihedralDeg: '45', ...overrides }),
+    choices: choices({
+      prismBaseType: 'trapezoid',
+      prismSection: 'through-line',
+      prismLineMethod: 'angle',
+      prismLine: 'B1-D1',
+      prismLineFace: 'A1B1C1D1',
+      prismLineSide: side,
+    }),
+  });
+  const draftOf = (kind: BoxSolid, state: ParameterState) => resolve(kind, state).pilotDraft;
+
+  it('both planes usable: offered from each, and switching twice returns to the very plane', () => {
+    const start = atAngle('cube', {}, 'A-C', 'ABCD', '45');
+    expect(draftOf('cube', start)).toMatchObject({ status: 'valid', alternative: true });
+    const once = choose('cube', start, { kind: 'angle-side' });
+    expect(draftOf('cube', once)).toMatchObject({ status: 'valid', alternative: true });
+    const twice = choose('cube', once, { kind: 'angle-side' });
+    expect(twice.choices).toEqual(start.choices);
+    expectSamePlane(planeOf('cube', twice), planeOf('cube', start));
+  });
+
+  it('the reported B₁D₁ at 45°: the valid plane offers no switch to the one 45,9° allows; the action keeps it and says why', () => {
+    const valid = trapezoid('first');
+    expect(draftOf('prism', valid)).toEqual({ status: 'valid', percent: 45, alternative: false });
+    // Not a degenerate plane: it cuts the solid, but leaves a part thinner than the rule a part must keep to be printed.
+    const refusal = angleSideRefusal('prism', valid.texts, valid.choices);
+    expect(refusal).toMatch(/^За цього кута одна з частин була б надто тонкою\. У цьому положенні допустимо від 45,9° до 90°/);
+    const tried = choose('prism', valid, { kind: 'angle-side' });
+    expect(tried).toBe(valid);
+    expect(planeOf('prism', tried).request.spec).toEqual(resolve('prism', valid).spec);
+  });
+
+  it('the thin plane already chosen: said inline, every choice kept, and the switch offered as the way back', () => {
+    const thin = trapezoid('second');
+    const request = resolve('prism', thin);
+    expect(request.spec?.section).toBeUndefined();
+    expect(request.key).toMatch(/:construction-draft$/);
+    expect(request.pilotDraft).toMatchObject({ status: 'invalid', problem: 'thin', alternative: true });
+    expect((request.pilotDraft as { message: string }).message).toMatch(
+      /до 90° до грані A₁B₁C₁D₁\. Або оберіть «Інше положення перерізу»\.$/,
+    );
+    const back = choose('prism', thin, { kind: 'angle-side' });
+    expect(back.choices).toEqual({ ...thin.choices, prismLineSide: 'first' });
+    expect(back.texts).toEqual(thin.texts);
+    expect(draftOf('prism', back)).toMatchObject({ status: 'valid', alternative: false });
+  });
+
+  it('a plane that only touches the solid suggests the other, usable one, and the action recovers it', () => {
+    // AB at 30° on the cube's outer side: it only touches; the other side's plane cuts it.
+    const touching = atAngle('cube', {}, 'A-B', 'ABCD', '30', 'second');
+    const draft = draftOf('cube', touching);
+    expect(draft).toMatchObject({ status: 'invalid', problem: 'touching', alternative: true });
+    expect((draft as { message: string }).message).toMatch(/Змініть кут або оберіть «Інше положення перерізу»\.$/);
+    expect(draftOf('cube', choose('cube', touching, { kind: 'angle-side' }))).toMatchObject({ status: 'valid' });
+  });
+
+  it('at 90° both sides are one plane: nothing offered, the action changes nothing', () => {
+    const square = atAngle('cube', {}, 'A-C', 'ABCD', '90');
+    expect(draftOf('cube', square)).toMatchObject({ status: 'valid', alternative: false });
+    expect(choose('cube', square, { kind: 'angle-side' })).toBe(square);
+  });
+
+  it('counts the second parallel plane: one left too thin on the other side takes the offer away', () => {
+    const keys = boxKeysOf('cube');
+    const start = atAngle('cube', {}, 'A-C', 'ABCD', '45');
+    const two = (percent: string): ParameterState => ({
+      texts: { ...start.texts, [keys.SectionSecondPercent]: percent },
+      choices: { ...start.choices, [keys.SecondCut]: true },
+    });
+    const usable = two('70');
+    expect(draftOf('cube', usable)).toMatchObject({ status: 'valid', alternative: true });
+    const switched = choose('cube', usable, { kind: 'angle-side' });
+    expect(resolve('cube', switched).errors).toEqual({});
+    expect(resolve('cube', switched).spec?.section).toMatchObject({ secondPositionPercent: 70, angleDeg: 135 });
+    // At 95 % the second plane leaves no part on either side: the other plane is refused with that reason.
+    const crowded = two('95');
+    expect(angleSideRefusal('cube', crowded.texts, crowded.choices)).toBe(
+      resolve('cube', crowded).errors[keys.SectionSecondPercent],
+    );
+    const crowdedDraft = draftOf('cube', crowded);
+    expect(crowdedDraft !== undefined && 'alternative' in crowdedDraft && crowdedDraft.alternative === true).toBe(false);
+    expect(choose('cube', crowded, { kind: 'angle-side' })).toBe(crowded);
+  });
+
+  // The same shared workflow on the other solids: whatever is offered can be made, and gives a plane the geometry is built from.
+  const CASES: readonly [BoxSolid, Partial<ParameterChoices>, Partial<ParameterTexts>, string, BoxFace][] = [
+    ['parallelepiped', {}, { parallelepipedOffsetXRatio: '0,8', parallelepipedBaseAngleDeg: '65' }, 'B-D', 'ABCD'],
+    ['parallelepiped', {}, { parallelepipedOffsetXRatio: '0,8', parallelepipedBaseAngleDeg: '65' }, 'A-B1', 'ABB1A1'],
+    ['prism', { prismBaseType: 'trapezoid' }, { prismOffsetXRatio: '0,6' }, 'A-C', 'ABCD'],
+    ['prism', { prismBaseType: 'regular', prismBaseSides: 5 }, { prismOffsetYRatio: '0,5' }, 'A-C', 'ABCDE'],
+    ['prism', { prismBaseType: 'regular', prismBaseSides: 6 }, {}, 'B1-F1', 'A1B1C1D1E1F1'],
+    ['prism', { prismBaseType: 'regular', prismBaseSides: 3 }, { prismHeightRatio: '0,6' }, 'A-B1', 'ABB1A1'],
+  ];
+  it.each(CASES)('%s %j: offered exactly where the other plane is usable', (kind, base, shape, line, face) => {
+    const keys = boxKeysOf(kind);
+    for (const angle of ['20', '35', '45', '60', '75', '89']) {
+      for (const side of ['first', 'second'] as const) {
+        const state: ParameterState = {
+          texts: texts({ ...shape, [keys.LineDihedralDeg]: angle } as Partial<ParameterTexts>),
+          choices: choices({
+            ...base,
+            [keys.Section]: 'through-line',
+            [keys.LineMethod]: 'angle',
+            [keys.Line]: line,
+            [keys.LineFace]: face,
+            [keys.LineSide]: side,
+          } as Partial<ParameterChoices>),
+        };
+        const draft = draftOf(kind, state);
+        const offered = draft !== undefined && 'alternative' in draft && draft.alternative === true;
+        const after = choose(kind, state, { kind: 'angle-side' });
+        if (!offered) {
+          expect(after).toBe(state);
+          continue;
+        }
+        const switched = resolve(kind, after);
+        expect(switched.pilotDraft?.status).toBe('valid');
+        expect(switched.spec?.section).toBeDefined();
+        expect(angleSideRefusal(kind, state.texts, state.choices)).toBeUndefined();
+      }
+    }
+  });
 });

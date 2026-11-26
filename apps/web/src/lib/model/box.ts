@@ -31,11 +31,11 @@ import {
 import { type AngleSide, angleDraft, anglePilotActive, referenceFaceOf, turnOf } from './angleConstruction.ts';
 import { faceDraft, facePilotActive, placementPercent } from './faceConstruction.ts';
 import type { ConnectorChoice, ParameterChoices, ParameterValues, SectionChoice } from './parameters.ts';
-import { isThroughPointSolid, pilotDraft, pointPercentOf, throughPointSelection } from './throughPoint.ts';
+import { constructionKeys, pilotDraft, pointPercentOf, throughPointSelection } from './throughPoint.ts';
 
 /** Whether a box's plane through a line is the pilot's, through a point M, for a cube or a parallelepiped. */
 export const pilotActive = (keys: BoxKeysOf, choices: BoxChoices): boolean =>
-  isThroughPointSolid(keys.Section.slice(0, -'Section'.length) as ShapeKind) && choices[keys.LineMethod] === 'point';
+  constructionKeys(keys) && choices[keys.LineMethod] === 'point';
 
 /**
  * The solids whose sections are planes through their named vertices: a cube, the parallelepipeds and the prisms, each a prism
@@ -709,7 +709,7 @@ export function boxSectionReady(
 ): boolean {
   if (boxModeKeys(keys, type, choices, context).some((key) => values[key] === undefined)) return false;
   if (type === 'face-parallel' && facePilotActive(keys, choices)) {
-    return faceDraft(keys, choices, values, context.topology, {}, false).status === 'valid';
+    return faceDraft(keys, choices, values, context, {}, false).status === 'valid';
   }
   if (type === 'through-line' && anglePilotActive(keys, choices)) {
     return angleDraft(keys, choices, values, context, {}).status === 'valid';

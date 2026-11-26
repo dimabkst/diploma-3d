@@ -7,18 +7,11 @@
  * chosen is kept as `LineSide` until the user asks for the other.
  */
 import { type BoxLikeShape, boxLineAngleOfPoint, boxPlane, boxSection, boxVertices } from '@diploma-3d/engine';
-import {
-  type BoxFace,
-  type BoxSegment,
-  boxFacesHolding,
-  type PhysicalScale,
-  type PrismTopology,
-  type ShapeKind,
-} from '@diploma-3d/schema';
+import { type BoxFace, type BoxSegment, boxFacesHolding, type PhysicalScale, type PrismTopology } from '@diploma-3d/schema';
 import { type BoxChoices, type BoxContext, type BoxKeysOf, faceName, segmentName } from './box.ts';
 import {
   type ConstructionDraft,
-  isThroughPointSolid,
+  constructionKeys,
   PILOT_MESSAGES,
   type PilotDraft,
   planeContact,
@@ -30,7 +23,7 @@ export type AngleSide = 'first' | 'second';
 
 /** Whether a box's plane through a line is this construction's: by its angle, for a cube and the parallelepipeds. */
 export const anglePilotActive = (keys: BoxKeysOf, choices: BoxChoices): boolean =>
-  isThroughPointSolid(keys.Section.slice(0, -'Section'.length) as ShapeKind) && choices[keys.LineMethod] === 'angle';
+  constructionKeys(keys) && choices[keys.LineMethod] === 'angle';
 
 /** The faces an angle may be measured from: the two faces of an edge, the one face of a face's diagonal. */
 export const referenceFaces = (topology: PrismTopology, segment: BoxSegment): BoxFace[] => boxFacesHolding(topology, segment);
@@ -90,7 +83,8 @@ const chosenOf = (candidates: readonly AngleCandidate[], side: AngleSide) =>
 /**
  * The construction as drafted, checked before any plane is made: a segment chosen, an angle in 0°–90°, and the chosen plane at
  * that angle cutting the solid rather than lying on a face or only touching it. `alternative` says that the other plane at that
- * angle cuts it, which the page then offers. Whether the parts are thick enough is the section's own check.
+ * angle is a different one that cuts it; whether it is usable, its parts thick enough, is checked with the whole request, see
+ * `angleSideRefusal`, before the page offers it. Whether the parts are thick enough is the section's own check.
  */
 export function angleDraft(
   keys: BoxKeysOf,
@@ -112,15 +106,14 @@ export function angleDraft(
   const chosen = chosenOf(candidates, choices[keys.LineSide]) as AngleCandidate;
   const alternative = candidates.some((candidate) => candidate !== chosen && candidate.contact.kind === 'cut');
   if (chosen.contact.kind === 'cut') return { status: 'valid', percent: chosen.turnDeg, alternative };
-  const instead = alternative ? ' або оберіть «Інше положення перерізу»' : '';
   const on = chosen.contact.kind === 'face' ? chosen.contact.face : undefined;
   return {
     status: 'invalid',
     problem: chosen.contact.kind === 'face' ? 'face' : 'touching',
     message:
       on !== undefined
-        ? `Під цим кутом площина збігається з гранню ${faceName(context.topology, on)}. Змініть кут${instead}.`
-        : `Під цим кутом площина лише дотикається до тіла вздовж ${segmentName(segment)}, не розтинаючи його. Змініть кут${instead}.`,
+        ? `Під цим кутом площина збігається з гранню ${faceName(context.topology, on)}. Змініть кут.`
+        : `Під цим кутом площина лише дотикається до тіла вздовж ${segmentName(segment)}, не розтинаючи його. Змініть кут.`,
     alternative,
   };
 }

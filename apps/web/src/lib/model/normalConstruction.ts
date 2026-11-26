@@ -1,16 +1,16 @@
 /**
- * Picking the segment an inclined plane of a cube or a parallelepiped is perpendicular to: any edge, face's diagonal or the solid's
- * diagonal, by its two ends in either order, as the existing choice of the inclined mode stores it, `NormalAlong`. The segment gives
+ * Picking the segment an inclined plane of a cube, a parallelepiped or any prism is perpendicular to: any edge, face's diagonal or
+ * the solid's diagonal, as the solid's topology classifies the pair, two vertices of no common face being a diagonal of the solid, by its two ends in either order, as the existing choice of the inclined mode stores it, `NormalAlong`. The segment gives
  * the plane's normal only, n = (Q − P)/|Q − P|; the plane's position is the mode's own, along the solid's extent in that direction,
  * so that it need not meet the segment itself.
  */
 import type { BoxSegment, BoxVertex, PrismTopology, ShapeKind } from '@diploma-3d/schema';
 import { allSegments, type BoxChoices, type BoxKeysOf, type SegmentKey, segmentKey, segmentName } from './box.ts';
-import { isThroughPointSolid } from './throughPoint.ts';
+import { isConstructionSolid } from './throughPoint.ts';
 
-/** Whether a box's inclined plane is this construction's: of a cube or a parallelepiped. */
+/** Whether a box's inclined plane is this construction's: of a cube, a parallelepiped or a prism of any base. */
 export const normalPilotActive = (keys: BoxKeysOf, choices: BoxChoices): boolean =>
-  isThroughPointSolid(keys.Section.slice(0, -'Section'.length) as ShapeKind) && choices[keys.Section] === 'inclined';
+  isConstructionSolid(keys.Section.slice(0, -'Section'.length) as ShapeKind) && choices[keys.Section] === 'inclined';
 
 /** A segment the plane may be perpendicular to, as the mode lists it: its key, its ends in the listed order, and its kind. */
 export interface NormalEntry {

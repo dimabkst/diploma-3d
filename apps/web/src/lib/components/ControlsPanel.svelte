@@ -43,6 +43,7 @@ import SectionSwatch from './SectionSwatch.svelte';
 import SegmentedControl from './SegmentedControl.svelte';
 import Select from './Select.svelte';
 import ThroughPointConstruction from './ThroughPointConstruction.svelte';
+import TraceConstruction from './TraceConstruction.svelte';
 
 let {
   panel,
@@ -92,7 +93,8 @@ function closeConstructionIn(section: Section) {
   const open = section.fields.some(
     (field) =>
       ((field.type === 'through-point' || field.type === 'face-construction') && field.open !== undefined) ||
-      ((field.type === 'diagonal-construction' || field.type === 'normal-construction') && field.open),
+      ((field.type === 'diagonal-construction' || field.type === 'normal-construction' || field.type === 'trace-construction') &&
+        field.open),
   );
   if (open) onconstruction?.(undefined);
 }
@@ -335,6 +337,12 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
                 onopen={(open) => onconstruction?.(open)}
                 onchoice={(choice) => onpilotchoice?.(choice)}
                 oncancelpending={() => oncancelpending?.()}
+              />
+            {:else if field.type === 'trace-construction'}
+              <TraceConstruction
+                {field}
+                onopen={(open) => onconstruction?.(open)}
+                onchoice={(choice) => onpilotchoice?.(choice)}
               />
             {:else if field.type === 'normal-construction'}
               <NormalConstruction

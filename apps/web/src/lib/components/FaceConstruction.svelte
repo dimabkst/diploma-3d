@@ -41,9 +41,10 @@ const modes: readonly { readonly value: PointMode; readonly label: string }[] = 
     ontoggle={() => toggle('face')}
   >
     <p class="hint">
-      Клацніть грань на моделі: під вказівником її підсвічено. Протилежна грань дає ті самі площини, лише відлік ведеться від неї.
+      Клацніть грань на моделі: під вказівником її підсвічено. Протилежна грань, де вона є, дає ті самі площини, лише відлік
+      ведеться від неї.
     </p>
-    <Field label="Або пару граней зі списку" forId={`${field.key}-face-list`}>
+    <Field label="Або зі списку" forId={`${field.key}-face-list`}>
       <Select
         id={`${field.key}-face-list`}
         bind:value={() => field.face.selected, (face: BoxFace) => onchoice({ kind: 'face-pair', face })}
@@ -72,8 +73,14 @@ const modes: readonly { readonly value: PointMode; readonly label: string }[] = 
       />
       {#if position.mode === 'ratio'}
         <p class="hint">
-          Перше число — відстань від грані {field.face.title} до перерізу, друге — від перерізу до {field.face.opposite}. Так 1 : 2
-          — третина шляху від {field.face.title}.
+          {#if field.face.oppositeEdge}
+            Перше число — відстань від грані {field.face.title} до перерізу, друге — від перерізу до ребра {field.face.opposite},
+            найдальшого від грані; обидві відстані — перпендикуляри до грані. Ребро обирати не треба. Так 1 : 2 — третина шляху
+            від {field.face.title}.
+          {:else}
+            Перше число — відстань від грані {field.face.title} до перерізу, друге — від перерізу до {field.face.opposite}. Так 1 :
+            2 — третина шляху від {field.face.title}.
+          {/if}
         </p>
         <RatioInput
           keys={position.keys}

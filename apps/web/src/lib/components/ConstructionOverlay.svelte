@@ -347,6 +347,19 @@ const labels = $derived.by(() => {
       />
     {/if}
   {/each}
+  <!-- A longitudinal plane's trace on the base: in the section's colour while the plane passes through it. -->
+  {#if view.geometry.trace !== undefined}
+    {@const [a, b] = [at(view.geometry.trace.ends[0]), at(view.geometry.trace.ends[1])]}
+    {#if a !== undefined && b !== undefined}
+      <line
+        class={['trace-line', view.geometry.trace.through ? 'in-plane' : 'selected']}
+        x1={a.x}
+        y1={a.y}
+        x2={b.x}
+        y2={b.y}
+      />
+    {/if}
+  {/if}
   <!-- Lines besides the edges, such as the base diagonals offered: faint while offered, marked when chosen. -->
   {#each view.lines ?? [] as line (line.key)}
     {@const [a, b] = [at(line.ends[0]), at(line.ends[1])]}
@@ -381,7 +394,7 @@ const labels = $derived.by(() => {
       data-segment={view.geometry.segment === undefined ? undefined : segmentKeyOf(view.geometry.segment.ends)}
     />
   {/if}
-  {#if view.field === 'segment' || view.field === 'diagonal' || view.field === 'normal'}
+  {#if view.field === 'segment' || view.field === 'diagonal' || view.field === 'normal' || view.field === 'trace'}
     {#each view.vertexTargets as vertex (vertex)}
       {@const point = at(vertex)}
       {#if point !== undefined && vertex !== view.pending}
@@ -518,7 +531,8 @@ const labels = $derived.by(() => {
     stroke-width: 4px;
   }
 
-  .offered {
+  .offered,
+  .trace-line {
     stroke-linecap: round;
   }
 
@@ -530,13 +544,15 @@ const labels = $derived.by(() => {
   }
 
   /* Chosen, the plane moved off it: marked, but not in the section's colour. */
-  .offered.selected {
+  .offered.selected,
+  .trace-line.selected {
     stroke: var(--color-text);
     stroke-width: 3.5px;
   }
 
   /* Chosen, the plane through it: in the section's colour, as a segment of the plane is. */
-  .offered.in-plane {
+  .offered.in-plane,
+  .trace-line.in-plane {
     stroke: var(--section-color);
     stroke-width: 4px;
   }

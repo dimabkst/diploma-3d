@@ -1,14 +1,13 @@
 import { type BoxLikeShape, boxPlane, boxSection, boxVertices } from '@diploma-3d/engine';
-import type { BoxSectionSpec, BoxSegment } from '@diploma-3d/schema';
+import type { BoxSectionSpec, BoxSegment, BoxVertex } from '@diploma-3d/schema';
 import { describe, expect, it } from 'vitest';
 import { type NormalField, shapePanel } from '../shapes.ts';
-import { type BoxSolid, boxKeysOf } from './box.ts';
+import { type BoxSolid, boxKeysOf, boxTopologyFor } from './box.ts';
 import {
   applyPilotChoice,
   followNormal,
   initialParameterChoices,
   initialParameterTexts,
-  normalAlongLateral,
   normalAlongManual,
   type ParameterChoices,
   type ParameterState,
@@ -76,6 +75,62 @@ const expectSamePlane = (a: ReturnType<typeof planeOf>, b: ReturnType<typeof pla
   for (const axis of [0, 1, 2] as const) expect(a.normal[axis]).toBeCloseTo(b.normal[axis], 9);
   expect(a.offset).toBeCloseTo(b.offset, 6);
 };
+
+const actions = (kind: BoxSolid, state: ParameterState) => {
+  const panel = shapePanel(kind, state.choices, resolve(kind, state));
+  return (panel.type === 'parameters' ? panel.sections.flatMap((group) => group.fields) : []).flatMap((field) =>
+    field.type === 'action' ? [field.action] : [],
+  );
+};
+
+/** Every prism base the app offers, as its choices and shape texts give it. */
+const PRISMS: readonly {
+  readonly name: string;
+  readonly choices: Partial<ParameterChoices>;
+  readonly texts: Partial<ParameterTexts>;
+}[] = [
+  { name: 'a regular triangular prism', choices: { prismBaseType: 'regular', prismBaseSides: 3 }, texts: {} },
+  { name: 'a scalene triangular prism', choices: { prismBaseType: 'triangle' }, texts: {} },
+  { name: 'a regular quadrilateral prism', choices: { prismBaseType: 'regular', prismBaseSides: 4 }, texts: {} },
+  { name: 'a trapezoidal prism', choices: { prismBaseType: 'trapezoid' }, texts: {} },
+  { name: 'a regular pentagonal prism', choices: { prismBaseType: 'regular', prismBaseSides: 5 }, texts: {} },
+  { name: 'a regular hexagonal prism', choices: { prismBaseType: 'regular', prismBaseSides: 6 }, texts: {} },
+  { name: 'a regular octagonal prism', choices: { prismBaseType: 'regular', prismBaseSides: 8 }, texts: {} },
+];
+
+/** A prism's inclined plane, given by its angles, at a position along its normal. */
+const prismInclined = (base: Partial<ParameterChoices>, shape: Partial<ParameterTexts>, percent = '50'): ParameterState => ({
+  texts: texts({ ...shape, prismSectionPercent: percent }),
+  choices: choices({ ...base, prismSection: 'inclined' }),
+});
+
+/** The second parallel plane's offset along the first plane's turned normal. */
+const secondOffset = (plane: ReturnType<typeof planeOf>) => {
+  const along = Object.values(plane.vertices).map((vertex) => dot(plane.normal, vertex as Vec));
+  const [low, high] = [Math.min(...along), Math.max(...along)];
+  const percent = (plane.section as { secondPositionPercent: number }).secondPositionPercent;
+  const raw = boxPlane(plane.vertices, plane.section).normal;
+  return Math.sign(dot(raw as Vec, plane.normal)) > 0
+    ? low + (percent / 100) * (high - low)
+    : high - (percent / 100) * (high - low);
+};
+
+/** The planes an inclined state gives, as «Змінити нахил» leaves them: the page's effects run until nothing changes. */
+function manualOf(kind: BoxSolid, state: ParameterState): ParameterState {
+  let next = state;
+  for (let round = 0; round < 3; round += 1) next = followNormal(kind, next, resolve(kind, next).values) ?? next;
+  next = normalAlongManual(kind, next);
+  for (let round = 0; round < 3; round += 1) next = followNormal(kind, next, resolve(kind, next).values) ?? next;
+  return next;
+}
+
+const cross = (a: Vec, b: Vec): Vec => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+
+/** That the plane's normal is parallel to the segment P → Q at the solid's actual vertices. */
+function expectPerpendicular(plane: ReturnType<typeof planeOf>, [p, q]: BoxSegment) {
+  const direction = unit(minus(plane.vertices[q] as Vec, plane.vertices[p] as Vec));
+  expect(Math.hypot(...cross(plane.normal, direction))).toBeLessThan(1e-9);
+}
 
 describe('an inclined plane perpendicular to a segment picked on the model', () => {
   it('A–D on a unit cube at the middle position: x = 1/2, x + y = 1, x + y + z = 3/2 with its regular hexagon, either end first', () => {
@@ -183,35 +238,25 @@ describe('an inclined plane perpendicular to a segment picked on the model', () 
     expect(state.choices[keys.NormalAlong]).toBe('none');
     const after = planeOf('parallelepiped', state);
     expectSamePlane(after, before);
-    const second = (plane: ReturnType<typeof planeOf>) => {
-      const along = Object.values(plane.vertices).map((vertex) => dot(plane.normal, vertex as Vec));
-      const [low, high] = [Math.min(...along), Math.max(...along)];
-      const percent = (plane.section as { secondPositionPercent: number }).secondPositionPercent;
-      const raw = boxPlane(plane.vertices, plane.section).normal;
-      return Math.sign(dot(raw as Vec, plane.normal)) > 0
-        ? low + (percent / 100) * (high - low)
-        : high - (percent / 100) * (high - low);
-    };
-    expect(second(after)).toBeCloseTo(second(before), 6);
+    expect(secondOffset(after)).toBeCloseTo(secondOffset(before), 6);
   });
 
-  it('offers no separate lateral-edge shortcut beside the field, whose AA₁ is that very construction, which a prism keeps', () => {
-    const actions = (kind: BoxSolid, state: ParameterState) => {
-      const panel = shapePanel(kind, state.choices, resolve(kind, state));
-      return (panel.type === 'parameters' ? panel.sections.flatMap((group) => group.fields) : []).flatMap((field) =>
-        field.type === 'action' ? [field.action] : [],
-      );
-    };
-    for (const [kind, shape] of SOLIDS) {
-      const state = inclined(kind, shape, '35');
+  it('offers no separate lateral-edge shortcut beside the field: its AA₁ is the very state the shortcut set, for every prism too', () => {
+    const solids: readonly [BoxSolid, ParameterState][] = [
+      ...SOLIDS.map(([kind, shape]): [BoxSolid, ParameterState] => [kind, inclined(kind, shape, '35')]),
+      ...PRISMS.map(({ choices: base, texts: shape }): [BoxSolid, ParameterState] => [
+        'prism',
+        prismInclined(base, { ...shape, prismOffsetXRatio: '0,4' }, '35'),
+      ]),
+    ];
+    for (const [kind, state] of solids) {
       expect(actions(kind, state)).not.toContain('normal-lateral');
       // AA₁ chosen in the field is the state the old shortcut set: the same plane, the position kept.
       const chosen = perpendicularTo(kind, state, ['A', 'A1']);
-      expect(chosen).toEqual(normalAlongLateral(kind, state));
+      expect(chosen.choices).toEqual({ ...state.choices, [boxKeysOf(kind).NormalAlong]: 'A-A1' });
       expect(resolve(kind, chosen).spec?.section).toMatchObject({ normalAlong: ['A', 'A1'], positionPercent: 35 });
       expect(actions(kind, chosen)).toContain('normal-manual');
     }
-    expect(actions('prism', { texts: texts(), choices: choices({ prismSection: 'inclined' }) })).toContain('normal-lateral');
   });
 
   it('lists its segments in three groups by name, and shows the segment chosen', () => {
@@ -240,5 +285,130 @@ describe('an inclined plane perpendicular to a segment picked on the model', () 
     expect(segments?.type === 'through-point' ? segments.segment.options.some(({ value }) => value === 'A-C1') : true).toBe(
       false,
     );
+  });
+});
+
+describe('the segment of every prism, right or oblique, picked by the same field', () => {
+  const LEANS = [
+    ['right', {}],
+    ['oblique', { prismOffsetXRatio: '0,4', prismOffsetYRatio: '-0,3' }],
+  ] as const;
+  const fieldsOf = (state: ParameterState) => {
+    const panel = shapePanel('prism', state.choices, resolve('prism', state));
+    return panel.type === 'parameters' ? panel.sections.flatMap((group) => group.fields) : [];
+  };
+  const normalFieldOf = (state: ParameterState) =>
+    fieldsOf(state).find((candidate) => candidate.type === 'normal-construction') as NormalField;
+
+  describe.each(PRISMS)('$name', ({ choices: base, texts: shape }) => {
+    const topology = boxTopologyFor('prism', choices(base));
+    const n = topology.sides;
+    const together = (pair: readonly [BoxVertex, BoxVertex]) =>
+      topology.faceNames.some((face) => pair.every((vertex) => (topology.faces[face] ?? []).includes(vertex)));
+    const isEdge = ([a, b]: readonly [BoxVertex, BoxVertex]) =>
+      topology.edges.some(([u, v]) => (u === a && v === b) || (u === b && v === a));
+
+    it.each(LEANS)('%s: one field, no shortcut nor list by name, its groups and segments classified by topology', (_, lean) => {
+      const state = prismInclined(base, { ...shape, ...lean });
+      const field = normalFieldOf(state);
+      expect(field).toMatchObject({ key: 'prism-normal', title: 'не вибрано', selected: '' });
+      expect(fieldsOf(state).some(({ key }) => key === 'prism-normal-along' || key === 'prism-normal-lateral')).toBe(false);
+      expect(actions('prism', state)).not.toContain('normal-lateral');
+      // Every pair of vertices once, the n parallel lateral edges as one entry.
+      expect(field.options).toHaveLength((2 * n * (2 * n - 1)) / 2 - n + 1);
+      for (const { value, group } of field.options) {
+        const pair = value.split('-') as unknown as [BoxVertex, BoxVertex];
+        const kind = isEdge(pair) ? 'Ребра' : together(pair) ? 'Діагоналі граней' : 'Діагоналі тіла';
+        expect(group).toBe(kind);
+      }
+      // A triangular prism's two vertices off a common face do not exist: no body diagonals, and no empty group for them.
+      expect([...new Set(field.options.map(({ group }) => group))]).toEqual(
+        n === 3 ? ['Ребра', 'Діагоналі граней'] : ['Ребра', 'Діагоналі граней', 'Діагоналі тіла'],
+      );
+    });
+
+    it.each(LEANS)(
+      '%s: an edge, a face diagonal and a body diagonal, by the model or by name, give the normal Q − P',
+      (_, lean) => {
+        const state = prismInclined(base, { ...shape, ...lean }, '40');
+        const field = normalFieldOf(state);
+        for (const { value, group } of field.options) {
+          const segment = value.split('-') as unknown as BoxSegment;
+          // By name: the option's ends; on the model: the same two vertices tapped the other way round.
+          const named = perpendicularTo('prism', state, segment);
+          const reversed = perpendicularTo('prism', state, [segment[1], segment[0]]);
+          expect(named.choices.prismNormalAlong).toBe(value);
+          expect(reversed.choices.prismNormalAlong).toBe(value);
+          const plane = planeOf('prism', named);
+          expectPerpendicular(plane, segment);
+          expectSamePlane(planeOf('prism', reversed), plane);
+          expect(plane.section).toMatchObject({ type: 'inclined', positionPercent: 40 });
+          expect(normalFieldOf(named).chosen).toContain(
+            group === 'Ребра'
+              ? value === 'A-A1'
+                ? 'усі бічні ребра'
+                : 'ребро'
+              : group === 'Діагоналі граней'
+                ? 'діагональ грані'
+                : 'діагональ тіла',
+          );
+        }
+      },
+    );
+
+    it('any lateral edge picked is the lateral edges, the same plane; the solid changed, the plane follows the segment', () => {
+      const state = prismInclined(base, { ...shape, prismOffsetXRatio: '0,4', prismOffsetYRatio: '-0,3' }, '30');
+      const a = perpendicularTo('prism', state, ['A', 'A1']);
+      const plane = planeOf('prism', a);
+      for (const vertex of topology.vertices.slice(0, n)) {
+        const other = perpendicularTo('prism', state, [`${vertex}1` as BoxVertex, vertex]);
+        expect(other.choices.prismNormalAlong).toBe('A-A1');
+        expectSamePlane(planeOf('prism', other), plane);
+      }
+      // A body diagonal where there is one, else a face's: taller and leaning the other way, still perpendicular to it.
+      const far = topology.vertices.find((vertex) => !together(['A', vertex]) && vertex !== 'A');
+      const segment: BoxSegment = ['A', far ?? 'B1'];
+      const picked = perpendicularTo('prism', state, segment);
+      const changed: ParameterState = {
+        ...picked,
+        texts: { ...picked.texts, prismHeightRatio: '1,3', prismOffsetXRatio: '-0,5', prismOffsetYRatio: '0,2' },
+      };
+      expectPerpendicular(planeOf('prism', changed), segment);
+      expect(normalFieldOf(changed).selected).toBe(picked.choices.prismNormalAlong);
+    });
+
+    it('«Змінити нахил» keeps both planes of a second cut, its connector and its parts apart', () => {
+      const state = prismInclined(base, { ...shape, prismOffsetXRatio: '0,4' }, '35');
+      const far = topology.vertices.find((vertex) => !together(['A', vertex]) && vertex !== 'A') ?? 'C1';
+      const picked = perpendicularTo('prism', state, [far, 'A']);
+      const two: ParameterState = {
+        ...picked,
+        texts: { ...picked.texts, prismSectionSecondPercent: '70' },
+        choices: { ...picked.choices, prismSecondCut: true, prismConnector: 'magnet', prismPartsSeparated: true },
+      };
+      const before = planeOf('prism', two);
+      const after = manualOf('prism', two);
+      expect(after.choices).toMatchObject({
+        prismNormalAlong: 'none',
+        prismSecondCut: true,
+        prismConnector: 'magnet',
+        prismPartsSeparated: true,
+      });
+      const plane = planeOf('prism', after);
+      expectSamePlane(plane, before);
+      expect(secondOffset(plane)).toBeCloseTo(secondOffset(before), 6);
+      expect(normalFieldOf(after).title).toBe('не вибрано');
+    });
+  });
+
+  it('classifies AC₁ by the solid: a face diagonal of a triangular prism, a body diagonal of a quadrilateral one', () => {
+    const groupOf = (base: Partial<ParameterChoices>) =>
+      normalFieldOf(prismInclined(base, {})).options.find(({ value }) => value === 'A-C1')?.group;
+    expect(groupOf({ prismBaseType: 'regular', prismBaseSides: 3 })).toBe('Діагоналі граней');
+    expect(groupOf({ prismBaseType: 'triangle' })).toBe('Діагоналі граней');
+    expect(groupOf({ prismBaseType: 'regular', prismBaseSides: 4 })).toBe('Діагоналі тіла');
+    expect(groupOf({ prismBaseType: 'trapezoid' })).toBe('Діагоналі тіла');
+    // In a hexagon AC is a base diagonal, so AC₁ still crosses a lateral face of none: a body diagonal; AB₁ a face's.
+    expect(groupOf({ prismBaseType: 'regular', prismBaseSides: 6 })).toBe('Діагоналі тіла');
   });
 });

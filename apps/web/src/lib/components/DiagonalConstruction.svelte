@@ -36,11 +36,11 @@ const segmentOf = (key: SegmentKey): BoxSegment => key.split('-') as unknown as 
   >
     {#if field.pending === undefined}
       <p class="hint">
-        Клацніть діагональ основи на моделі або дві протилежні вершини однієї основи. Діагональ верхньої основи дає той самий
+        Клацніть діагональ основи на моделі або дві несусідні вершини однієї основи. Діагональ верхньої основи дає той самий
         переріз, що й нижньої під нею.
       </p>
     {:else}
-      <p class="hint" role="status">Перша вершина — {field.pending}. Оберіть протилежну вершину тієї самої основи: її підсвічено.</p>
+      <p class="hint" role="status">Перша вершина — {field.pending}. Оберіть другу вершину тієї самої основи, не сусідню з першою: їх підсвічено.</p>
       <div class="actions">
         <Button variant="secondary" onclick={oncancelpending}>Скасувати вибір вершини</Button>
       </div>

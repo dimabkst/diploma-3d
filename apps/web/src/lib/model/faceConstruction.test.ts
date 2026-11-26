@@ -3,7 +3,7 @@ import { BOX_TOPOLOGY, type BoxFace, type BoxSectionSpec } from '@diploma-3d/sch
 import { describe, expect, it } from 'vitest';
 import { type FaceConstructionField, shapePanel } from '../shapes.ts';
 import { type BoxSolid, boxKeysOf } from './box.ts';
-import { facePairs, oppositeFace, startingSecondRatio } from './faceConstruction.ts';
+import { faceOrientations, oppositeFace, startingSecondRatio } from './faceConstruction.ts';
 import {
   addSecondCut,
   applyPilotChoice,
@@ -92,14 +92,20 @@ const expectSamePlanes = (actual: { normal: Vec; offset: number }[], expected: {
   });
 };
 
+/** A parallelepiped as the face construction reads it before its geometry is known: its regular base's parallel sides. */
+const BOX = { topology: BOX_TOPOLOGY, orientations: undefined, shape: undefined };
+
+/** A parallelepiped's orientations, each a pair of opposite faces. */
+const PAIRS = faceOrientations(BOX).map(({ face, opposite }) => ({ face, opposite: opposite as BoxFace }));
+
 describe('a plane parallel to a face, by its face and its distances to it and to the opposite face', () => {
   it('pairs every face of a parallelepiped with the one opposite, three pairs by their first faces', () => {
-    expect(facePairs(BOX_TOPOLOGY)).toEqual([
+    expect(faceOrientations(BOX)).toEqual([
       { face: 'ABCD', opposite: 'A1B1C1D1' },
       { face: 'ABB1A1', opposite: 'CDD1C1' },
       { face: 'BCC1B1', opposite: 'DAA1D1' },
     ]);
-    expect(oppositeFace(BOX_TOPOLOGY, 'DAA1D1')).toBe('BCC1B1');
+    expect(oppositeFace(BOX, 'DAA1D1')).toBe('BCC1B1');
   });
 
   it('A–C on a cube: the midpoint, 1 : 2 at a third of the height, and the top face that keeps the plane and reads 2 : 1', () => {
@@ -126,7 +132,7 @@ describe('a plane parallel to a face, by its face and its distances to it and to
     'keeps both planes, their order and their colours when the reference turns to the opposite face, on the %s',
     (kind, shape) => {
       const keys = boxKeysOf(kind);
-      for (const { face, opposite } of facePairs(BOX_TOPOLOGY)) {
+      for (const { face, opposite } of PAIRS) {
         const first = start(kind, shape, face, ['1', '2']);
         // D: a second plane, from the same face, at 7 : 3.
         const two = addSecondCut(kind, first, resolve(kind, first).values);
@@ -152,7 +158,7 @@ describe('a plane parallel to a face, by its face and its distances to it and to
   );
 
   it.each(SOLIDS)('puts the plane parallel to the very face, at t of the perpendicular gap, on the %s', (kind, shape) => {
-    for (const { face, opposite } of facePairs(BOX_TOPOLOGY)) {
+    for (const { face, opposite } of PAIRS) {
       const state = start(kind, shape, face, ['1', '3']);
       const spec = resolve(kind, state).spec;
       if (spec === undefined) throw new Error('Expected a model.');

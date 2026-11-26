@@ -171,7 +171,9 @@ const modes: readonly { readonly value: PointMode; readonly label: string }[] = 
   {#if field.angle?.alternative === true}
     <!-- The other plane through the segment at the same angle to the same face, chosen only on request. -->
     <div class="actions">
-      <Button variant="secondary" onclick={() => onchoice({ kind: 'angle-side' })}>Інше положення перерізу</Button>
+      <Button variant="secondary" disabled={field.angle.switching} onclick={() => onchoice({ kind: 'angle-side' })}>
+        Інше положення перерізу
+      </Button>
     </div>
   {/if}
   {#if ratioError !== undefined}

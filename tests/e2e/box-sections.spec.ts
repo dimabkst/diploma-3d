@@ -92,7 +92,7 @@ async function facePlane(
 ) {
   if (pair !== undefined) {
     await page.getByRole('button', { name: /^Грань/ }).click();
-    await entry(page, 'Або пару граней зі списку').selectOption({ label: pair });
+    await entry(page, 'Або зі списку').selectOption({ label: pair });
   }
   await page.getByRole('button', { name: /^Положення/ }).click();
   await page.getByRole('radio', { name: 'За відношенням' }).check();
@@ -612,13 +612,10 @@ test('a triangular prism: through a median and a midline of its base, then throu
   const shape = { kind: 'prism', baseType: 'regular', baseSides: 3, heightRatio: 2, offsetXRatio: 0, offsetYRatio: 0 } as const;
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно грані' });
-  // The base, and the three lateral faces, no two of which are parallel.
-  expect(await options(page, 'Паралельно грані')).toEqual([
-    'ABC — нижня основа',
-    'ABB₁A₁ — бічна грань',
-    'BCC₁B₁ — бічна грань',
-    'CAA₁C₁ — бічна грань',
-  ]);
+  // The bases as one orientation, and the three lateral faces, no two of which are parallel.
+  await page.getByRole('button', { name: /^Грань/ }).click();
+  expect(await options(page, 'Або зі списку')).toEqual(['ABC ∥ A₁B₁C₁', 'ABB₁A₁', 'BCC₁B₁', 'CAA₁C₁']);
+  await page.getByRole('button', { name: 'Готово', exact: true }).click();
   await entry(page, 'Тип перерізу').selectOption({ label: 'Поздовжній' });
   // An equilateral base: its median, altitude and bisector from a vertex are one line, offered once; no diagonals.
   expect(await options(page, 'Слід на основі')).toEqual([
@@ -627,7 +624,9 @@ test('a triangular prism: through a median and a midline of its base, then throu
     'Через середню лінію',
   ]);
   await entry(page, 'Слід на основі').selectOption({ label: 'Через медіану (= висоту)' });
-  await entry(page, 'З вершини').selectOption({ label: 'C' });
+  await page.getByRole('button', { name: /^З вершини/ }).click();
+  await entry(page, 'Або зі списку').selectOption({ label: 'C' });
+  await page.getByRole('button', { name: 'Готово', exact: true }).click();
   await expect(
     page.getByText('В основі рівносторонній трикутник: медіана, висота й бісектриса з однієї вершини збігаються.'),
   ).toBeVisible();
@@ -637,17 +636,25 @@ test('a triangular prism: through a median and a midline of its base, then throu
   expect(median.section).toMatchObject({ type: 'longitudinal', trace: 'median', traceVertex: 'C', through: true });
   await expectLabelsOnVertices(page, shape);
   await entry(page, 'Слід на основі').selectOption({ label: 'Через середню лінію' });
-  await entry(page, 'Паралельно стороні').selectOption({ label: 'Стороні AB' });
+  await page.getByRole('button', { name: /^Паралельно стороні/ }).click();
+  await entry(page, 'Або зі списку').selectOption({ label: 'Стороні AB' });
+  await page.getByRole('button', { name: 'Готово', exact: true }).click();
   const midline = await download(page);
   expect(midline.section).toMatchObject({ trace: 'midline', traceSegment: ['A', 'B'], through: true });
 
   await entry(page, 'Тип перерізу').selectOption({ label: 'Через ребро або діагональ' });
-  expect(await options(page, 'Ребро або діагональ грані')).toEqual(['Ребро AB', 'Ребро BC', 'Ребро CA']);
   await entry(page, 'Спосіб').selectOption({ label: 'Через точку ребра' });
-  // A1B1 and the lateral edges through A and B give the face ABB1A1 or meet AB: not offered.
-  expect(await options(page, 'Ребро з точкою')).toEqual(['Ребро B₁C₁', 'Ребро C₁A₁', 'Ребро CC₁']);
-  await expect(entry(page, 'Ребро з точкою')).toHaveValue('C-C1');
-  await expect(entry(page, 'Точка на CC₁ від C')).toHaveValue('50');
+  // The edges and the lateral faces' diagonals, none of the bases, which have none.
+  await page.getByRole('button', { name: /^Відрізок/ }).click();
+  const segments = await options(page, 'Або зі списку');
+  expect(segments).toEqual(expect.arrayContaining(['AB — ребро', 'BC — ребро', 'AC — ребро', 'AB₁ — діагональ грані']));
+  expect(segments).toHaveLength(1 + 9 + 6);
+  // A1B1 and the lateral edges through A and B give the face ABB1A1 or meet AB: not offered for M.
+  await page.getByRole('button', { name: /^Точка M/ }).click();
+  expect((await options(page, 'Ребро зі списку')).slice(1).sort()).toEqual(['Ребро A₁C₁', 'Ребро B₁C₁', 'Ребро CC₁']);
+  await expect(entry(page, 'Ребро зі списку')).toHaveValue('C-C1');
+  await expect(page.getByRole('button', { name: /^Точка M/ })).toContainText('Середина CC₁');
+  await page.getByRole('button', { name: 'Готово', exact: true }).click();
   const edge = await download(page);
   expect(edge.section).toEqual({
     type: 'through-line',
@@ -669,23 +676,36 @@ test('a hexagonal prism: its shorter and longer base diagonals, each a section t
   await entry(page, 'Багатокутник').selectOption({ label: 'Правильний шестикутник' });
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно грані' });
-  expect(await options(page, 'Паралельно грані')).toHaveLength(4);
+  await page.getByRole('button', { name: /^Грань/ }).click();
+  expect(await options(page, 'Або зі списку')).toEqual([
+    'ABCDEF ∥ A₁B₁C₁D₁E₁F₁',
+    'ABB₁A₁ ∥ DEE₁D₁',
+    'BCC₁B₁ ∥ EFF₁E₁',
+    'CDD₁C₁ ∥ FAA₁F₁',
+  ]);
+  await page.getByRole('button', { name: 'Готово', exact: true }).click();
   await entry(page, 'Тип перерізу').selectOption({ label: 'Поздовжній' });
   await entry(page, 'Слід на основі').selectOption({ label: 'Через діагональ' });
-  const diagonals = await options(page, 'Діагональ основи');
+  await page.getByRole('button', { name: /^Діагональ/ }).click();
+  const diagonals = await options(page, 'Або зі списку');
   expect(diagonals).toHaveLength(9);
-  expect(diagonals).toContain('Діагональ AC (коротша)');
-  expect(diagonals).toContain('Діагональ AD (довша)');
-  await entry(page, 'Діагональ основи').selectOption({ label: 'Діагональ AD (довша)' });
+  expect(diagonals).toContain('AC (і A₁C₁) — коротша');
+  expect(diagonals).toContain('AD (і A₁D₁) — довша, через центр');
+  await entry(page, 'Або зі списку').selectOption({ label: 'AD (і A₁D₁) — довша, через центр' });
   await expect(
     page.getByText('Діагональний переріз: площина проходить через діагональ AD (довша, через центр) і бічні ребра AA₁ та DD₁.'),
   ).toBeVisible();
   await expect(entry(page, 'Положення')).toHaveValue('50');
-  const long = await download(page);
+  const long = await partVolumes(page);
   expect(long.section).toMatchObject({ trace: 'diagonal', traceSegment: ['A', 'D'], through: true });
-  await entry(page, 'Діагональ основи').selectOption({ label: 'Діагональ AC (коротша)' });
-  const short = await download(page);
-  expect(short.section).toMatchObject({ trace: 'diagonal', traceSegment: ['A', 'C'], through: true });
+  expect(long.volumes[0] as number).toBeCloseTo(long.volumes[1] as number, 0);
+  // Through AC itself, not moved to the centre: a sixth of the prism on one side, five sixths on the other.
+  await entry(page, 'Або зі списку').selectOption({ label: 'AC (і A₁C₁) — коротша' });
+  await expect(entry(page, 'Положення')).toHaveValue('75');
+  const short = await partVolumes(page);
+  expect(short.section).toMatchObject({ trace: 'diagonal', traceSegment: ['A', 'C'], through: true, positionPercent: 75 });
+  const [small, large] = [...short.volumes].sort((a, b) => a - b) as [number, number];
+  expect(small / (small + large)).toBeCloseTo(1 / 6, 3);
   expect(errors).toEqual([]);
 });
 
@@ -702,7 +722,11 @@ test('an oblique pentagonal prism cut perpendicular to its lateral edges, then i
   const shape = { kind: 'prism', baseType: 'regular', baseSides: 5, heightRatio: 2, offsetXRatio: 0.4, offsetYRatio: 0 } as const;
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Похилий' });
-  await page.getByRole('button', { name: 'Перпендикулярно бічним ребрам', exact: true }).click();
+  // The lateral edges are one of the segments of «Перпендикулярно до», as on every prism: no separate shortcut.
+  await expect(page.getByRole('button', { name: 'Перпендикулярно бічним ребрам', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: /^Перпендикулярно до/ }).click();
+  await entry(page, 'Або зі списку').selectOption({ label: 'Бічні ребра (AA₁)' });
+  await page.getByRole('button', { name: 'Готово', exact: true }).click();
   await expect(page.getByText('Площина перпендикулярна до бічних ребер.')).toBeVisible();
   const single = await download(page);
   expect(single.section).toMatchObject({ type: 'inclined', normalAlong: ['A', 'A1'], positionPercent: 50 });
@@ -746,15 +770,19 @@ test('a plane perpendicular to the lateral edges goes back to its angles where i
   await entry(page, 'Кут до площини основи').fill('30');
   await page.getByRole('button', { name: 'Додати паралельний переріз', exact: true }).click();
   await entry(page, 'Тип кріплення').selectOption({ label: 'Магнітні гнізда' });
-  const preset = page.getByRole('button', { name: 'Перпендикулярно бічним ребрам', exact: true });
+  // A triangular prism's lateral edges are one of the segments of «Перпендикулярно до»: no separate shortcut.
+  await expect(page.getByRole('button', { name: 'Перпендикулярно бічним ребрам', exact: true })).toHaveCount(0);
+  const reference = page.getByRole('button', { name: /^Перпендикулярно до/ });
   const manual = page.getByRole('button', { name: 'Змінити нахил', exact: true });
-  await expect(preset).toBeEnabled();
+  await expect(reference).toContainText('не вибрано');
   await expect(manual).toHaveCount(0);
   await orbit(page, '70deg 75deg auto');
   for (const lean of ['0,6', '0,2']) {
-    await preset.click();
+    await reference.click();
+    await entry(page, 'Або зі списку').selectOption({ label: 'Бічні ребра (AA₁)' });
+    await page.getByRole('button', { name: 'Готово', exact: true }).click();
     await expect(entry(page, 'Кут до площини основи')).toHaveCount(0);
-    await expect(preset).toHaveCount(0);
+    await expect(reference).toContainText('бічні ребра');
     await expect(page.getByText('Площина перпендикулярна до бічних ребер.')).toBeVisible();
     // The solid leans another way meanwhile: the plane stays perpendicular to its lateral edges.
     await entry(page, 'Зміщення X').fill(lean);
@@ -765,7 +793,7 @@ test('a plane perpendicular to the lateral edges goes back to its angles where i
     await manual.click();
     await expect(entry(page, 'Кут до площини основи')).toBeVisible();
     await expect(entry(page, 'Напрям нахилу')).toBeVisible();
-    await expect(preset).toBeEnabled();
+    await expect(reference).toContainText('не вибрано');
     await expect(manual).toHaveCount(0);
     const angles = await partVolumes(page);
     expect(angles.section).not.toHaveProperty('normalAlong');

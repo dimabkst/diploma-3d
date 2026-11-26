@@ -151,6 +151,114 @@ test('an oblique parallelepiped: the lateral edges by name and by a click alike,
   expect(errors).toEqual([]);
 });
 
+/** A prism over a polygon, by its name, leaning where asked, with its inclined plane chosen. */
+async function prismInclined(page: Page, polygon: string | undefined, lean?: string): Promise<void> {
+  await page.goto('/');
+  await shapeSelect(page).selectOption({ label: 'Призма' });
+  if (polygon !== undefined) {
+    await openSection(page, 'Основа');
+    await page
+      .getByLabel(polygon === 'Трапеція' ? 'Тип основи' : 'Багатокутник', { exact: true })
+      .selectOption({ label: polygon });
+  }
+  if (lean !== undefined) {
+    await openSection(page, 'Нахил');
+    await page.getByLabel('Зміщення X', { exact: true }).fill(lean);
+  }
+  await openSection(page, 'Переріз');
+  await page.getByLabel('Тип перерізу', { exact: true }).selectOption({ label: 'Похилий' });
+  await expectLoaded(page);
+}
+
+const groupsOf = (page: Page) =>
+  list(page)
+    .locator('optgroup')
+    .evaluateAll((groups) => groups.map((group) => group.getAttribute('label')));
+
+test('an oblique hexagonal prism: an edge, a face diagonal across a turn of the model, a body diagonal; two planes and magnets', async ({
+  page,
+}) => {
+  const errors = collectErrors(page);
+  await prismInclined(page, 'Правильний шестикутник', '0,4');
+  await expect(page.getByRole('button', { name: 'Перпендикулярно бічним ребрам', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Перпендикулярно ребру або діагоналі', exact: true })).toHaveCount(0);
+  await picker(page).click();
+  expect(await groupsOf(page)).toEqual(['Ребра', 'Діагоналі граней', 'Діагоналі тіла']);
+  // An edge clicked along its length.
+  const [a, b] = [await screenPoint(page, 'A'), await screenPoint(page, 'B')];
+  await page.mouse.click(a.x + 0.5 * (b.x - a.x), a.y + 0.5 * (b.y - a.y));
+  await expect(page.getByText('Обрано: AB — ребро.')).toBeVisible();
+  expect(await download(page)).toMatchObject({ type: 'inclined', normalAlong: ['A', 'B'], positionPercent: 50 });
+  // A, then the model turned by a drag, which picks nothing, then B₁: the first vertex kept, a lateral face's diagonal.
+  await click(page, 'A');
+  await expect(page.getByText('Перша вершина — A. Оберіть другу вершину.')).toBeVisible();
+  const box = await previewViewport(page).boundingBox();
+  if (box === null) throw new Error('No preview.');
+  await page.mouse.move(box.x + box.width * 0.85, box.y + box.height * 0.85);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.85 - 90, box.y + box.height * 0.85 - 20, { steps: 8 });
+  await page.mouse.up();
+  await expect(page.getByText('Перша вершина — A. Оберіть другу вершину.')).toBeVisible();
+  await click(page, 'B1');
+  await expect(page.getByText('Обрано: AB₁ — діагональ грані.')).toBeVisible();
+  await expect.poll(async () => (await drawn(page)).lines).toEqual([['A-B1', true]]);
+  expect(await download(page)).toMatchObject({ normalAlong: ['A', 'B1'] });
+  // D₁ then A: off every face of A, a body diagonal; by name the same.
+  await click(page, 'D1');
+  await click(page, 'A');
+  await expect(page.getByText('Обрано: AD₁ — діагональ тіла.')).toBeVisible();
+  const picked = await download(page);
+  expect(picked).toMatchObject({ normalAlong: ['A', 'D1'] });
+  await list(page).selectOption({ label: 'AB' });
+  await list(page).selectOption({ label: 'AD₁' });
+  expect(await download(page)).toEqual(picked);
+  await done(page);
+  await picker(page).click();
+  await expect(list(page)).toHaveValue('A-D1');
+  await done(page);
+  await page.getByRole('button', { name: 'Додати паралельний переріз', exact: true }).click();
+  await openSection(page, 'Кріплення');
+  await page.getByLabel('Тип кріплення', { exact: true }).selectOption({ label: 'Магнітні гнізда' });
+  const two = await download(page);
+  expect(two).toMatchObject({
+    normalAlong: ['A', 'D1'],
+    secondPositionPercent: expect.any(Number),
+  });
+  // Given by its angles again: the angles read off the plane, the second plane kept.
+  await page.getByRole('button', { name: 'Змінити нахил', exact: true }).click();
+  await expect(page.getByLabel('Кут до площини основи', { exact: true })).toBeVisible();
+  await expect(picker(page)).toContainText('не вибрано');
+  const manual = await download(page);
+  expect(manual.normalAlong).toBeUndefined();
+  expect(manual).toMatchObject({ type: 'inclined', secondPositionPercent: expect.any(Number) });
+  expect(errors).toEqual([]);
+});
+
+test('a square prism lists AC₁ as a body diagonal, a triangular one as a face diagonal; a trapezoidal one has the field', async ({
+  page,
+}) => {
+  const errors = collectErrors(page);
+  await prismInclined(page, 'Квадрат');
+  await picker(page).click();
+  await click(page, 'A');
+  await click(page, 'C1');
+  await expect(page.getByText('Обрано: AC₁ — діагональ тіла.')).toBeVisible();
+  await prismInclined(page, undefined);
+  await picker(page).click();
+  expect(await groupsOf(page)).toEqual(['Ребра', 'Діагоналі граней']);
+  await click(page, 'A');
+  await click(page, 'C1');
+  await expect(page.getByText('Обрано: AC₁ — діагональ грані.')).toBeVisible();
+  await prismInclined(page, 'Трапеція', '0,3');
+  await expect(page.getByRole('button', { name: 'Перпендикулярно бічним ребрам', exact: true })).toHaveCount(0);
+  await picker(page).click();
+  await click(page, 'C');
+  await click(page, 'C1');
+  await expect(picker(page)).toContainText('бічні ребра');
+  expect(await download(page)).toMatchObject({ normalAlong: ['A', 'A1'] });
+  expect(errors).toEqual([]);
+});
+
 test.describe('on a phone', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
 
@@ -162,6 +270,21 @@ test.describe('on a phone', () => {
     await page.touchscreen.tap(b.x, b.y);
     await page.touchscreen.tap(d1.x, d1.y);
     await expect(page.getByText('Обрано: BD₁ — діагональ тіла.')).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
+  test('a pentagonal prism: an edge tapped, and two vertices of a lateral face tapped', async ({ page }) => {
+    const errors = collectErrors(page);
+    await prismInclined(page, 'Правильний п’ятикутник', '0,3');
+    await picker(page).click();
+    const [c, c1] = [await screenPoint(page, 'C'), await screenPoint(page, 'C1')];
+    await page.touchscreen.tap(c.x + 0.5 * (c1.x - c.x), c.y + 0.5 * (c1.y - c.y));
+    await expect(picker(page)).toContainText('бічні ребра');
+    const [a, e1] = [await screenPoint(page, 'A'), await screenPoint(page, 'E1')];
+    await page.touchscreen.tap(a.x, a.y);
+    await page.touchscreen.tap(e1.x, e1.y);
+    await expect(page.getByText('Обрано: AE₁ — діагональ грані.')).toBeVisible();
+    expect(await download(page)).toMatchObject({ normalAlong: ['A', 'E1'] });
     expect(errors).toEqual([]);
   });
 });

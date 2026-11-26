@@ -25,6 +25,8 @@ let {
 
 const segmentOf = (key: SegmentKey): BoxSegment => key.split('-') as unknown as BoxSegment;
 // The list's first entry while the plane is given by its angles, so that a choice is always an act of the user.
+// A triangular prism's two vertices always share a face: it has no body diagonals to name.
+const bodyDiagonals = $derived(field.options.some(({ group }) => group === 'Діагоналі тіла'));
 const options = $derived([{ value: '' as const, label: 'Не вибрано — задано кутами', disabled: true }, ...field.options]);
 </script>
 
@@ -41,8 +43,9 @@ const options = $derived([{ value: '' as const, label: 'Не вибрано — 
     {/if}
     {#if field.pending === undefined}
       <p class="hint">
-        Клацніть ребро на моделі або дві будь-які вершини: їхній відрізок — ребро, діагональ грані чи діагональ тіла — задає
-        напрям, перпендикулярний до площини. Сам відрізок площина може й не перетинати.
+        Клацніть ребро на моделі або дві будь-які вершини: їхній відрізок — {bodyDiagonals
+          ? 'ребро, діагональ грані чи діагональ тіла'
+          : 'ребро чи діагональ грані'} — задає напрям, перпендикулярний до площини. Сам відрізок площина може й не перетинати.
       </p>
     {:else}
       <p class="hint" role="status">Перша вершина — {field.pending}. Оберіть другу вершину.</p>

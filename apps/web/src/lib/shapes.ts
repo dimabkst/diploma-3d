@@ -86,9 +86,10 @@ import {
 import { diagonalFamilies, familyLabel, familyOf } from './model/diagonalConstruction.ts';
 import {
   distanceLabels,
+  faceOrientations,
   facePairOf,
-  facePairs,
   facePilotActive,
+  farSideOf,
   type Placement,
   placementKeys,
   positionTitle,
@@ -130,7 +131,7 @@ import {
 } from './model/parameters.ts';
 import {
   type ConstructionField,
-  isThroughPointSolid,
+  isConstructionSolid,
   type PilotDraft,
   type PointMode,
   pointTitle,
@@ -150,6 +151,7 @@ import {
   type TiltSolid,
   tiltKeys,
 } from './model/tilt.ts';
+import { traceTargetOf } from './model/traceConstruction.ts';
 
 export type ShapeOption = {
   readonly value: ShapeKind;
@@ -279,7 +281,6 @@ export type PanelAction =
   | 'remove-second-cut'
   | 'axial-section'
   | 'trace-through'
-  | 'normal-lateral'
   | 'normal-manual'
   | 'height-foot'
   | 'trace-midpoint'
@@ -377,8 +378,13 @@ export type AngleField = {
   readonly field: NumericField;
   /** Why the angle as typed gives nothing, said at its field. */
   readonly error: string | undefined;
-  /** Whether the other plane at this angle cuts the solid, which "Інше положення перерізу" then gives. */
+  /**
+   * Whether the other plane at this angle is usable, as the whole request checks it, which "Інше положення перерізу" then gives:
+   * from a valid plane, or as the way back from one that is not.
+   */
   readonly alternative: boolean;
+  /** Whether a switch to it waits for its model, during which another click does nothing. */
+  readonly switching: boolean;
 };
 
 /** A position of a plane parallel to a face: at the midpoint, or at a ratio of its distances to the face and the opposite one. */
@@ -412,6 +418,8 @@ export type FaceConstructionField = {
     /** The face in effect, as a textbook writes it: "ABCD", and the opposite one. */
     readonly title: string;
     readonly opposite: string;
+    /** Whether the far side is a lateral edge, as for a lateral face of a prism with no parallel one, triangular or pentagonal. */
+    readonly oppositeEdge: boolean;
     /** Its pair, by the pair's first face, which the list shows. */
     readonly selected: BoxFace;
     readonly options: readonly { readonly value: BoxFace; readonly label: string }[];
@@ -420,8 +428,8 @@ export type FaceConstructionField = {
 };
 
 /**
- * The base diagonal of a cube's or a parallelepiped's longitudinal plane, chosen on the model or by name: two families, AC and BD,
- * each with the upper base's diagonal over it; see `diagonalConstruction.ts`.
+ * The base diagonal of a longitudinal plane, chosen on the model or by name: an n-gonal base's n(n − 3)/2 families, AC and BD of a
+ * quadrilateral, each with the upper base's diagonal over it; see `diagonalConstruction.ts`.
  */
 export type DiagonalField = {
   readonly type: 'diagonal-construction';
@@ -455,7 +463,24 @@ export type NormalField = {
   readonly pending: string | undefined;
 };
 
+/**
+ * The base element a triangular prism's longitudinal plane runs along: the vertex of a median, an altitude or a bisector, or the
+ * side a midline is parallel to, chosen on the model or by name; see `traceConstruction.ts`.
+ */
+export type TraceField = {
+  readonly type: 'trace-construction';
+  readonly key: string;
+  readonly open: boolean;
+  readonly label: string;
+  readonly target: 'vertex' | 'side';
+  /** "A", or "AB". */
+  readonly title: string;
+  readonly selected: string;
+  readonly options: readonly { readonly value: string; readonly label: string }[];
+};
+
 export type ParameterField =
+  | TraceField
   | NormalField
   | DiagonalField
   | FaceConstructionField
@@ -699,6 +724,8 @@ export type PanelContext = {
         readonly field: ConstructionField | undefined;
         readonly pending: BoxVertex | undefined;
         readonly notice: string | undefined;
+        /** Whether the switch to the other plane at the angle waits for its model. */
+        readonly switching?: boolean | undefined;
       }
     | undefined;
   /** The pilot's construction as drafted, from the request; see `PilotDraft`. */
@@ -2529,7 +2556,7 @@ const boxSectionHelps: Readonly<Record<'face-parallel' | 'longitudinal' | 'throu
       'уздовж осі Y. Кут 0° дає горизонтальну площину, 90° — вертикальну. Компас у перегляді показує осі.\n\n' +
       'Спосіб «Перпендикулярно ребру або діагоналі» проводить площину перпендикулярно до ребра, діагоналі грані чи діагоналі ' +
       'тіла. Наприклад, у кубі площина, перпендикулярна до діагоналі AC₁, біля вершини A дає трикутний переріз, а посередині — ' +
-      'правильний шестикутник. «Перпендикулярно бічним ребрам» дає перпендикулярний переріз призми; у похилої призми він ' +
+      'правильний шестикутник. Бічні ребра в цьому списку дають перпендикулярний переріз призми; у похилої призми він ' +
       'може перетинати й основи, тож його кутів не обов’язково стільки, скільки в основи.\n\n' +
       `${BOX_POSITION_TEXT}\n\n${BOX_PARTS_TEXT}`,
   },
@@ -2609,6 +2636,33 @@ const EQUILATERAL_MEDIAN_LABEL = 'Через медіану (= висоту)';
  * fields keep their meaning whatever the solid becomes: a face, an edge or a diagonal by its letters, positions in percent of
  * the solid's own extent.
  */
+/** The field of the base element a longitudinal plane runs along; see `TraceField`. */
+function traceField(kind: BoxSolid, trace: ReturnType<typeof traceSelection>, context: PanelContext): TraceField {
+  const open = context.construction?.field === 'trace';
+  if (traceTargetOf(trace.kind) === 'side') {
+    return {
+      type: 'trace-construction',
+      key: `${kind}-trace`,
+      open,
+      label: 'Паралельно стороні',
+      target: 'side',
+      title: trace.segment === undefined ? 'не вибрано' : segmentName(trace.segment),
+      selected: trace.segment === undefined ? '' : segmentKey(trace.segment),
+      options: trace.segments.map((segment) => ({ value: segmentKey(segment), label: `Стороні ${segmentName(segment)}` })),
+    };
+  }
+  return {
+    type: 'trace-construction',
+    key: `${kind}-trace`,
+    open,
+    label: trace.kind === 'bisector' ? 'Кут при вершині' : 'З вершини',
+    target: 'vertex',
+    title: trace.vertex === undefined ? 'не вибрано' : vertexName(trace.vertex),
+    selected: trace.vertex ?? '',
+    options: trace.vertices.map((vertex) => ({ value: vertex, label: vertexName(vertex) })),
+  };
+}
+
 /** The field of the segment an inclined plane is perpendicular to; see `NormalField`. */
 function normalField(
   kind: BoxSolid,
@@ -2637,13 +2691,14 @@ function faceConstructionField(
   kind: BoxSolid,
   box: BoxKeysOf,
   choices: ParameterChoices,
-  topology: PrismTopology,
+  solid: BoxContext,
   values: ParameterValues,
   context: PanelContext,
   twoPlanes: boolean,
 ): FaceConstructionField {
+  const { topology } = solid;
   const face = choices[box.Face];
-  const labels = distanceLabels(topology, face);
+  const labels = distanceLabels(solid, face);
   const draft = context.pilotDraft;
   const shown = (key: ParameterKey) => {
     const value = values[key];
@@ -2679,11 +2734,16 @@ function faceConstructionField(
     open: context.construction?.field,
     face: {
       title: faceName(topology, face),
-      opposite: labels[1].slice('До '.length),
-      selected: facePairOf(topology, face),
-      options: facePairs(topology).map((pair) => ({
-        value: pair.face,
-        label: `${faceName(topology, pair.face)} ∥ ${faceName(topology, pair.opposite)}`,
+      opposite: farSideOf(solid, face).name,
+      oppositeEdge: farSideOf(solid, face).edge,
+      selected: facePairOf(solid, face),
+      // A pair of parallel faces under one name, a face with none, as a triangular or a pentagonal prism's lateral face, alone.
+      options: faceOrientations(solid).map((orientation) => ({
+        value: orientation.face,
+        label:
+          orientation.opposite === undefined
+            ? faceName(topology, orientation.face)
+            : `${faceName(topology, orientation.face)} ∥ ${faceName(topology, orientation.opposite)}`,
       })),
     },
     positions: twoPlanes ? [position('first'), position('second')] : [position('first')],
@@ -2757,6 +2817,7 @@ function throughPointField(
           },
           error: angleError,
           alternative: draft !== undefined && 'alternative' in draft && draft.alternative === true,
+          switching: context.construction?.switching === true,
         };
   return {
     type: 'through-point',
@@ -2854,7 +2915,7 @@ function boxPlaneSection(kind: BoxSolid, choices: ParameterChoices, context: Pan
   const families = diagonalFamilies(trace.segments);
   const diagonal = trace.segment === undefined ? undefined : familyOf(families, trace.segment);
   const traceReference: ParameterField[] =
-    trace.kind === 'diagonal' && isThroughPointSolid(kind) && diagonal !== undefined
+    trace.kind === 'diagonal' && isConstructionSolid(kind) && diagonal !== undefined
       ? [
           {
             type: 'diagonal-construction',
@@ -2862,36 +2923,42 @@ function boxPlaneSection(kind: BoxSolid, choices: ParameterChoices, context: Pan
             open: context.construction?.field === 'diagonal',
             title: segmentName(diagonal.lower),
             selected: diagonal.key,
-            options: families.map((family) => ({ value: family.key, label: familyLabel(family) })),
+            // A regular base's diagonals by their lengths too: a hexagon's AC is shorter than AD, which passes through the centre.
+            options: families.map((family) => ({
+              value: family.key,
+              label: `${familyLabel(family)}${solid.regular ? diagonalClass(topology, family.lower, true).replace(/^ \((.*)\)$/, ' — $1') : ''}`,
+            })),
             pending: context.construction?.pending === undefined ? undefined : vertexName(context.construction.pending),
             notice: context.construction?.notice,
           },
         ]
-      : trace.kind === 'diagonal' || trace.kind === 'midline'
-        ? [
-            {
-              type: 'choice',
-              key: box.TraceSegment,
-              label: trace.kind === 'diagonal' ? 'Діагональ основи' : 'Паралельно стороні',
-              options: trace.segments.map((segment) => ({
-                value: segmentKey(segment),
-                label:
-                  trace.kind === 'diagonal'
-                    ? `Діагональ ${segmentName(segment)}${solid.regular ? diagonalClass(topology, segment) : ''}`
-                    : `Стороні ${segmentName(segment)}`,
-              })),
-            },
-          ]
-        : trace.kind === 'angle'
-          ? [{ type: 'number', key: box.TraceAngleDeg, label: 'Кут сліду до AB', suffix: '°', range: TRACE_ANGLE_RANGE }]
-          : [
+      : isConstructionSolid(kind) && traceTargetOf(trace.kind) !== undefined
+        ? [traceField(kind, trace, context)]
+        : trace.kind === 'diagonal' || trace.kind === 'midline'
+          ? [
               {
                 type: 'choice',
-                key: box.TraceVertex,
-                label: trace.kind === 'bisector' ? 'Кут при вершині' : 'З вершини',
-                options: trace.vertices.map((vertex) => ({ value: vertex, label: vertexName(vertex) })),
+                key: box.TraceSegment,
+                label: trace.kind === 'diagonal' ? 'Діагональ основи' : 'Паралельно стороні',
+                options: trace.segments.map((segment) => ({
+                  value: segmentKey(segment),
+                  label:
+                    trace.kind === 'diagonal'
+                      ? `Діагональ ${segmentName(segment)}${solid.regular ? diagonalClass(topology, segment) : ''}`
+                      : `Стороні ${segmentName(segment)}`,
+                })),
               },
-            ];
+            ]
+          : trace.kind === 'angle'
+            ? [{ type: 'number', key: box.TraceAngleDeg, label: 'Кут сліду до AB', suffix: '°', range: TRACE_ANGLE_RANGE }]
+            : [
+                {
+                  type: 'choice',
+                  key: box.TraceVertex,
+                  label: trace.kind === 'bisector' ? 'Кут при вершині' : 'З вершини',
+                  options: trace.vertices.map((vertex) => ({ value: vertex, label: vertexName(vertex) })),
+                },
+              ];
   const throughVertex = trace.kind === 'median' || trace.kind === 'height' || trace.kind === 'bisector';
   const sameNote: ParameterField[] = !throughVertex
     ? []
@@ -2990,7 +3057,7 @@ function boxPlaneSection(kind: BoxSolid, choices: ParameterChoices, context: Pan
           ]),
     ],
     'face-parallel': facePilot
-      ? [faceConstructionField(kind, box, choices, topology, values, context, twoPlanes)]
+      ? [faceConstructionField(kind, box, choices, solid, values, context, twoPlanes)]
       : [
           {
             type: 'choice',
@@ -3040,7 +3107,7 @@ function boxPlaneSection(kind: BoxSolid, choices: ParameterChoices, context: Pan
     ],
     // A cube's and a parallelepiped's plane through a segment, by a point or at an angle, is built in one construction, whose way
     // is chosen within it, so that the segment and the plane go with the change.
-    'through-line': isThroughPointSolid(kind)
+    'through-line': isConstructionSolid(kind)
       ? [throughPointField(kind, box, choices, solid, values, context)]
       : [
           ...(pyramid
@@ -3153,11 +3220,6 @@ function boxPlaneSection(kind: BoxSolid, choices: ParameterChoices, context: Pan
       // Out of a plane perpendicular to a segment or parallel to two edges by its angles, which start where the plane is; into
       // a plane perpendicular to a prism's lateral edges, which are all parallel, a pyramid's are not.
       ...(constrained ? [action('normal-manual', 'Змінити нахил', 'normal-manual')] : []),
-      // A cube's and a parallelepiped's lateral edges are chosen in «Перпендикулярно до» like any other segment, AA₁ standing for
-      // them all; a prism keeps this shortcut, having no such field.
-      ...(pyramid || isThroughPointSolid(kind) || along === 'A-A1'
-        ? []
-        : [action('normal-lateral', 'Перпендикулярно бічним ребрам', 'normal-lateral')]),
       ...(pairs.length === 0
         ? []
         : [
@@ -3182,9 +3244,10 @@ function boxPlaneSection(kind: BoxSolid, choices: ParameterChoices, context: Pan
               ],
             },
           ]),
-      // A cube's and a parallelepiped's segment is picked on the model too, in a field of its own; another solid's by name.
-      ...(isThroughPointSolid(kind) ? [normalField(kind, box, choices, topology, context)] : []),
-      ...(isThroughPointSolid(kind)
+      // A cube's, a parallelepiped's and a prism's segment is picked on the model too, in a field of its own, the lateral edges
+      // among them, AA₁ standing for them all; a pyramid's by name.
+      ...(isConstructionSolid(kind) ? [normalField(kind, box, choices, topology, context)] : []),
+      ...(isConstructionSolid(kind)
         ? []
         : ([
             {

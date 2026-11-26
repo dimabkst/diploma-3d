@@ -3,7 +3,7 @@ import type { BoxSectionSpec, BoxSegment, BoxVertex } from '@diploma-3d/schema';
 import { describe, expect, it } from 'vitest';
 import { type DiagonalField, shapePanel } from '../shapes.ts';
 import { type BoxSolid, boxKeysOf } from './box.ts';
-import { diagonalFamilies, familyOf, oppositeVertex } from './diagonalConstruction.ts';
+import { diagonalFamilies, diagonalPartners, familyOf } from './diagonalConstruction.ts';
 import {
   applyPilotChoice,
   initialParameterChoices,
@@ -104,10 +104,10 @@ describe('a longitudinal plane through a base diagonal, picked on the model', ()
     expect(familyOf(families, ['C1', 'A1'])?.key).toBe('A-C');
     expect(familyOf(families, ['A', 'C1'])).toBeUndefined();
     expect(familyOf(families, ['A', 'B'])).toBeUndefined();
-    expect([oppositeVertex(families, 'A'), oppositeVertex(families, 'D1'), oppositeVertex(families, 'C')]).toEqual([
-      'C',
-      'B1',
-      'A',
+    expect([diagonalPartners(families, 'A'), diagonalPartners(families, 'D1'), diagonalPartners(families, 'C')]).toEqual([
+      ['C'],
+      ['B1'],
+      ['A'],
     ]);
     // Moved off the diagonal: an equivalent diagonal leaves the plane where it is.
     const moved = diagonal('cube', {}, 'A-C', false, '30');

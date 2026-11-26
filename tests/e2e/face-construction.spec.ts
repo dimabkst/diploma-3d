@@ -170,19 +170,19 @@ test('a drag that starts on a face turns the model and chooses nothing; the list
   await page.mouse.up();
   await expect(picker(page, FACE)).toContainText('ABCD');
   // The side face ABB₁A₁ by name: the list shows its pair, and the model highlights the face itself.
-  await page.getByLabel('Або пару граней зі списку', { exact: true }).selectOption({ label: 'ABB₁A₁ ∥ CDD₁C₁' });
+  await page.getByLabel('Або зі списку', { exact: true }).selectOption({ label: 'ABB₁A₁ ∥ CDD₁C₁' });
   await expect(picker(page, FACE)).toContainText('ABB₁A₁');
   expect((await outlines(page)).reference).toBe('ABB1A1');
   // Its own pair again: the face stays.
-  await page.getByLabel('Або пару граней зі списку', { exact: true }).selectOption({ label: 'ABCD ∥ A₁B₁C₁D₁' });
-  await page.getByLabel('Або пару граней зі списку', { exact: true }).selectOption({ label: 'ABB₁A₁ ∥ CDD₁C₁' });
+  await page.getByLabel('Або зі списку', { exact: true }).selectOption({ label: 'ABCD ∥ A₁B₁C₁D₁' });
+  await page.getByLabel('Або зі списку', { exact: true }).selectOption({ label: 'ABB₁A₁ ∥ CDD₁C₁' });
   await expect(picker(page, FACE)).toContainText('ABB₁A₁');
   // The same face clicked on the model: the same as by name.
-  await page.getByLabel('Або пару граней зі списку', { exact: true }).selectOption({ label: 'ABCD ∥ A₁B₁C₁D₁' });
+  await page.getByLabel('Або зі списку', { exact: true }).selectOption({ label: 'ABCD ∥ A₁B₁C₁D₁' });
   const side = await faceMiddle(page, ['A', 'B', 'B1', 'A1']);
   await page.mouse.click(side.x, side.y);
   await expect(picker(page, FACE)).toContainText('ABB₁A₁');
-  await expect(page.getByLabel('Або пару граней зі списку', { exact: true })).toHaveValue('ABB1A1');
+  await expect(page.getByLabel('Або зі списку', { exact: true })).toHaveValue('ABB1A1');
   // Reopened, both fields show what they hold.
   await picker(page, POSITION).click();
   await page.getByRole('radio', { name: 'За відношенням' }).check();
@@ -233,7 +233,7 @@ test('an oblique parallelepiped: a lateral face clicked, the plane parallel to i
   const side = await faceMiddle(page, ['B', 'C', 'C1', 'B1']);
   await page.mouse.click(side.x, side.y);
   await expect(picker(page, FACE)).toContainText('BCC₁B₁');
-  await expect(page.getByLabel('Або пару граней зі списку', { exact: true })).toHaveValue('BCC1B1');
+  await expect(page.getByLabel('Або зі списку', { exact: true })).toHaveValue('BCC1B1');
   await picker(page, POSITION).click();
   await page.getByRole('radio', { name: 'За відношенням' }).check();
   await page.getByLabel('Від BCC₁B₁', { exact: true }).fill('1');

@@ -4,9 +4,8 @@
  * ratio of its parts. Kept apart from the other modes, so that it can be taken back after user testing. The specification is the
  * plane through a line's mode as before: `line`, `pointEdge` and `pointPercent`, with the face that holds the line inferred.
  */
-import { type BoxLikeShape, boxSection, boxVertices, toGltfPosition } from '@diploma-3d/engine';
+import { type BoxLikeShape, boxSection, boxTopologyOf, boxVertices, toGltfPosition } from '@diploma-3d/engine';
 import {
-  BOX_TOPOLOGY,
   type BoxFace,
   type BoxSectionSpec,
   type BoxSegment,
@@ -30,6 +29,7 @@ import {
   segmentName,
   vertexName,
 } from './box.ts';
+import { baseTrace } from './traceConstruction.ts';
 
 /** The solids of the pilot: a cube, a rectangular and an oblique parallelepiped. */
 export const THROUGH_POINT_SOLIDS = ['cube', 'cuboid', 'parallelepiped'] as const;
@@ -39,6 +39,20 @@ export type ThroughPointSolid = (typeof THROUGH_POINT_SOLIDS)[number];
 export const isThroughPointSolid = (kind: ShapeKind): kind is ThroughPointSolid =>
   (THROUGH_POINT_SOLIDS as readonly string[]).includes(kind);
 
+/**
+ * Whether a solid has the interactive constructions: a cube, a rectangular and an oblique parallelepiped, and every prism, right
+ * or oblique, over any of its bases. Their topology, and where it takes it their geometry, not their names, then decides what each
+ * construction offers.
+ */
+export const isConstructionSolid = (kind: ShapeKind): boolean => isThroughPointSolid(kind) || kind === 'prism';
+
+/** The same of a box's keys. */
+export const constructionKeys = (keys: BoxKeysOf): boolean =>
+  isConstructionSolid(keys.Section.slice(0, -'Section'.length) as ShapeKind);
+
+/** The same of a specification's solid. */
+export const isConstructionShape = (shape: { readonly kind: ShapeKind }): boolean => isConstructionSolid(shape.kind);
+
 /** Where M lies on its edge: at the midpoint, or at UM : MV = a : b for the edge's endpoints U, V in their stable order. */
 export type PointMode = 'midpoint' | 'ratio';
 
@@ -46,7 +60,16 @@ export type PointMode = 'midpoint' | 'ratio';
  * A construction's field that is open, which the model's picking then serves: the segment's, M's or the angle's of a plane through
  * a segment, the face's or a position's of a plane parallel to a face.
  */
-export type ConstructionField = 'segment' | 'point' | 'angle' | 'face' | 'position' | 'second-position' | 'diagonal' | 'normal';
+export type ConstructionField =
+  | 'segment'
+  | 'point'
+  | 'angle'
+  | 'face'
+  | 'position'
+  | 'second-position'
+  | 'diagonal'
+  | 'normal'
+  | 'trace';
 
 /**
  * A segment's endpoints in a stable order by their names, whatever order they were picked or stored in: by the letter, then the
@@ -395,6 +418,8 @@ export interface ConstructionGeometry {
   readonly m: string | undefined;
   /** The corners of the first section and of the second parallel one, by their ids among `points`; none without a plane. */
   readonly sections: readonly (readonly string[])[];
+  /** A longitudinal plane's trace on the lower base, by its ends' ids among `points`, and whether the plane passes through it. */
+  readonly trace: { readonly ends: readonly [string, string]; readonly through: boolean } | undefined;
 }
 
 export function constructionGeometry(
@@ -402,11 +427,11 @@ export function constructionGeometry(
   scale: PhysicalScale,
   draft: ConstructionDraft,
 ): ConstructionGeometry | undefined {
-  if (!isThroughPointSolid(shape.kind)) return undefined;
+  if (!isConstructionShape(shape)) return undefined;
   const vertices = boxVertices(shape, scale);
   const names = Object.keys(vertices) as BoxVertex[];
-  // A cube's and a parallelepiped's: the quadrilateral prism's vertices, edges and faces.
-  const topology: PrismTopology = BOX_TOPOLOGY;
+  // The solid's own vertices, edges and faces, from its vertices: a prism's of any base.
+  const topology: PrismTopology = boxTopologyOf(shape);
   const points: Record<string, readonly [number, number, number]> = {};
   for (const name of names) points[name] = toGltfPosition(vertices[name]);
   const centre = names.reduce<[number, number, number]>(
@@ -477,11 +502,23 @@ export function constructionGeometry(
       sections.length = 0;
     }
   }
+  // A longitudinal plane along a line of the base: that line within the base, from the engine's own trace.
+  let trace: ConstructionGeometry['trace'];
+  // A diagonal's trace is the diagonal itself, which its own picking draws.
+  if (plane?.type === 'longitudinal' && plane.trace !== 'angle' && plane.trace !== 'diagonal') {
+    const ends = baseTrace(vertices, topology.faces[topology.lowerBase] ?? [], plane);
+    if (ends !== undefined) {
+      points.T0 = toGltfPosition(ends[0]);
+      points.T1 = toGltfPosition(ends[1]);
+      trace = { ends: ['T0', 'T1'], through: plane.through === true };
+    }
+  }
   return {
     vertices: names,
     points,
     edges,
     faces,
+    trace,
     referenceFace: draft.face,
     vertexFaces,
     segment: segment === undefined ? undefined : { ends: segment, diagonal: boxFacesHolding(topology, segment).length === 1 },
@@ -517,7 +554,7 @@ export type ConstructionView = {
    */
   readonly lines?: readonly {
     readonly key: SegmentKey;
-    readonly ends: readonly [BoxVertex, BoxVertex];
+    readonly ends: readonly [string, string];
     readonly state: 'candidate' | 'selected' | 'in-plane';
   }[];
 };

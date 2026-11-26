@@ -198,6 +198,76 @@ test('a segment picked from either end, quick steps of the angle, and the other 
   expect(errors).toEqual([]);
 });
 
+/** The trapezoidal prism at a height, B₁D₁ at 45° to A₁B₁C₁D₁: not symmetric about B₁D₁, so the two planes differ. */
+async function trapezoidB1D1(page: Page, height: string): Promise<void> {
+  await page.goto('/');
+  await shapeSelect(page).selectOption({ label: 'Призма' });
+  await openSection(page, 'Основа');
+  await page.getByLabel('Тип основи', { exact: true }).selectOption({ label: 'Трапеція' });
+  await openSection(page, 'Висота');
+  await page.getByLabel('Висота призми h', { exact: true }).fill(height);
+  await openSection(page, 'Переріз');
+  await page.getByLabel('Тип перерізу', { exact: true }).selectOption({ label: 'Через ребро або діагональ' });
+  await method(page).selectOption({ label: 'За кутом' });
+  await picker(page, SEGMENT).click();
+  await segmentList(page).selectOption({ label: 'B₁D₁ — діагональ грані' });
+  await page.getByRole('button', { name: 'Готово', exact: true }).click();
+  await typeAngle(page, 'A₁B₁C₁D₁', '45');
+  await expectLoaded(page);
+}
+
+test('the reported B₁D₁ at 45°: no switch to the thin plane; one made thin by the height is left by the same button', async ({
+  page,
+}) => {
+  const errors = collectErrors(page);
+  // As the prism opens, h = 2: the plane on the other side would leave a part too thin, so it is not offered.
+  await trapezoidB1D1(page, '2');
+  const valid = await download(page);
+  expect(valid).toMatchObject({ line: ['B1', 'D1'], method: 'angle', angleDeg: 45 });
+  await expect(other(page)).toHaveCount(0);
+  // Lower, both planes are usable: switched to the other one.
+  await openSection(page, 'Висота');
+  await page.getByLabel('Висота призми h', { exact: true }).fill('1,5');
+  await expect(other(page)).toBeVisible();
+  await other(page).click();
+  expect(await download(page)).toMatchObject({ line: ['B1', 'D1'], angleDeg: 135 });
+  // Taller again: that plane is now too thin. Said inline, the angle and the segment kept, the button the way back.
+  await page.getByLabel('Висота призми h', { exact: true }).fill('2');
+  await expect(
+    page.getByText(/^За цього кута одна з частин була б надто тонкою\. .* Або оберіть «Інше положення перерізу»\.$/),
+  ).toBeVisible();
+  await expect(partsButton(page)).toBeDisabled();
+  await expect(picker(page, SEGMENT)).toContainText('B₁D₁');
+  await expect(picker(page, ANGLE)).toContainText('45°');
+  await expect(page.locator('.overlay .section')).toHaveCount(0);
+  await other(page).click();
+  expect(await download(page)).toEqual(valid);
+  await expect(other(page)).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test('quick clicks on «Інше положення перерізу» make one switch at a time and come back to the first plane', async ({ page }) => {
+  const errors = collectErrors(page);
+  await chooseThroughSegment(page);
+  await method(page).selectOption({ label: 'За кутом' });
+  await picker(page, SEGMENT).click();
+  await segmentList(page).selectOption({ label: 'AC — діагональ грані' });
+  await page.getByRole('button', { name: 'Готово', exact: true }).click();
+  await typeAngle(page, 'ABCD', '45');
+  const first = await download(page);
+  // Two clicks in a row: the second lands while the first switch waits for its model, and does nothing.
+  await other(page).click();
+  await other(page)
+    .click({ force: true, noWaitAfter: true })
+    .catch(() => undefined);
+  await expectLoaded(page);
+  expect(await download(page)).toMatchObject({ line: ['A', 'C'], angleDeg: 135 });
+  await expect(other(page)).toBeEnabled();
+  await other(page).click();
+  expect(await download(page)).toEqual(first);
+  expect(errors).toEqual([]);
+});
+
 test.describe('on a phone', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
 

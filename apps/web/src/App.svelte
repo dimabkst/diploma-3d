@@ -23,7 +23,13 @@ import {
 } from './lib/model/box.ts';
 import { buildModel } from './lib/model/buildModel.ts';
 import { type ConnectorScale, connectorScaleOf } from './lib/model/connectorScale.ts';
-import { diagonalFamilies, diagonalPilotActive, familyOf, oppositeVertex } from './lib/model/diagonalConstruction.ts';
+import {
+  diagonalFamilies,
+  diagonalPartners,
+  diagonalPilotActive,
+  diagonalsThrough,
+  familyOf,
+} from './lib/model/diagonalConstruction.ts';
 import { faceConstructionDraftOf, facePilotActive } from './lib/model/faceConstruction.ts';
 import { describeModelError, type ModelState, visibleArtifacts } from './lib/model/modelState.ts';
 import { normalEntries, normalPilotActive } from './lib/model/normalConstruction.ts';
@@ -31,6 +37,7 @@ import {
   activeConnector,
   activeSection,
   addSecondCut,
+  angleSideRefusal,
   applyPilotChoice,
   axialAxisParallel,
   type ConnectorEdits,
@@ -43,7 +50,6 @@ import {
   LINKED_TEXT_KEYS,
   linkedAxial,
   magnetAllowancesChanged,
-  normalAlongLateral,
   normalAlongManual,
   type ParameterExact,
   type ParameterKey,
@@ -82,11 +88,12 @@ import {
   constructionDraftOf,
   constructionTargets,
   eligibleSecondVertices,
-  isThroughPointSolid,
+  isConstructionSolid,
   type ThroughPointSelection,
   throughPointSelection,
 } from './lib/model/throughPoint.ts';
 import { initialTiltModes, type TiltMode, type TiltSolid } from './lib/model/tilt.ts';
+import { tracePilotActive, traceTargetOf } from './lib/model/traceConstruction.ts';
 import {
   isAvailableShape,
   type PanelAction,
@@ -126,6 +133,8 @@ let construction = $state.raw<{
   readonly pending: BoxVertex | undefined;
   readonly notice: string | undefined;
 }>({ field: undefined, pending: undefined, notice: undefined });
+// A switch to the other plane at the angle waiting for its model, with the state to restore if it cannot be built.
+let angleSwitch = $state.raw<{ readonly key: string | undefined; readonly previous: ParameterState }>();
 // The section's field the user changed last, where a problem that any of them could cause is said.
 let editedField = $state<ParameterKey>();
 let seenLinkedTexts: Partial<Record<ParameterKey, string>> = {};
@@ -230,7 +239,7 @@ const panel = $derived(
         connectorNotice: plateNotice,
         magnetAllowancesChanged: selectedKind !== undefined && magnetAllowancesChanged(selectedKind, parameterTexts),
         plateClipped: request?.plateClipped,
-        construction,
+        construction: { ...construction, switching: angleSwitch !== undefined },
         pilotDraft: request?.pilotDraft,
       }),
 );
@@ -257,7 +266,7 @@ const trialFile = $derived(model.status === 'ready' && model.key === requestKey 
 const pilotOn = $derived(
   selectedKind !== undefined &&
     isBoxSolid(selectedKind) &&
-    isThroughPointSolid(selectedKind) &&
+    isConstructionSolid(selectedKind) &&
     activeSection(selectedKind, parameterChoices) === 'through-line',
 );
 // The same construction by a point or at an angle: the segment's field is shared, the other one is M's or the angle's.
@@ -293,8 +302,12 @@ const diagonalOn = $derived(
 const normalOn = $derived(
   selectedKind !== undefined && isBoxSolid(selectedKind) && normalPilotActive(boxKeysOf(selectedKind), parameterChoices as never),
 );
+// A triangular prism's longitudinal plane along a median, an altitude, a bisector or a midline: its base element picked on the model.
+const traceOn = $derived(
+  selectedKind !== undefined && isBoxSolid(selectedKind) && tracePilotActive(boxKeysOf(selectedKind), parameterChoices as never),
+);
 $effect.pre(() => {
-  if (!pilotOn && !facePilotOn && !diagonalOn && !normalOn && untrack(() => construction.field) !== undefined) {
+  if (!pilotOn && !facePilotOn && !diagonalOn && !normalOn && !traceOn && untrack(() => construction.field) !== undefined) {
     construction = { field: undefined, pending: undefined, notice: undefined };
   }
 });
@@ -318,37 +331,77 @@ const drafting = $derived(request?.pilotDraft?.status === 'incomplete' || reques
 const constructionForPreview = $derived(
   selectedKind === undefined || !isBoxSolid(selectedKind) || (construction.field === undefined && !drafting)
     ? undefined
-    : normalOn
-      ? normalView(selectedKind)
-      : diagonalOn
-        ? diagonalView(selectedKind)
-        : facePilotOn
-          ? {
-              field: construction.field,
-              pending: undefined,
-              draft: faceConstructionDraftOf(parameterChoices[boxKeysOf(selectedKind).Face], request?.pilotDraft),
-              vertexTargets: [],
-              edgeTargets: [],
-              // Every face can be clicked; opposite ones give the same planes, measured from the other side.
-              faceTargets: construction.field === 'face' ? boxTopologyFor(selectedKind, parameterChoices).faceNames : [],
-            }
-          : pilotSelection === undefined
-            ? undefined
-            : angleOn
-              ? angleView(selectedKind, pilotSelection)
-              : {
-                  field: construction.field,
-                  pending: construction.pending,
-                  draft: constructionDraftOf(
-                    boxKeysOf(selectedKind),
-                    pilotSelection,
-                    request?.values ?? {},
-                    request?.pilotDraft,
-                    secondPlanePercent,
-                  ),
-                  ...constructionTargets(construction.field, pilotSelection, construction.pending),
-                },
+    : traceOn
+      ? traceView(selectedKind)
+      : normalOn
+        ? normalView(selectedKind)
+        : diagonalOn
+          ? diagonalView(selectedKind)
+          : facePilotOn
+            ? {
+                field: construction.field,
+                pending: undefined,
+                draft: faceConstructionDraftOf(parameterChoices[boxKeysOf(selectedKind).Face], request?.pilotDraft),
+                vertexTargets: [],
+                edgeTargets: [],
+                // Every face can be clicked; opposite ones give the same planes, measured from the other side.
+                faceTargets: construction.field === 'face' ? boxTopologyFor(selectedKind, parameterChoices).faceNames : [],
+              }
+            : pilotSelection === undefined
+              ? undefined
+              : angleOn
+                ? angleView(selectedKind, pilotSelection)
+                : {
+                    field: construction.field,
+                    pending: construction.pending,
+                    draft: constructionDraftOf(
+                      boxKeysOf(selectedKind),
+                      pilotSelection,
+                      request?.values ?? {},
+                      request?.pilotDraft,
+                      secondPlanePercent,
+                    ),
+                    ...constructionTargets(construction.field, pilotSelection, construction.pending),
+                  },
 );
+
+/**
+ * The view of a longitudinal plane along a line of the base while its base element is chosen: the base vertices, or the base sides,
+ * of both bases, an upper one standing for the lower one; the side chosen marked; the trace and the section as the request has them.
+ */
+function traceView(kind: BoxSolid) {
+  const keys = boxKeysOf(kind);
+  const trace = traceSelection(keys, parameterChoices as never, boxContextFrom(kind, request?.values ?? {}, parameterChoices));
+  const choosing = construction.field === 'trace';
+  const upper = (vertex: BoxVertex) => `${vertex}1` as BoxVertex;
+  const sides = traceTargetOf(trace.kind) === 'side';
+  const section = request?.spec?.section;
+  const { connector: _connector, ...plane } = (section ?? {}) as Record<string, unknown>;
+  return {
+    field: construction.field,
+    pending: undefined,
+    draft: {
+      segment: undefined,
+      pointEdge: undefined,
+      pointEdgeEligible: false,
+      percent: undefined,
+      plane: section?.type === 'longitudinal' ? (plane as ConstructionDraft['plane']) : undefined,
+    },
+    lines:
+      sides && trace.segment !== undefined
+        ? [{ key: segmentKey(trace.segment), ends: trace.segment, state: 'selected' as const }]
+        : [],
+    vertexTargets: choosing && !sides ? trace.vertices.flatMap((vertex) => [vertex, upper(vertex)]) : [],
+    edgeTargets:
+      choosing && sides
+        ? trace.segments.flatMap(([a, b]) => [
+            segmentKey(canonicalSegment([a, b])),
+            segmentKey(canonicalSegment([upper(a), upper(b)])),
+          ])
+        : [],
+    faceTargets: [],
+  };
+}
 
 /**
  * The view of an inclined plane while the segment it is perpendicular to is chosen: every edge and vertex may be tapped, as any two
@@ -391,15 +444,21 @@ function diagonalView(kind: BoxSolid) {
   const families = diagonalFamilies(trace.segments);
   const chosen = trace.segment === undefined ? undefined : familyOf(families, trace.segment);
   const through = parameterChoices[keys.TraceThrough];
-  const lines = families.flatMap((family) =>
-    [family.lower, family.upper].map((ends) => ({
-      key: segmentKey(ends),
-      ends,
-      state: family !== chosen ? ('candidate' as const) : through ? ('in-plane' as const) : ('selected' as const),
-    })),
-  );
   const { pending } = construction;
-  const opposite = pending === undefined ? undefined : oppositeVertex(families, pending);
+  // A quadrilateral's four diagonals are all drawn; a denser base's only the chosen family and, after a first vertex, the
+  // diagonals through it, so that the drawing stays readable.
+  const dense = families.length > 2;
+  const candidates = pending === undefined ? [] : diagonalsThrough(families, pending);
+  const lines = families.flatMap((family) =>
+    [family.lower, family.upper]
+      .filter((ends) => !dense || family === chosen || candidates.some((candidate) => segmentKey(candidate) === segmentKey(ends)))
+      .map((ends) => ({
+        key: segmentKey(ends),
+        ends,
+        state: family !== chosen ? ('candidate' as const) : through ? ('in-plane' as const) : ('selected' as const),
+      })),
+  );
+  const partners = pending === undefined ? [] : diagonalPartners(families, pending);
   const section = request?.spec?.section;
   const { connector: _connector, ...plane } = (section ?? {}) as Record<string, unknown>;
   return {
@@ -414,11 +473,7 @@ function diagonalView(kind: BoxSolid) {
     },
     lines,
     vertexTargets: [
-      ...new Set(
-        pending === undefined
-          ? families.flatMap(({ lower, upper }) => [...lower, ...upper])
-          : [pending, ...(opposite === undefined ? [] : [opposite])],
-      ),
+      ...new Set(pending === undefined ? families.flatMap(({ lower, upper }) => [...lower, ...upper]) : [pending, ...partners]),
     ],
     edgeTargets: lines.map(({ key }) => key),
     faceTargets: [],
@@ -450,9 +505,52 @@ function openConstruction(field: ConstructionField | undefined) {
 
 function choosePilot(choice: PilotChoice) {
   if (selectedKind === undefined) return;
+  if (choice.kind === 'angle-side') {
+    switchAngleSide(selectedKind);
+    return;
+  }
   applyState(applyPilotChoice(selectedKind, parameterState, request?.values ?? {}, choice));
   construction = { ...construction, pending: undefined, notice: undefined };
 }
+
+/**
+ * The switch to the other plane at the angle, made whole or not at all: checked first by the same request the geometry is built
+ * from, refused with the reason while the plane in effect stays; once made, the previous state is kept until the new model is
+ * built, and restored if it cannot be. One switch at a time: a click while one is pending does nothing.
+ */
+function switchAngleSide(kind: ShapeKind) {
+  if (angleSwitch !== undefined) return;
+  const options = { exact: parameterExact, tiltModes, connectorScale: lastConnectorScale, connectorEdits };
+  const refusal = angleSideRefusal(kind, parameterTexts, parameterChoices, options);
+  if (refusal !== undefined) {
+    construction = { ...construction, notice: `Інше положення перерізу не підходить: ${refusal} Залишено поточний переріз.` };
+    return;
+  }
+  const previous = parameterState;
+  const next = applyPilotChoice(kind, previous, request?.values ?? {}, { kind: 'angle-side' });
+  if (next === previous) return;
+  applyState(next);
+  construction = { ...construction, pending: undefined, notice: undefined };
+  angleSwitch = { key: request?.key, previous };
+}
+
+$effect.pre(() => {
+  const pending = angleSwitch;
+  if (pending === undefined) return;
+  // Anything else changed meanwhile: that is the state now, the switch with it.
+  if (requestKey !== pending.key || (model.status === 'ready' && model.key === pending.key)) {
+    angleSwitch = undefined;
+    return;
+  }
+  if (model.status === 'error') {
+    untrack(() => applyState(pending.previous));
+    angleSwitch = undefined;
+    construction = {
+      ...untrack(() => construction),
+      notice: 'Не вдалося побудувати інше положення перерізу, тому повернено попередній переріз.',
+    };
+  }
+});
 
 /**
  * A tap on the model in the construction view: for the segment, an edge, or a vertex and then a second one of a common face, the
@@ -463,6 +561,11 @@ function pickOnModel(pick: ConstructionPick) {
   const { field, pending } = construction;
   if (field === 'normal') {
     pickNormal(pick);
+    return;
+  }
+  if (field === 'trace') {
+    if (pick.kind === 'vertex') choosePilot({ kind: 'trace-vertex', vertex: pick.vertex });
+    if (pick.kind === 'edge') choosePilot({ kind: 'trace-side', segment: segmentOf(pick.edge) });
     return;
   }
   if (field === 'diagonal' && selectedKind !== undefined && isBoxSolid(selectedKind)) {
@@ -543,15 +646,18 @@ function pickDiagonal(kind: BoxSolid, pick: ConstructionPick) {
     construction = { ...construction, pending: undefined, notice: undefined };
     return;
   }
-  if (oppositeVertex(families, pending) === pick.vertex) {
+  if (diagonalPartners(families, pending).includes(pick.vertex)) {
     choosePilot({ kind: 'diagonal', segment: [pending, pick.vertex] });
     return;
   }
   const [first, second] = [vertexName(pending), vertexName(pick.vertex)];
+  const upper = (vertex: BoxVertex) => vertex.endsWith('1');
   construction = {
     ...construction,
     notice:
-      `${first} і ${second} не протилежні вершини однієї основи, тож ${first}${second} — не діагональ основи. ` +
+      (upper(pending) === upper(pick.vertex)
+        ? `${first} і ${second} — сусідні вершини основи, тож ${first}${second} — її сторона, а не діагональ. `
+        : `${first} і ${second} лежать у різних основах, тож ${first}${second} — не діагональ основи. `) +
       'Оберіть підсвічену вершину.',
   };
 }
@@ -628,10 +734,6 @@ function runPanelAction(action: PanelAction) {
   }
   if (action === 'trace-through') {
     if (selectedKind !== undefined) applyState(traceThrough(selectedKind, parameterState));
-    return;
-  }
-  if (action === 'normal-lateral') {
-    if (selectedKind !== undefined) applyState(normalAlongLateral(selectedKind, parameterState));
     return;
   }
   if (action === 'height-foot') {

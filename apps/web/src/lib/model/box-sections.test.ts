@@ -10,7 +10,6 @@ import {
   followTrace,
   initialParameterChoices,
   initialParameterTexts,
-  normalAlongLateral,
   normalAlongManual,
   type ParameterChoices,
   type ParameterState,
@@ -154,25 +153,14 @@ describe('the sections of a cube and the parallelepipeds', () => {
     );
   });
   it('keeps the line and the point’s edge to the chosen face, and offers its edges and diagonals', () => {
-    // A prism's plane through a line by its fields: a face, then its lines.
-    const state: ParameterState = {
-      texts: texts(),
-      choices: choices({ prismSection: 'through-line', prismLineFace: 'BCC1B1' }),
-    };
-    const values = request('prism', {}, state.choices).values;
-    const settled = settleBoxChoices('prism', state, values) as ParameterState;
-    expect(settled.choices.prismLine).toBe('B-C');
-    expect(settled.choices.prismPointEdge).not.toBe('');
-    expect(settleBoxChoices('prism', settled, values)).toBeUndefined();
-    const group = groupOf('prism', 'Переріз', {}, settled.choices);
-    expect(optionsOf(group, 'prismLine').map((option) => option.label)).toEqual([
-      'Ребро BC',
-      'Ребро CC₁',
-      'Ребро C₁B₁',
-      'Ребро B₁B',
-      'Діагональ BC₁',
-      'Діагональ CB₁',
-    ]);
+    // A pentagonal prism's plane through a line is the construction too: a base's and a lateral face's diagonals among its
+    // segments, no diagonal of the solid.
+    const pentagonal = groupOf('prism', 'Переріз', {}, { prismSection: 'through-line', prismBaseSides: 5 });
+    const field = pentagonal.fields.find((candidate) => candidate.type === 'through-point');
+    const segments = field?.type === 'through-point' ? field.segment.options.map((option) => option.label) : [];
+    expect(segments).toEqual(expect.arrayContaining(['AB — ребро', 'AC — діагональ грані', 'BC₁ — діагональ грані']));
+    expect(segments).not.toContain('AC₁ — діагональ грані');
+    expect(segments.some((label) => label.startsWith('AC₁'))).toBe(false);
     // A parallelepiped's construction keeps its own segment and face: nothing is settled for it.
     const construction: ParameterState = {
       texts: texts(),
@@ -226,12 +214,15 @@ describe('the sections of a cube and the parallelepipeds', () => {
     expect(segments).toContainEqual({ value: 'A-C1', label: 'AC₁', group: 'Діагоналі тіла' });
     // The lateral edges as one, the eight base edges, twelve face diagonals and four body diagonals.
     expect(segments).toHaveLength(1 + 8 + 12 + 4);
-    // A prism keeps the collapsed list of the same choice.
-    const further = groupOf('prism', 'Переріз', {}, { prismSection: 'inclined' }).fields.find(
-      (candidate) => candidate.key === 'prism-normal-along',
+    // A pentagonal prism has the same field and no collapsed list beside it; a pyramid keeps that list of the same choice.
+    const pentagonal = groupOf('prism', 'Переріз', {}, { prismSection: 'inclined', prismBaseSides: 5 }).fields;
+    expect(pentagonal.some((candidate) => candidate.key === 'prism-normal-along')).toBe(false);
+    expect(pentagonal.find((candidate) => candidate.key === 'prism-normal')?.type).toBe('normal-construction');
+    const further = groupOf('pyramid', 'Переріз', {}, { pyramidSection: 'inclined' }).fields.find(
+      (candidate) => candidate.key === 'pyramid-normal-along',
     ) as unknown as { label: string; fields: { options?: { label: string }[] }[] };
     expect(further.label).toBe('Перпендикулярно ребру або діагоналі');
-    expect((further.fields[0]?.options ?? []).map(({ label }) => label)).toContain('Бічні ребра');
+    expect((further.fields[0]?.options ?? []).map(({ label }) => label)).toContain('Ребро SA');
     // The triangle near the corner A, perpendicular to the body diagonal.
     const perpendicular = { ...chosen, cubeNormalAlong: 'A-C1' } as const;
     const triangle = request('cube', { cubeSectionPercent: '16' }, perpendicular);
@@ -252,9 +243,15 @@ describe('the sections of a cube and the parallelepipeds', () => {
     // A small solid keeps both parts at least 1,2 mm thick: the positions narrow.
     const small = request('cube', { printSizeMm: '10', cubeFaceRatioFirst: '11', cubeFaceRatioSecond: '89' }, chosen);
     expect((small.pilotDraft as { message: string }).message).toMatch(/від 12 % до 88 %/);
-    // A prism keeps its percentages.
-    const prism = request('prism', { prismSectionPercent: '95' }, { prismSection: 'face-parallel' });
-    expect(prism.errors.prismSectionPercent).toBe('Допустимі значення — від 10 % до 90 %.');
+    // A pentagonal prism's lateral face, measured to the lateral edge DD₁ its far support plane passes through.
+    const prism = request(
+      'prism',
+      { prismFaceRatioFirst: '95', prismFaceRatioSecond: '5' },
+      { prismSection: 'face-parallel', prismBaseSides: 5, prismFace: 'ABB1A1', prismFaceMode: 'ratio' },
+    );
+    expect((prism.pilotDraft as { message: string }).message).toMatch(
+      /^Переріз надто близько до грані або ребра: .* до 90 % відстані від ABB₁A₁ до DD₁\.$/,
+    );
   });
 });
 
@@ -560,10 +557,17 @@ describe('the sections of the prisms, by the same fields', () => {
   ] as const)(
     'a prism over a regular %i-gon offers %i face orientations, every lateral face for a plane through a line',
     (sides, count) => {
+      // Every prism's construction: its orientations by name, as its geometry pairs parallel faces, and its segments with no
+      // face to choose first.
       const group = groupOf('prism', 'Переріз', {}, prism({ prismBaseSides: sides }));
-      expect(optionsOf(group, 'prismFace')).toHaveLength(count);
+      const field = group.fields.find((candidate) => candidate.type === 'face-construction');
+      const labels = field?.type === 'face-construction' ? field.face.options.map(({ label }) => label) : [];
+      expect(labels).toHaveLength(count);
+      if (sides === 3) expect(labels).toEqual(['ABC ∥ A₁B₁C₁', 'ABB₁A₁', 'BCC₁B₁', 'CAA₁C₁']);
+      if (sides === 6) expect(labels).toEqual(['ABCDEF ∥ A₁B₁C₁D₁E₁F₁', 'ABB₁A₁ ∥ DEE₁D₁', 'BCC₁B₁ ∥ EFF₁E₁', 'CDD₁C₁ ∥ FAA₁F₁']);
       const through = groupOf('prism', 'Переріз', {}, prism({ prismBaseSides: sides, prismSection: 'through-line' }));
-      expect(optionsOf(through, 'prismLineFace')).toHaveLength(sides + 2);
+      expect(through.fields.some((candidate) => candidate.type === 'through-point')).toBe(true);
+      expect(through.fields.some((candidate) => candidate.key === 'prismLineFace')).toBe(false);
     },
   );
 
@@ -584,7 +588,8 @@ describe('the sections of the prisms, by the same fields', () => {
       'midline',
     ]);
     // Obtuse at A: only A's altitude passes through the base.
-    expect(optionsOf(scalene, 'prismTraceVertex').map((option) => option.label)).toEqual(['A']);
+    const vertex = scalene.fields.find((field) => field.type === 'trace-construction');
+    expect(vertex?.type === 'trace-construction' ? vertex.options.map((option) => option.label) : []).toEqual(['A']);
     const hexagon = groupOf('prism', 'Переріз', {}, prism({ prismSection: 'longitudinal', prismBaseSides: 6 }));
     expect(optionsOf(hexagon, 'prismTrace').map((option) => option.value)).toEqual(['angle', 'diagonal']);
   });
@@ -634,14 +639,10 @@ describe('the sections of the prisms, by the same fields', () => {
     expect(request('prism', {}, prism(triangular)).spec?.section).toMatchObject({ trace: 'angle' });
     const state: ParameterState = { texts: texts(), choices: choices(prism(triangular)) };
     const after = settled('prism', state);
-    expect(after.choices).toMatchObject({
-      prismFace: 'ABC',
-      prismTrace: 'angle',
-      prismLineFace: 'ABC',
-      prismLine: 'A-B',
-      prismNormalAlong: 'none',
-    });
-    expect(['B1-C1', 'C1-A1', 'C-C1']).toContain(after.choices.prismPointEdge);
+    expect(after.choices).toMatchObject({ prismFace: 'ABC', prismTrace: 'angle', prismNormalAlong: 'none' });
+    // The triangular prism's construction never replaces the user's segment: BE, which it lacks, is said to be chosen again.
+    const through = request('prism', after.texts, { ...after.choices, prismSection: 'through-line' });
+    expect(through.pilotDraft).toEqual({ status: 'incomplete', message: 'Оберіть відрізок: ребро або діагональ грані.' });
   });
 
   it('AB of the base and the midpoint of CC1, the triangular prism’s own construction, a choice away', () => {
@@ -655,16 +656,18 @@ describe('the sections of the prisms, by the same fields', () => {
       pointPercent: 50,
     });
     const group = groupOf('prism', 'Переріз', {}, chosen);
-    expect(optionsOf(group, 'prismPointEdge').map((option) => option.label)).toEqual(['Ребро B₁C₁', 'Ребро C₁A₁', 'Ребро CC₁']);
+    const field = group.fields.find((candidate) => candidate.type === 'through-point');
+    if (field?.type !== 'through-point') throw new Error('Expected the construction.');
+    expect(field.point.options.map((option) => option.label).sort()).toEqual(['Ребро A₁C₁', 'Ребро B₁C₁', 'Ребро CC₁']);
     // A lateral face has its diagonals, though the bases have none.
-    const lateral = groupOf('prism', 'Переріз', {}, prism({ prismSection: 'through-line', prismLineFace: 'ABB1A1' }));
-    expect(optionsOf(lateral, 'prismLine').map((option) => option.label)).toContain('Діагональ AB₁');
+    expect(field.segment.options.map((option) => option.label)).toContain('AB₁ — діагональ грані');
+    expect(field.segment.options.map((option) => option.label)).toContain('AC — ребро');
   });
 
   it('perpendicular to the lateral edges a click away; a prism without body diagonals lists none', () => {
     const chosen = prism({ prismSection: 'inclined' });
     const state: ParameterState = { texts: texts({ prismOffsetXRatio: '0,5' }), choices: choices(chosen) };
-    const lateral = normalAlongLateral('prism', state);
+    const lateral = lateralEdges('prism', state);
     expect(request('prism', lateral.texts, lateral.choices).spec?.section).toMatchObject({
       type: 'inclined',
       normalAlong: ['A', 'A1'],
@@ -672,13 +675,17 @@ describe('the sections of the prisms, by the same fields', () => {
     });
     const group = groupOf('prism', 'Переріз', lateral.texts, lateral.choices);
     expect(labels(group)).toContain('Площина перпендикулярна до бічних ребер.');
-    const further = group.fields.find((field) => field.key === 'prism-normal-along') as unknown as {
-      fields: { options?: { label: string }[] }[];
-    };
-    const segments = (further.fields[0]?.options ?? []).map((option) => option.label);
-    expect(segments.some((label) => label.startsWith('Діагональ тіла'))).toBe(false);
-    expect(segments).toContain('Діагональ грані AB₁');
+    const field = group.fields.find((candidate) => candidate.type === 'normal-construction');
+    const segments = field?.type === 'normal-construction' ? field.options : [];
+    expect(segments.some(({ group: name }) => name === 'Діагоналі тіла')).toBe(false);
+    expect(segments).toContainEqual({ value: 'A-B1', label: 'AB₁', group: 'Діагоналі граней' });
   });
+});
+
+/** The state the removed «Перпендикулярно бічним ребрам» button set: the lateral edges, by AA₁, which the field shows as chosen. */
+const lateralEdges = (kind: BoxSolid, state: ParameterState): ParameterState => ({
+  ...state,
+  choices: { ...state.choices, [boxKeysOf(kind).NormalAlong]: 'A-A1' } as ParameterChoices,
 });
 
 describe('leaving a plane perpendicular to the lateral edges for its angles', () => {
@@ -718,17 +725,17 @@ describe('leaving a plane perpendicular to the lateral edges for its angles', ()
     ['a parallelepiped', 'parallelepiped', {}, { parallelepipedOffsetXRatio: '0,3' }],
   ] as const)('%s: the same planes, the angles shown again, and the lateral edges offered again', (_, kind, base, shape) => {
     const keys = boxKeysOf(kind);
-    // A prism offers the lateral edges by a shortcut; a parallelepiped among the segments of «Перпендикулярно до», always there.
-    const lateral = kind === 'prism' ? `${kind}-normal-lateral` : `${kind}-normal`;
+    // Every prism and a parallelepiped offer the lateral edges among the segments of «Перпендикулярно до», always there.
+    const lateral = `${kind}-normal`;
     const manual = settled(kind, {
       texts: texts({ ...shape, [keys.PlaneInclinationDeg]: '30', [keys.PlaneDirectionDeg]: '60', [keys.SectionPercent]: '40' }),
       choices: choices({ ...base, [keys.Section]: 'inclined' } as Partial<ParameterChoices>),
     });
     expect(fieldKeys(kind, manual)).toContain(lateral);
-    expect(fieldKeys(kind, manual).includes(`${kind}-normal-lateral`)).toBe(kind === 'prism');
+    expect(fieldKeys(kind, manual)).not.toContain(`${kind}-normal-lateral`);
     let state = manual;
     for (let round = 0; round < 3; round += 1) {
-      const perpendicular = settled(kind, normalAlongLateral(kind, state));
+      const perpendicular = settled(kind, lateralEdges(kind, state));
       expect(fieldKeys(kind, perpendicular)).toEqual(expect.arrayContaining([`${kind}-normal-manual`]));
       expect(fieldKeys(kind, perpendicular)).not.toContain(keys.PlaneInclinationDeg);
       expect(fieldKeys(kind, perpendicular)).not.toContain(`${kind}-normal-lateral`);
@@ -764,7 +771,7 @@ describe('leaving a plane perpendicular to the lateral edges for its angles', ()
       texts: texts({ prismOffsetXRatio: '0,5', printSizeMm: '120', prismSectionPercent: '35', prismSectionSecondPercent: '70' }),
       choices: choices({ prismSection: 'inclined', prismSecondCut: true, prismConnector: 'magnet', prismPartsSeparated: true }),
     });
-    const perpendicular = settled('prism', normalAlongLateral('prism', start));
+    const perpendicular = settled('prism', lateralEdges('prism', start));
     const before = planesOf('prism', perpendicular);
     expect(before).toHaveLength(2);
     const back = settled('prism', normalAlongManual('prism', perpendicular));

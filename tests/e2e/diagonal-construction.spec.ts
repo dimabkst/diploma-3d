@@ -128,11 +128,11 @@ test('cube: a diagonal clicked, two opposite vertices of either base, and the na
   await click(page, await screenPoint(page, 'A'));
   await click(page, await screenPoint(page, 'B'));
   await expect(
-    page.getByText('A і B не протилежні вершини однієї основи, тож AB — не діагональ основи. Оберіть підсвічену вершину.'),
+    page.getByText('A і B — сусідні вершини основи, тож AB — її сторона, а не діагональ. Оберіть підсвічену вершину.'),
   ).toBeVisible();
   await expect(page.getByText(/^Перша вершина — A\./)).toBeVisible();
   await click(page, await screenPoint(page, 'C1'));
-  await expect(page.getByText(/^A і C₁ не протилежні вершини однієї основи/)).toBeVisible();
+  await expect(page.getByText(/^A і C₁ лежать у різних основах/)).toBeVisible();
   await click(page, await screenPoint(page, 'C'));
   await expect(picker(page)).toContainText('AC');
   expect(await cameraTarget(page)).toEqual(target);
