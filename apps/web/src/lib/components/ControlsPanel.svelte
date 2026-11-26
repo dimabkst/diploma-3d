@@ -138,11 +138,18 @@ $effect(() => {
 const fieldKeyOf = (target: EventTarget | null) =>
   target instanceof Element ? (target.closest('[data-field-key]') as HTMLElement | null)?.dataset.fieldKey : undefined;
 
-// Per group, across shapes: a group keeps its open state and its fields keep their values while collapsed.
+// Per group: every group starts collapsed, and one opened stays open while its figure is edited and its model rebuilt. Its
+// fields keep their values while collapsed.
 let openSections = $state<Record<string, boolean>>({});
 
-// The same for the collapsed further fields within a group, which start closed.
+// The same for the collapsed further fields within a group.
 let openDisclosures = $state<Record<string, boolean>>({});
+
+/** A figure chosen, also one chosen before: all its groups collapsed, their values and choices kept. */
+export function collapseGroups(): void {
+  openSections = {};
+  openDisclosures = {};
+}
 
 /**
  * What is being typed into a field shown in millimetres, while it differs from how the stored value is shown, such as
@@ -292,6 +299,7 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
       </Button>
     {/if}
   </div>
+  <div class="panel-body">
   {#if panel.type === 'fixed'}
     <p class="note">{panel.note}</p>
   {:else}
@@ -305,11 +313,10 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
              unchanged primitives keeps the binding from re-applying a stale state before the element's toggle event
              has recorded a click on the summary. -->
         {@const sectionKey = section.key}
-        {@const initiallyOpen = section.initiallyOpen}
         <ParameterSection
           title={section.title}
           bind:open={
-            () => openSections[sectionKey] ?? initiallyOpen,
+            () => openSections[sectionKey] ?? false,
             (open) => {
               openSections[sectionKey] = open;
               if (!open) closeConstructionIn(section);
@@ -464,6 +471,7 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
     </div>
   {/if}
   </div>
+  </div>
 </aside>
 
 <style>
@@ -488,12 +496,14 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
 
   /*
    * Scrolls only where the page asks for it with --controls-overflow-y: auto, in the two-column layout. Elsewhere it
-   * is no scroll container at all, so a touch gesture that starts on the controls scrolls the page. The small vertical
-   * padding keeps focus outlines of the first and last controls clear of the clipping edge.
+   * is no scroll container at all, so a touch gesture that starts on the controls scrolls the page. The small bottom
+   * padding keeps the focus outline of the last control clear of the clipping edge; at the top, the header is first.
    */
   .controls-scroll {
+    --panel-gutter: var(--space-6);
+    --panel-header-height: 3.75rem;
     min-height: 0;
-    padding: var(--space-1) var(--space-6);
+    padding: 0 var(--panel-gutter) var(--space-1);
     overflow-y: var(--controls-overflow-y, visible);
     scrollbar-gutter: stable;
   }
@@ -507,22 +517,35 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
     line-height: 1.5;
   }
 
+  /*
+   * Spans the side padding as well, and sticks at the very top edge, so that controls scrolled beneath it, focus outlines
+   * included, are covered entirely, and a click there reaches the header rather than them. One row high, the title wrapping
+   * rather than the button, so that its height is known below.
+   */
   .panel-header {
     position: sticky;
     z-index: 1;
     top: 0;
     display: flex;
-    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
-    gap: var(--space-2) var(--space-3);
-    padding-block: var(--space-2);
+    gap: var(--space-3);
+    min-height: var(--panel-header-height);
+    margin-inline: calc(-1 * var(--panel-gutter));
+    padding: var(--space-2) var(--panel-gutter);
     background: var(--color-surface);
   }
 
-
+  /*
+   * A control reached by keyboard is scrolled into view below the header, its focus outline clear of it, whether the sidebar
+   * scrolls or, in one column, the page.
+   */
+  .panel-body :global(*) {
+    scroll-margin-top: calc(var(--panel-header-height) + var(--space-2));
+  }
 
   .panel-title {
+    min-width: 0;
     margin: 0;
     font-size: var(--text-small);
     color: var(--color-text-dim);
@@ -566,7 +589,7 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
 
   @media (max-width: 420px) {
     .controls-scroll {
-      padding-inline: var(--space-4);
+      --panel-gutter: var(--space-4);
     }
   }
 </style>

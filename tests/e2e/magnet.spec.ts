@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { expect, type Page, test } from '@playwright/test';
 import { readThreeMf, readThreeMfPart } from '../../packages/engine/src/export/three-mf.test-helper.ts';
-import { collectErrors, openSection, previewViewport, shapeSelect } from './helpers.ts';
+import { collectErrors, openAllSections, openSection, previewViewport, shapeSelect } from './helpers.ts';
 
 const partsButton = (page: Page) => page.getByRole('button', { name: 'Завантажити частини · 3MF', exact: true });
 const entry = (page: Page, label: string) => page.getByLabel(label, { exact: true });
@@ -19,8 +19,10 @@ test('magnet pockets: three controls, the fit allowances behind a disclosure wit
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Циліндр' });
+  await openAllSections(page);
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно основам' });
+  await openAllSections(page);
   await entry(page, 'Тип кріплення').selectOption({ label: 'Магнітні гнізда' });
   await expect(entry(page, 'Кількість пар магнітів')).toHaveValue('3');
   await expect(entry(page, 'Діаметр магніту, мм')).toHaveValue('6');

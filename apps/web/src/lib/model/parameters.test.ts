@@ -1417,7 +1417,7 @@ describe('a cylinder section parallel to the bases', () => {
     // The switch itself is on, but a model without a section has no separated preview to show.
     expect(partsSeparated('cylinder', triangle)).toBe(true);
     const group = panelOf(triangle);
-    expect(group).toMatchObject({ initiallyOpen: false, status: { text: 'немає', highlighted: false } });
+    expect(group).toMatchObject({ status: { text: 'немає', highlighted: false } });
     expect(group.fields.map((field) => field.type)).toEqual(['choice']);
   });
 
@@ -3056,11 +3056,10 @@ describe('a horizontal section of the ball', () => {
     return found;
   };
 
-  it('starts whole, with a collapsed group and its fixed proportions noted', () => {
+  it('starts whole, with its fixed proportions noted', () => {
     expect(request({}, triangle).spec).toEqual({ shape: { kind: 'ball' }, scale: { longestDimensionMm: 80 } });
     const panel = shapePanel('ball', triangle);
     expect(panel).toMatchObject({ type: 'parameters', note: 'Суцільна куля. Пропорції фіксовані.' });
-    expect(group(triangle, 'Переріз').initiallyOpen).toBe(false);
     expect(group(triangle, 'Переріз').status).toEqual({ text: 'немає', highlighted: false });
     expect(sectionNumberFields(group(triangle, 'Переріз'))).toEqual([]);
   });

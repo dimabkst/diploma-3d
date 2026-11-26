@@ -6,6 +6,7 @@ import {
   expectPreviewOf,
   expectSizesClose,
   hasNoHorizontalOverflow,
+  openAllSections,
   openSection,
   parameterSection,
   previewPlace,
@@ -32,6 +33,7 @@ const align = (page: Page, label: 'По центру' | 'Вирівняти зл
 
 async function selectTrapezoid(page: Page): Promise<void> {
   await shapeSelect(page).selectOption({ label: 'Призма' });
+  await openAllSections(page);
   await baseType(page).selectOption({ label: 'Трапеція' });
 }
 
@@ -174,6 +176,7 @@ test('trapezoid prism: base switching keeps the shared height and offsets and va
 }) => {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Призма' });
+  await openAllSections(page);
   await entry(page, 'Висота h').fill('1,25');
   await openSection(page, 'Нахил');
   await entry(page, 'Зміщення X').fill('0,5');

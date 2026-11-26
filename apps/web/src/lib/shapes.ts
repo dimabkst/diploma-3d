@@ -532,11 +532,9 @@ export type ParameterField =
 
 /** A collapsible group of the sidebar, such as "Основа" or "Нахил". */
 export type ParameterSection = {
-  /** Unique across all shapes, so that each group keeps its own open state. */
+  /** Unique across all shapes, so that each group keeps its own open state. Every group starts collapsed. */
   readonly key: string;
   readonly title: string;
-  /** Construction controls start open; optional displacements start collapsed. */
-  readonly initiallyOpen: boolean;
   readonly fields: readonly ParameterField[];
   readonly help?: Help | undefined;
   /**
@@ -726,12 +724,11 @@ const section = (
   key: string,
   title: string,
   fields: readonly ParameterField[],
-  options: { initiallyOpen?: boolean; help?: Help | undefined; status?: ParameterSection['status'] } = {},
+  options: { help?: Help | undefined; status?: ParameterSection['status'] } = {},
 ): ParameterSection => ({
   key,
   title,
   fields,
-  initiallyOpen: options.initiallyOpen ?? true,
   help: options.help,
   status: options.status,
 });
@@ -824,7 +821,6 @@ function tiltSection(
     status: config.status,
   };
   return section(key, config.title, [group], {
-    initiallyOpen: false,
     help: mode === 'offset' ? config.offsetHelp : config.angleHelp,
   });
 }
@@ -2043,7 +2039,6 @@ function ballPlaneSection(choices: ParameterChoices, context: PanelContext): Par
         : []),
     ],
     {
-      initiallyOpen: false,
       help: chosen !== 'horizontal' ? undefined : plateOn ? withPlateHelp(ballSectionHelp, false, BALL_PLATE_HELP) : help,
       status: {
         text:
@@ -2480,7 +2475,6 @@ function planeSection(kind: 'cylinder' | 'cone', choices: ParameterChoices, cont
   const withPlate = chosen !== 'none' && plateOn && !twoPlanes;
   const fields = pairable ? withSecondPlane(kind, keys, details[chosen], twoPlanes, plateOn) : details[chosen];
   return section(`${kind}-section`, 'Переріз', [selector, ...fields], {
-    initiallyOpen: false,
     help:
       withPlate && shownHelp !== undefined
         ? withPlateHelp(shownHelp, chosen === 'oblique-apex', kind === 'cylinder' ? CYLINDER_PLATE_HELP : undefined)
@@ -3238,7 +3232,6 @@ function boxPlaneSection(kind: BoxSolid, choices: ParameterChoices, context: Pan
       ...planes,
     ],
     {
-      initiallyOpen: false,
       help: help === undefined ? undefined : twoPlanes ? { ...help, text: `${help.text}\n\n${BOX_SECOND_CUT_HELP}` } : help,
       status: {
         text:

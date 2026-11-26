@@ -7,6 +7,7 @@ import {
   dimensionsLine,
   type ModelViewerElement,
   modelViewer,
+  openAllSections,
   openSection,
   parameterSection,
   previewViewport,
@@ -24,8 +25,10 @@ const slider = (page: Page, label: string) => page.getByRole('slider', { name: `
 async function chooseCut(page: Page): Promise<void> {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Куля' });
+  await openAllSections(page);
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Горизонтальний' });
+  await openAllSections(page);
 }
 
 async function expectReady(page: Page, size = '80 × 80 × 80 мм'): Promise<void> {
@@ -167,6 +170,7 @@ test('a new maximum dimension keeps the percentage; a reset restores 0 and keeps
   await expect(entry(page, 'Найбільший габарит')).toHaveValue('160');
   await expect(entry(page, 'Тип перерізу')).toHaveValue('none');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Горизонтальний' });
+  await openAllSections(page);
   await expect(entry(page, OFFSET)).toHaveValue('0');
 });
 

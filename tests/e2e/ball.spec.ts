@@ -1,5 +1,14 @@
 import { expect, test } from '@playwright/test';
-import { collectErrors, downloadButton, downloadThreeMf, expectPreviewOf, expectSizesClose, shapeSelect } from './helpers.ts';
+import {
+  collectErrors,
+  downloadButton,
+  downloadThreeMf,
+  expectPreviewOf,
+  expectSizesClose,
+  openAllSections,
+  openSection,
+  shapeSelect,
+} from './helpers.ts';
 
 const BALL = 'Куля';
 const BALL_SUMMARY = `${BALL} · 80 × 80 × 80 мм`;
@@ -8,6 +17,7 @@ test('ball: a fixed 80 mm ball with no shape controls, only its optional section
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: BALL });
+  await openAllSections(page);
 
   await expect(page.getByText('Суцільна куля. Пропорції фіксовані.')).toBeVisible();
   await expect(page.getByRole('slider')).toHaveCount(0);
@@ -35,6 +45,7 @@ test('ball: switching to and from parameterised shapes shows their own controls 
 
   // A cone with h = r: 80 × 80 × 40 mm.
   await shapeSelect(page).selectOption({ label: 'Конус' });
+  await openAllSections(page);
   await page.getByLabel('Висота h', { exact: true }).fill('1');
   await expectPreviewOf(page, 'Конус · 80 × 80 × 40 мм');
 
@@ -55,6 +66,8 @@ test('ball: switching to and from parameterised shapes shows their own controls 
   // Rapid switches end on a prism, whose own controls and file return.
   for (const label of ['Куб', BALL, 'Циліндр', BALL]) await shapeSelect(page).selectOption({ label });
   await shapeSelect(page).selectOption({ label: 'Призма' });
+  await openSection(page, 'Основа');
+  await openSection(page, 'Висота');
   await expect(page.getByLabel('Тип основи', { exact: true })).toBeVisible();
   // The height; the offsets of the upper base wait in the collapsed "Нахил" group.
   await expect(page.getByRole('slider')).toHaveCount(1);
@@ -64,8 +77,10 @@ test('ball: switching to and from parameterised shapes shows their own controls 
 
   // Back to the ball, then to the cone, whose ratio was kept.
   await shapeSelect(page).selectOption({ label: BALL });
+  await openAllSections(page);
   await expectPreviewOf(page, BALL_SUMMARY);
   await shapeSelect(page).selectOption({ label: 'Конус' });
+  await openSection(page, 'Висота');
   await expect(page.getByLabel('Висота h', { exact: true })).toHaveValue('1');
   await expect(page.getByRole('slider')).toHaveCount(1);
   await expectPreviewOf(page, 'Конус · 80 × 80 × 40 мм');
@@ -82,6 +97,7 @@ for (const [layout, width] of [
     await page.setViewportSize({ width, height: 2000 });
     await page.goto('/');
     await shapeSelect(page).selectOption({ label: BALL });
+    await openAllSections(page);
     await expectPreviewOf(page, BALL_SUMMARY);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });

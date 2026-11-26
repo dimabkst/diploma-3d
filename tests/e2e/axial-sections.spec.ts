@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { expect, type Page, test } from '@playwright/test';
 import { readThreeMf, readThreeMfPart } from '../../packages/engine/src/export/three-mf.test-helper.ts';
-import { collectErrors, openSection, previewViewport, shapeSelect } from './helpers.ts';
+import { collectErrors, openAllSections, openSection, previewViewport, shapeSelect } from './helpers.ts';
 
 const partsButton = (page: Page) => page.getByRole('button', { name: 'Завантажити частини · 3MF', exact: true });
 const entry = (page: Page, label: string) => page.getByLabel(label, { exact: true });
@@ -23,10 +23,12 @@ test('a leaning cylinder’s plane parallel to its axis: offset, direction, the 
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Циліндр' });
+  await openAllSections(page);
   await openSection(page, 'Нахил');
   await entry(page, 'Зміщення верхньої основи').fill('0,8');
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно осі' });
+  await openAllSections(page);
   await entry(page, 'Зміщення від осі').fill('30');
   await entry(page, 'Напрям зміщення').fill('45');
   await entry(page, 'Тип кріплення').selectOption({ label: 'Знімні штифти' });
@@ -47,10 +49,12 @@ test('a cone’s plane through the apex held to its axis follows the cone, and d
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Конус' });
+  await openAllSections(page);
   await openSection(page, 'Нахил');
   await entry(page, 'Зміщення вершини').fill('0,7');
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Через вершину' });
+  await openAllSections(page);
   await page.getByRole('checkbox', { name: 'Осьовий переріз' }).check();
   await expect(entry(page, 'Кут до площини основи')).toHaveCount(0);
   await expect(page.getByText(/^Площина проходить через вершину й центр основи/)).toBeVisible();

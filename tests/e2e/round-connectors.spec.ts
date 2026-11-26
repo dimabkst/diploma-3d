@@ -8,6 +8,7 @@ import {
   documentBox,
   type ModelViewerElement,
   modelViewer,
+  openAllSections,
   openSection,
   parameterSection,
   previewViewport,
@@ -51,8 +52,10 @@ test('cylinder: plugs and dowels sit in their own group under the section and ex
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Циліндр' });
+  await openAllSections(page);
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно основам' });
+  await openAllSections(page);
 
   // The connector's selector and settings form one group, after the section's explanation.
   const cut = parameterSection(page, 'Переріз');
@@ -216,6 +219,7 @@ test('cylinder: plugs and dowels sit in their own group under the section and ex
   await expect(page.getByLabel('Найбільший габарит', { exact: true })).toHaveValue('60');
   await expect(entry(page, 'Тип кріплення')).toHaveCount(0);
   await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно основам' });
+  await openAllSections(page);
   await expect(entry(page, 'Тип кріплення')).toHaveValue('none');
   await entry(page, 'Тип кріплення').selectOption({ label: 'Знімні штифти' });
   await expect(entry(page, 'Кількість')).toHaveValue('1');

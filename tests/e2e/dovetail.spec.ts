@@ -7,6 +7,7 @@ import {
   dimensionsLine,
   type ModelViewerElement,
   modelViewer,
+  openAllSections,
   openSection,
   parameterSection,
   previewViewport,
@@ -50,6 +51,7 @@ const viewerSize = async (page: Page) => {
 async function chooseDovetail(page: Page): Promise<void> {
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно основам' });
+  await openAllSections(page);
   await expect(entry(page, 'Тип кріплення')).toHaveValue('none');
   await entry(page, 'Тип кріплення').selectOption({ label: 'Ластівчин хвіст' });
 }
@@ -60,6 +62,7 @@ test('cylinder: a sliding dovetail joins the parts, previews them slid apart and
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Циліндр' });
+  await openAllSections(page);
   await chooseDovetail(page);
 
   // The settings in millimetres at M = 80 mm and r = 40 mm, with the ranges the cylinder allows for the other settings;
@@ -161,6 +164,7 @@ test('cylinder: a sliding dovetail joins the parts, previews them slid apart and
 test('oblique cylinder: the dovetail follows the displaced section; a thin upper part is refused', async ({ page }) => {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Циліндр' });
+  await openAllSections(page);
   await openSection(page, 'Нахил');
   await entry(page, 'Зміщення верхньої основи').fill('1');
   await chooseDovetail(page);

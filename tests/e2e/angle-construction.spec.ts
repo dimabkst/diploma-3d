@@ -3,7 +3,7 @@ import { expect, type Page, test } from '@playwright/test';
 import { MODEL_SETTINGS_PATH } from '../../packages/engine/src/export/model-settings.ts';
 import { readThreeMf, readThreeMfPart } from '../../packages/engine/src/export/three-mf.test-helper.ts';
 import { findMeshDefects } from '../../packages/engine/src/mesh.ts';
-import { collectErrors, openSection, previewViewport, shapeSelect } from './helpers.ts';
+import { collectErrors, openAllSections, openSection, previewViewport, shapeSelect } from './helpers.ts';
 
 const partsButton = (page: Page) => page.getByRole('button', { name: 'Завантажити частини · 3MF', exact: true });
 const picker = (page: Page, name: RegExp) => page.getByRole('button', { name });
@@ -22,8 +22,10 @@ async function expectLoaded(page: Page): Promise<void> {
 async function chooseThroughSegment(page: Page, shape = 'Куб'): Promise<void> {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: shape });
+  await openAllSections(page);
   await openSection(page, 'Переріз');
   await page.getByLabel('Тип перерізу', { exact: true }).selectOption({ label: 'Через ребро або діагональ' });
+  await openAllSections(page);
   await expectLoaded(page);
 }
 
@@ -202,12 +204,14 @@ test('a segment picked from either end, quick steps of the angle, and the other 
 async function trapezoidB1D1(page: Page, height: string): Promise<void> {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Призма' });
+  await openAllSections(page);
   await openSection(page, 'Основа');
   await page.getByLabel('Тип основи', { exact: true }).selectOption({ label: 'Трапеція' });
   await openSection(page, 'Висота');
   await page.getByLabel('Висота призми h', { exact: true }).fill(height);
   await openSection(page, 'Переріз');
   await page.getByLabel('Тип перерізу', { exact: true }).selectOption({ label: 'Через ребро або діагональ' });
+  await openAllSections(page);
   await method(page).selectOption({ label: 'За кутом' });
   await picker(page, SEGMENT).click();
   await segmentList(page).selectOption({ label: 'B₁D₁ — діагональ грані' });

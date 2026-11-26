@@ -7,6 +7,7 @@ import {
   expectSizesClose,
   expectViewerBox,
   hasNoHorizontalOverflow,
+  openAllSections,
   openSection,
   previewPlace,
   previewViewport,
@@ -72,6 +73,7 @@ test('parallelepiped: side ratio, height and angle drive the preview, its dimens
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: NAME });
+  await openAllSections(page);
 
   // Defaults: a rhombus with α = 60° and h = a. The base is 1,5a wide, so a = b = h = 80 / 1,5 ≈ 53,3 mm.
   await expect(entry(page, 'Сторона основи b')).toHaveValue('1');
@@ -97,6 +99,7 @@ test('parallelepiped: the controls keep typed values between steps and step to t
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: NAME });
+  await openAllSections(page);
   await expectPreviewOf(page, summary(1, 1, 60));
 
   // The angle moves in 5° steps: 62° steps down to 60° and up to 65°, and a typed 62° is kept as typed.
@@ -152,6 +155,7 @@ test('parallelepiped: an invalid angle is explained and blocks the download unti
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: NAME });
+  await openAllSections(page);
   await expectPreviewOf(page, summary(1, 1, 60));
 
   for (const [text, message] of [
@@ -178,10 +182,12 @@ test('parallelepiped: an invalid angle is explained and blocks the download unti
 test('parallelepiped: α = 90° gives the same box as the rectangular cuboid', async ({ page }) => {
   await page.goto('/');
   await shapeSelect(page).selectOption('cuboid');
+  await openAllSections(page);
   await expectPreviewOf(page, 'Прямокутний паралелепіпед · 40 × 60 × 80 мм');
   const cuboid = await downloadThreeMf(page);
 
   await shapeSelect(page).selectOption({ label: NAME });
+  await openAllSections(page);
   await setFields(page, '1,5', '2', '90');
   await expectPreviewOf(page, `${NAME} · 40 × 60 × 80 мм`);
   await expectViewerBox(page, [40, 60, 80]);
@@ -195,6 +201,7 @@ test('parallelepiped: α = 90° gives the same box as the rectangular cuboid', a
 test('parallelepiped: switching shapes keeps its values apart and never offers outdated geometry', async ({ page }) => {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: NAME });
+  await openAllSections(page);
   await setFields(page, '1,75', '0,75', '50');
   await expectPreviewOf(page, summary(1.75, 0.75, 50));
 
@@ -211,9 +218,11 @@ test('parallelepiped: switching shapes keeps its values apart and never offers o
 
   // The cuboid and prism keep their own ratios; the same label "Висота h" belongs to each shape separately.
   await shapeSelect(page).selectOption('cuboid');
+  await openAllSections(page);
   await expect(page.getByLabel('Ширина b', { exact: true })).toHaveValue('1,5');
   await expectPreviewOf(page, 'Прямокутний паралелепіпед · 40 × 60 × 80 мм');
   await shapeSelect(page).selectOption('prism');
+  await openAllSections(page);
   await expect(entry(page, 'Висота h')).toHaveValue('2');
   await expect(entry(page, 'Кут α')).toHaveCount(0);
   await expectPreviewOf(page, 'Призма · 40 × 34,6 × 80 мм');
@@ -236,6 +245,7 @@ for (const [layout, width, height] of [
     await page.setViewportSize({ width, height });
     await page.goto('/');
     await shapeSelect(page).selectOption({ label: NAME });
+    await openAllSections(page);
     await openSection(page, 'Нахил');
     await expectPreviewOf(page, summary(1, 1, 60));
     const reference = await previewPlace(page);

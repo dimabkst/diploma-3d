@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { expect, type Page, test } from '@playwright/test';
 import { readThreeMf, readThreeMfPart } from '../../packages/engine/src/export/three-mf.test-helper.ts';
-import { collectErrors, openSection, previewViewport, shapeSelect } from './helpers.ts';
+import { collectErrors, openAllSections, openSection, previewViewport, shapeSelect } from './helpers.ts';
 
 const SETTINGS = '3D/Other/model-settings.json';
 const partsButton = (page: Page) => page.getByRole('button', { name: 'Завантажити частини · 3MF', exact: true });
@@ -20,8 +20,10 @@ async function download(page: Page, button: ReturnType<Page['getByRole']>) {
 async function coneWithParallelCut(page: Page) {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Конус' });
+  await openAllSections(page);
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно основі' });
+  await openAllSections(page);
 }
 
 test('a plate with dowels downloads as three parts and dowels, and the dowels alone with the plate in their length', async ({
@@ -83,6 +85,7 @@ test('a vertical cut keeps its plate and connector when the cut changes, and dow
   await entry(page, 'Товщина пластини, мм').fill('2');
   await entry(page, 'Тип кріплення').selectOption({ label: 'Ластівчин хвіст' });
   await entry(page, 'Тип перерізу').selectOption({ label: 'Вертикальний' });
+  await openAllSections(page);
   // The plate, its thickness and the connector stay; the groove may open at the bottom, away from the apex.
   await expect(page.getByRole('checkbox', { name: 'Січна пластина' })).toBeChecked();
   await expect(entry(page, 'Товщина пластини, мм')).toHaveValue('2');
@@ -106,8 +109,10 @@ test('a ball’s horizontal cut takes a plate with plugs, and downloads both par
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Куля' });
+  await openAllSections(page);
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Горизонтальний' });
+  await openAllSections(page);
   await page.getByRole('checkbox', { name: 'Січна пластина' }).check();
   await entry(page, 'Товщина пластини, мм').fill('2,4');
   await entry(page, 'Тип кріплення').selectOption({ label: 'Виступ і отвір' });
@@ -132,8 +137,10 @@ test('a cylinder’s vertical cut takes a plate with dowels, which turns the twi
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Циліндр' });
+  await openAllSections(page);
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно основам' });
+  await openAllSections(page);
   // A twist connector chosen before the plate gives way to none, said so.
   await entry(page, 'Тип кріплення').selectOption({ label: 'Поворотне з’єднання' });
   await page.getByRole('checkbox', { name: 'Січна пластина' }).check();
@@ -141,6 +148,7 @@ test('a cylinder’s vertical cut takes a plate with dowels, which turns the twi
   await expect(page.getByText('Поворотне з’єднання не працює із січною пластиною, тому обрано «Без кріплення».')).toBeVisible();
   await expect(entry(page, 'Тип кріплення').locator('option[value="twist"]')).toBeDisabled();
   await entry(page, 'Тип перерізу').selectOption({ label: 'Вертикальний' });
+  await openAllSections(page);
   await expect(page.getByRole('checkbox', { name: 'Січна пластина' })).toBeChecked();
   await entry(page, 'Товщина пластини, мм').fill('2');
   await expect(page.getByText('Знизу пластина обрізається по рівню основи фігури.')).toBeVisible();

@@ -7,6 +7,7 @@ import {
   expectSizesClose,
   expectViewerBox,
   hasNoHorizontalOverflow,
+  openAllSections,
   parameterSection,
   previewPlace,
   previewViewport,
@@ -70,15 +71,15 @@ test('prism: base and height drive the preview and the downloaded 3MF', async ({
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: NAME });
+  // Every group starts collapsed, its heading in view.
+  for (const title of ['Основа', 'Висота', 'Нахил']) await expect(parameterSection(page, title)).not.toHaveAttribute('open');
+  await openAllSections(page);
 
   // Defaults: equilateral triangle with h = 2a, so h = 80 mm and a = 40 mm.
   await expect(baseSelect(page).locator('option:checked')).toHaveText(baseNames[3]);
   await expect(heightRatio(page)).toHaveValue('2');
   await expectPreviewOf(page, summary(3, 2));
-  // The base and the height are open; the optional tilt waits collapsed, and no derived measurements are listed.
-  await expect(parameterSection(page, 'Основа')).toHaveAttribute('open', '');
-  await expect(parameterSection(page, 'Висота')).toHaveAttribute('open', '');
-  await expect(parameterSection(page, 'Нахил')).not.toHaveAttribute('open');
+  // No derived measurements are listed.
   await expect(page.getByRole('term')).toHaveCount(0);
   await expect(page.getByText('Площа поверхні')).toHaveCount(0);
   await expectDownloadedPrism(page, 3, 2);
@@ -126,6 +127,7 @@ test('prism: a square base with h = a matches the cube', async ({ page }) => {
   const cube = await downloadThreeMf(page);
 
   await shapeSelect(page).selectOption({ label: NAME });
+  await openAllSections(page);
   await chooseBase(page, 4);
   await heightRatio(page).fill('1');
   await expectPreviewOf(page, `${NAME} · 80 × 80 × 80 мм`);
@@ -140,6 +142,7 @@ test('prism: a square base with h = a matches the cube', async ({ page }) => {
 test('prism: rapid base and height changes never offer outdated geometry for download', async ({ page }) => {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: NAME });
+  await openAllSections(page);
   await expectPreviewOf(page, summary(3, 2));
 
   // Change the base and read the download button in the same task, before any rebuild can run.
@@ -163,6 +166,7 @@ test('prism: an invalid height is explained, blocks the download and survives ba
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: NAME });
+  await openAllSections(page);
   await expectPreviewOf(page, summary(3, 2));
 
   for (const [text, message] of [
@@ -199,15 +203,18 @@ test('prism: an invalid height is explained, blocks the download and survives ba
 test('prism: switching shapes keeps the prism base and height and the cuboid ratios apart', async ({ page }) => {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: NAME });
+  await openAllSections(page);
   await chooseBase(page, 6);
   await heightRatio(page).fill('1,5');
   await expectPreviewOf(page, summary(6, 1.5));
 
   await shapeSelect(page).selectOption('cuboid');
+  await openAllSections(page);
   await expect(page.getByLabel('Висота c', { exact: true })).toHaveValue('2');
   await expectPreviewOf(page, 'Прямокутний паралелепіпед · 40 × 60 × 80 мм');
 
   await shapeSelect(page).selectOption({ label: NAME });
+  await openAllSections(page);
   await expect(baseSelect(page).locator('option:checked')).toHaveText(baseNames[6]);
   await expect(heightRatio(page)).toHaveValue('1,5');
   await expectPreviewOf(page, summary(6, 1.5));
@@ -222,6 +229,7 @@ for (const [layout, width] of [
     await page.setViewportSize({ width, height: width < 600 ? 2400 : 900 });
     await page.goto('/');
     await shapeSelect(page).selectOption({ label: NAME });
+    await openAllSections(page);
 
     let reference: Awaited<ReturnType<typeof previewPlace>> | undefined;
     for (const [sides, ratio] of [

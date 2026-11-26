@@ -6,6 +6,7 @@ import {
   expectPreviewOf,
   expectSizesClose,
   hasNoHorizontalOverflow,
+  openAllSections,
   openSection,
   previewPlace,
   previewViewport,
@@ -72,6 +73,7 @@ test('triangle prism: the base type shows its own fields and help, and the right
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Призма' });
+  await openAllSections(page);
   await expect(baseType(page).locator('option:checked')).toHaveText('Правильний багатокутник');
   await expect(entry(page, 'Кут α')).toHaveCount(0);
 
@@ -100,6 +102,7 @@ test('triangle prism: side, angle and displacement controls step and keep typed 
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Призма' });
+  await openAllSections(page);
   await chooseBaseType(page, 'Трикутник');
 
   const angle = entry(page, 'Кут α');
@@ -146,6 +149,7 @@ test('triangle prism: switching base types keeps the shared height and displacem
 }) => {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Призма' });
+  await openAllSections(page);
   await polygonSelect(page).selectOption({ label: 'Правильний шестикутник' });
   await entry(page, 'Висота h').fill('1,5');
   await openSection(page, 'Нахил');
@@ -197,6 +201,7 @@ for (const [layout, width] of [
     await page.setViewportSize({ width, height: width < 600 ? 2400 : 900 });
     await page.goto('/');
     await shapeSelect(page).selectOption({ label: 'Призма' });
+    await openAllSections(page);
     await chooseBaseType(page, 'Трикутник');
     await openSection(page, 'Нахил');
 

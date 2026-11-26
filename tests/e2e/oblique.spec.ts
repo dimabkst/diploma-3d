@@ -5,6 +5,7 @@ import {
   downloadThreeMf,
   expectPreviewOf,
   expectSizesClose,
+  openAllSections,
   openSection,
   parameterSection,
   previewViewport,
@@ -65,10 +66,12 @@ test('oblique prism: offsets tilt the square prism, change the 3MF, and can be r
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Призма' });
+  await openSection(page, 'Основа');
+  await openSection(page, 'Висота');
   await page.getByLabel('Багатокутник', { exact: true }).selectOption({ label: 'Квадрат' });
   await entry(page, 'Висота h').fill('1');
 
-  // The optional tilt starts collapsed; its summary still says the prism is right.
+  // The tilt stays collapsed; its summary still says the prism is right.
   await expect(tiltSection(page)).not.toHaveAttribute('open');
   await expect(entry(page, 'Зміщення X')).toBeHidden();
   await expect(status(page)).toHaveText(/^Нахил\s*пряма\s*$/);
@@ -151,6 +154,7 @@ test('oblique parallelepiped: offsets over a rectangle and a rhombus, with the r
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Паралелепіпед' });
+  await openAllSections(page);
   await expect(status(page)).toHaveText(/^Нахил\s*прямий\s*$/);
   await openSection(page, 'Нахил');
 
@@ -191,6 +195,7 @@ test('oblique parallelepiped: offsets over a rectangle and a rhombus, with the r
 test('oblique prism: an invalid offset blocks the download, and the reset repairs it', async ({ page }) => {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Призма' });
+  await openAllSections(page);
   await expectPreviewOf(page, 'Призма · 40 × 34,6 × 80 мм');
   await openSection(page, 'Нахил');
 
@@ -226,6 +231,7 @@ test('oblique prism: an invalid offset blocks the download, and the reset repair
 test('oblique prism: offsets belong to each shape and a change never offers outdated geometry', async ({ page }) => {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Призма' });
+  await openAllSections(page);
   await openSection(page, 'Нахил');
   await entry(page, 'Зміщення X').fill('1');
   const prism = geometry(1, 90, 1, 1, 0);
@@ -247,12 +253,15 @@ test('oblique prism: offsets belong to each shape and a change never offers outd
 
   // The parallelepiped keeps its own, still zero, offsets; the prism gets its offsets back with its group still open.
   await shapeSelect(page).selectOption({ label: 'Паралелепіпед' });
+  await openAllSections(page);
   await expect(status(page)).toHaveText(/^Нахил\s*прямий\s*$/);
   await openSection(page, 'Нахил');
   await expect(entry(page, 'Зміщення X')).toHaveValue('0');
   await shapeSelect(page).selectOption('cuboid');
+  await openAllSections(page);
   await expect(tiltSection(page)).toHaveCount(0);
   await shapeSelect(page).selectOption({ label: 'Призма' });
+  await openAllSections(page);
   await expect(tiltSection(page)).toHaveAttribute('open', '');
   await expect(entry(page, 'Зміщення X')).toHaveValue('1');
   await expect(entry(page, 'Зміщення Y')).toHaveValue('-1');

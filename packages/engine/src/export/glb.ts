@@ -65,8 +65,6 @@ export interface PreviewOptions {
   /** sRGB, as `#rrggbb`: the faces marked 2 + k are shown in the colour k, in a material named `plane-${k + 1}`. */
   readonly planeColors?: readonly string[];
   readonly guides?: readonly PreviewGuide[];
-  /** Draw the outlines of the faces on a plane in that plane's colour too, rather than as every other edge. */
-  readonly planeOutlines?: boolean;
 }
 
 /** glTF's colour factors are linear: the sRGB `#rrggbb` decoded. */
@@ -170,21 +168,6 @@ export async function createPreviewGlb(
       .setMetallicFactor(0)
       .setRoughnessFactor(0.75),
   );
-  // A plane's outlines in its colour, lit so that they read as lines rather than shaded faces.
-  const planeEdgeMaterials = new Map<number, Material>();
-  const planeEdgeMaterial = (index: number) => {
-    const color = options.planeColors?.[index];
-    if (color === undefined) return edgeMaterial;
-    let material = planeEdgeMaterials.get(index);
-    if (material === undefined) {
-      material = document
-        .createMaterial(`plane-${index + 1}-edges`)
-        .setBaseColorFactor([...linearColor(color), 1])
-        .setEmissiveFactor(linearColor(color));
-      planeEdgeMaterials.set(index, material);
-    }
-    return material;
-  };
   const materialOf = (object: PreviewObject, kind: number) =>
     object.appearance === 'plate'
       ? plateMaterialOnce()
@@ -215,21 +198,20 @@ export async function createPreviewGlb(
       );
     }
 
-    const edgeGroups = featureEdgeSegments(
+    // Every outline in the one edge colour, the rims of cut faces too: only the faces show which plane made them.
+    const edgePositions = featureEdgeSegments(
       object.mesh,
       rightMesh,
       smooth ? FEATURE_EDGE_MIN_COSINE : POLYHEDRON_EDGE_MIN_COSINE,
       object.newFaces,
-      options.planeOutlines === true,
     );
-    for (const [mark, edgePositions] of [...edgeGroups].sort(([a], [b]) => a - b)) {
-      if (edgePositions.length === 0) continue;
+    if (edgePositions.length > 0) {
       mesh.addPrimitive(
         document
           .createPrimitive()
           .setMode(LINES)
           .setAttribute('POSITION', document.createAccessor().setType('VEC3').setArray(edgePositions).setBuffer(buffer))
-          .setMaterial(mark === 0 ? edgeMaterial : planeEdgeMaterial(mark - 2)),
+          .setMaterial(edgeMaterial),
       );
     }
     const node = document.createNode(object.name).setMesh(mesh);
@@ -494,11 +476,9 @@ function featureEdgeSegments(
   rightMesh: TriangleMesh,
   minCosine: number,
   newFaces: Uint8Array | undefined,
-  byPlane: boolean,
-): Map<number, Float32Array<ArrayBuffer>> {
+): Float32Array<ArrayBuffer> {
   const firstTriangleOfEdge = new Map<string, number>();
-  // Each edge with the plane colour it takes: the greater of its two faces' marks where one is a plane's, else 0.
-  const edges: [number, number, number][] = [];
+  const edges: [number, number][] = [];
   const adjacentNormals = new Map<number, Vec3[]>();
 
   for (let triangle = 0; triangle < triangleCount(mesh); triangle += 1) {
@@ -514,8 +494,7 @@ function featureEdgeSegments(
         newFaces?.[triangle] !== newFaces?.[neighbour] ||
         dot(unitNormal(rightMesh, triangle), unitNormal(rightMesh, neighbour)) < minCosine
       ) {
-        const mark = Math.max(newFaces?.[triangle] ?? 0, newFaces?.[neighbour] ?? 0);
-        edges.push([from, to, byPlane && mark >= 2 ? mark : 0]);
+        edges.push([from, to]);
         for (const vertex of [from, to]) {
           const normals = adjacentNormals.get(vertex) ?? [];
           normals.push(unitNormal(mesh, triangle), unitNormal(mesh, neighbour));
@@ -532,15 +511,7 @@ function featureEdgeSegments(
       toGltfPosition(add(vertexAt(mesh, vertex), vertexOffset(normals, lift))),
     ]),
   );
-  const groups = new Map<number, Float32Array<ArrayBuffer>>();
-  for (const mark of new Set(edges.map(([, , edgeMark]) => edgeMark))) {
-    const segments = edges.filter(([, , edgeMark]) => edgeMark === mark);
-    groups.set(
-      mark,
-      Float32Array.from(segments.flatMap(([from, to]) => [...(liftedPoints.get(from) ?? []), ...(liftedPoints.get(to) ?? [])])),
-    );
-  }
-  return groups;
+  return Float32Array.from(edges.flatMap(([from, to]) => [...(liftedPoints.get(from) ?? []), ...(liftedPoints.get(to) ?? [])]));
 }
 
 /**

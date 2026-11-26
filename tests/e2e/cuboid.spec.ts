@@ -7,6 +7,7 @@ import {
   expectSizesClose,
   expectViewerBox,
   hasNoHorizontalOverflow,
+  openAllSections,
   previewPlace,
   previewViewport,
   shapeSelect,
@@ -47,6 +48,7 @@ test('cuboid: ratios drive the preview and the downloaded 3MF', async ({ page })
   await page.goto('/');
 
   await shapeSelect(page).selectOption('cuboid');
+  await openAllSections(page);
   await expectSynchronized(page, 'Ширина b', '1,5');
   await expectSynchronized(page, 'Висота c', '2');
   await expectPreviewOf(page, `${NAME} · 40 × 60 × 80 мм`);
@@ -70,6 +72,7 @@ test('cuboid: ratios drive the preview and the downloaded 3MF', async ({ page })
 test('cuboid: rapid edits never offer outdated geometry for download', async ({ page }) => {
   await page.goto('/');
   await shapeSelect(page).selectOption('cuboid');
+  await openAllSections(page);
   await expectPreviewOf(page, `${NAME} · 40 × 60 × 80 мм`);
 
   // Edit and read the button in the same task: the model must be invalidated before any timer or rebuild can run.
@@ -120,6 +123,7 @@ test('cuboid: typed values are kept exactly until the user steps or drags', asyn
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption('cuboid');
+  await openAllSections(page);
   await expectPreviewOf(page, `${NAME} · 40 × 60 × 80 мм`);
 
   // A typed value between the quarters is kept as typed, also after leaving the field, and the slider shows it
@@ -204,6 +208,7 @@ test('cuboid: dragging the slider selects the nearest quarter and updates the mo
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption('cuboid');
+  await openAllSections(page);
   await expectPreviewOf(page, `${NAME} · 40 × 60 × 80 мм`);
 
   // The off-grid value is shown exactly until the drag starts.
@@ -271,6 +276,7 @@ test('cuboid: invalid ratios are explained and block stepping and the download u
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption('cuboid');
+  await openAllSections(page);
   await expectPreviewOf(page, `${NAME} · 40 × 60 × 80 мм`);
 
   for (const [text, message] of [
@@ -312,10 +318,12 @@ test('cuboid: switching back to the cube restores equal edges and keeps the cubo
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption('cuboid');
+  await openAllSections(page);
   await widthRatio(page).fill('2');
   await expectPreviewOf(page, `${NAME} · 40 × 80 × 80 мм`);
 
   await shapeSelect(page).selectOption('cube');
+  await openAllSections(page);
   await expect(widthRatio(page)).toHaveCount(0);
   await expectPreviewOf(page, 'Куб · 80 × 80 × 80 мм');
   await expectViewerBox(page, [80, 80, 80]);
@@ -324,6 +332,7 @@ test('cuboid: switching back to the cube restores equal edges and keeps the cubo
   expect(cube.measurements.size).toEqual([80, 80, 80]);
 
   await shapeSelect(page).selectOption('cuboid');
+  await openAllSections(page);
   await expect(widthRatio(page)).toHaveValue('2');
   await expectPreviewOf(page, `${NAME} · 40 × 80 × 80 мм`);
 
@@ -341,6 +350,7 @@ for (const [layout, width, height] of [
     await page.setViewportSize({ width, height });
     await page.goto('/');
     await shapeSelect(page).selectOption('cuboid');
+    await openAllSections(page);
     await expectPreviewOf(page, `${NAME} · 40 × 60 × 80 мм`);
     const reference = await previewPlace(page);
 

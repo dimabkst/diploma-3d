@@ -9,6 +9,8 @@ import {
   hasNoHorizontalOverflow,
   type ModelViewerElement,
   modelViewer,
+  openAllSections,
+  openSection,
   previewPlace,
   shapeSelect,
 } from './helpers.ts';
@@ -62,6 +64,7 @@ for (const solid of solids) {
     const errors = collectErrors(page);
     await page.goto('/');
     await shapeSelect(page).selectOption({ label: solid.label });
+    await openAllSections(page);
 
     // Fixed proportions: one line, no groups or measurements table.
     await expect(page.getByText(solid.note)).toBeVisible();
@@ -105,6 +108,7 @@ test('regular polyhedra: switching to and from parameterised shapes updates cont
 
   // A cone with h = r: 80 × 80 × 40 mm.
   await shapeSelect(page).selectOption({ label: 'Конус' });
+  await openAllSections(page);
   await page.getByLabel('Висота h', { exact: true }).fill('1');
   await expectPreviewOf(page, 'Конус · 80 × 80 × 40 мм');
 
@@ -125,6 +129,7 @@ test('regular polyhedra: switching to and from parameterised shapes updates cont
 
   // From one polyhedron to another, the line and the dimensions change.
   await shapeSelect(page).selectOption({ label: octahedron.label });
+  await openAllSections(page);
   await expectPreviewOf(page, summary(octahedron));
   await expect(page.getByText(octahedron.note)).toBeVisible();
   expectSizesClose((await downloadThreeMf(page)).measurements.size, geometry(octahedron).size, 1e-3);
@@ -132,6 +137,8 @@ test('regular polyhedra: switching to and from parameterised shapes updates cont
   // Rapid switches end on a prism, whose own controls and file return.
   for (const { label } of [icosahedron, dodecahedron, octahedron]) await shapeSelect(page).selectOption({ label });
   await shapeSelect(page).selectOption({ label: 'Призма' });
+  await openSection(page, 'Основа');
+  await openSection(page, 'Висота');
   await expect(page.getByLabel('Тип основи', { exact: true })).toBeVisible();
   await expect(page.getByRole('slider')).toHaveCount(1);
   await expectPreviewOf(page, 'Призма · 40 × 34,6 × 80 мм');
@@ -140,9 +147,11 @@ test('regular polyhedra: switching to and from parameterised shapes updates cont
 
   // To the icosahedron and back to the cone, whose ratio was kept.
   await shapeSelect(page).selectOption({ label: icosahedron.label });
+  await openAllSections(page);
   await expectPreviewOf(page, summary(icosahedron));
   expect((await downloadThreeMf(page)).fileName).toBe('icosahedron.3mf');
   await shapeSelect(page).selectOption({ label: 'Конус' });
+  await openSection(page, 'Висота');
   await expect(page.getByLabel('Висота h', { exact: true })).toHaveValue('1');
   await expectPreviewOf(page, 'Конус · 80 × 80 × 40 мм');
   await expect(page.getByRole('slider')).toHaveCount(1);
@@ -163,6 +172,7 @@ for (const [layout, width] of [
     let reference: Awaited<ReturnType<typeof previewPlace>> | undefined;
     for (const solid of [...solids, solids[0]]) {
       await shapeSelect(page).selectOption({ label: solid.label });
+      await openAllSections(page);
       await expectPreviewOf(page, summary(solid));
       const current = await previewPlace(page);
       reference ??= current;

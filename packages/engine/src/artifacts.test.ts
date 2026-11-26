@@ -930,11 +930,11 @@ describe('for a cylinder joined by a dovetail', () => {
     expect(nodes.map((node) => node.getTranslation()[1])).toEqual([0, 0]);
     expect(nodes[1]?.getTranslation()[2]).toBeCloseTo(-distance / 1000, 9);
     expect(plan.exitDistance).toBeGreaterThan(40 + plan.length / 2);
-    // Tongue, groove and cut faces share the first section's colour, their outlines too; the exterior keeps its colour.
+    // Tongue, groove and cut faces share the first section's colour; the exterior keeps its colour, and every outline is white.
     const meshes = (await new WebIO().readBinary(previewGlb)).getRoot().listMeshes();
     for (const mesh of meshes) {
       const materials = mesh.listPrimitives().map((primitive) => primitive.getMaterial()?.getName());
-      expect(materials).toEqual(['surface', 'plane-1', 'edges', 'plane-1-edges']);
+      expect(materials).toEqual(['surface', 'plane-1', 'edges']);
     }
     // The preview's separation is not in the print file.
     expect(printFile.bytes).toEqual((await buildModelArtifacts(kernel, spec)).printFile.bytes);

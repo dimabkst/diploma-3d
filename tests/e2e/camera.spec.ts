@@ -1,5 +1,5 @@
 import { expect, type Page, test } from '@playwright/test';
-import { collectErrors, modelViewer, openSection, previewViewport, shapeSelect } from './helpers.ts';
+import { collectErrors, modelViewer, openAllSections, openSection, previewViewport, shapeSelect } from './helpers.ts';
 
 type Camera = {
   target: { x: number; y: number; z: number };
@@ -96,6 +96,7 @@ async function expectClicksKeepView(page: Page): Promise<void> {
 async function chooseShape(page: Page, shape: string): Promise<void> {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: shape });
+  await openAllSections(page);
   await expectLoaded(page);
 }
 
@@ -103,6 +104,7 @@ async function chooseShape(page: Page, shape: string): Promise<void> {
 async function separate(page: Page): Promise<void> {
   await openSection(page, 'Переріз');
   await page.getByLabel('Тип перерізу', { exact: true }).selectOption({ index: 1 });
+  await openAllSections(page);
   const separation = page.getByRole('checkbox', { name: 'Розсунути частини', exact: true });
   await separation.check();
   await expect(page.getByRole('button', { name: 'Завантажити частини · 3MF', exact: true })).toBeEnabled({
@@ -181,6 +183,7 @@ test('picking the construction on the model, turning between picks, never moves 
   await chooseShape(page, 'Куб');
   await openSection(page, 'Переріз');
   await page.getByLabel('Тип перерізу', { exact: true }).selectOption({ label: 'Через ребро або діагональ' });
+  await openAllSections(page);
   await page.getByLabel('Спосіб', { exact: true }).selectOption({ label: 'Через точку ребра' });
   await expectLoaded(page);
   await picker(page, /^Відрізок/).click();

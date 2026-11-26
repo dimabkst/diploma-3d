@@ -7,6 +7,7 @@ import {
   dimensionsLine,
   type ModelViewerElement,
   modelViewer,
+  openAllSections,
   openSection,
   parameterSection,
   previewViewport,
@@ -22,8 +23,10 @@ const OFFSET = 'Зміщення від осі';
 async function chooseVertical(page: Page): Promise<void> {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Циліндр' });
+  await openAllSections(page);
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Вертикальний' });
+  await openAllSections(page);
 }
 
 async function expectReady(page: Page, size = '80 × 80 × 80 мм'): Promise<void> {
@@ -143,10 +146,12 @@ test('cylinder: a vertical section starts axial, moves sideways within its limit
   await expect(entry(page, 'Тип перерізу')).toHaveValue('none');
   await expect(entry(page, OFFSET)).toHaveCount(0);
   await entry(page, 'Тип перерізу').selectOption({ label: 'Вертикальний' });
+  await openAllSections(page);
   await expect(entry(page, OFFSET)).toHaveValue('0');
 
   // The parallel cut keeps its own field, parts and file.
   await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно основам' });
+  await openAllSections(page);
   await expect(entry(page, 'Від нижньої основи')).toHaveValue('50');
   await expect(entry(page, OFFSET)).toHaveCount(0);
   expect(errors).toEqual([]);

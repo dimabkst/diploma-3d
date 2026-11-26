@@ -6,6 +6,7 @@ import {
   expectPreviewOf,
   expectSizesClose,
   hasNoHorizontalOverflow,
+  openAllSections,
   previewPlace,
   previewViewport,
   shapeSelect,
@@ -47,6 +48,7 @@ test('cylinder: h/r drives the preview and the downloaded 3MF', async ({ page })
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: NAMES.cylinder });
+  await openAllSections(page);
 
   // Default h = 2r: r = 40 mm and h = 80 mm.
   await expect(heightRatio(page)).toHaveValue('2');
@@ -87,6 +89,7 @@ test('cone: h/r drives the preview and the downloaded 3MF', async ({ page }) => 
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: NAMES.cone });
+  await openAllSections(page);
 
   await expect(heightRatio(page)).toHaveValue('2');
   await expectPreviewOf(page, summary('cone', 2));
@@ -110,6 +113,7 @@ test('cylinder and cone: rapid changes never offer outdated geometry, and invali
 }) => {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: NAMES.cylinder });
+  await openAllSections(page);
   await expectPreviewOf(page, summary('cylinder', 2));
 
   const disabledRightAfterEdit = await heightRatio(page).evaluate(async (input: HTMLInputElement) => {
@@ -136,13 +140,16 @@ test('cylinder and cone: rapid changes never offer outdated geometry, and invali
 
   for (const value of ['1', '3,5', '0,75']) await heightRatio(page).fill(value);
   await shapeSelect(page).selectOption({ label: NAMES.cone });
+  await openAllSections(page);
   await heightRatio(page).fill('1,5');
   await shapeSelect(page).selectOption({ label: NAMES.cylinder });
+  await openAllSections(page);
   await expect(heightRatio(page)).toHaveValue('0,75');
   await expectPreviewOf(page, summary('cylinder', 0.75));
   await expectDownloaded(page, 'cylinder', 0.75);
 
   await shapeSelect(page).selectOption({ label: NAMES.cone });
+  await openAllSections(page);
   await expect(heightRatio(page)).toHaveValue('1,5');
   await expectPreviewOf(page, summary('cone', 1.5));
   await expectDownloaded(page, 'cone', 1.5);
@@ -158,6 +165,7 @@ for (const [layout, width] of [
     await page.goto('/');
     for (const kind of ['cylinder', 'cone'] as const) {
       await shapeSelect(page).selectOption({ label: NAMES[kind] });
+      await openAllSections(page);
       let reference: Awaited<ReturnType<typeof previewPlace>> | undefined;
       for (const ratio of [2, 1, 1.1, 0.5, 8, 4.8, 2.05]) {
         await heightRatio(page).fill(String(ratio).replace('.', ','));

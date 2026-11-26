@@ -568,9 +568,8 @@ function explodedAroundMiddle(
 }
 
 /**
- * The colours of a section through a shared generatrix in the preview, sRGB: each plane's cut faces and its generatrices, the
- * shared one AA1 apart; BB1 and CC1 take the colour of the first and the second plane, whose other generatrices they are. The
- * page's base diagram takes the same.
+ * The colours of a section through a shared generatrix, sRGB: each plane's cut faces, and the shared generatrix AA1. The page's
+ * base diagram takes the same.
  */
 export const LINKED_PREVIEW_COLORS = {
   shared: '#ffffff',
@@ -579,24 +578,24 @@ export const LINKED_PREVIEW_COLORS = {
 
 /**
  * The preview's colours and guides of a section through a shared generatrix: its planes' colours and the generatrices AA1, BB1
- * and CC1 as thin rods along the lateral surface, where the middle part, which never moves, has them. Display only: the print
- * file and the connectors never see them. Nothing for any other section.
+ * and CC1 as thin rods along the lateral surface, where the middle part, which never moves, has them. They run along the rims
+ * of the cut faces, so they are all as white as every outline; only the cut faces take a plane's colour. Display only: the
+ * print file and the connectors never see them. Nothing for any other section.
  */
 function linkedPreviewOptions(model: GeneratedModel): PreviewOptions {
   if (model.section === undefined) return {};
-  // Any other section: its first plane orange and a second parallel one green, faces and outlines alike.
-  if (model.section.linked === undefined) return { planeColors: [...SECTION_COLORS], planeOutlines: true };
+  // Any other section: the cut faces of its first plane orange and of a second parallel one green; outlines stay as all others.
+  if (model.section.linked === undefined) return { planeColors: [...SECTION_COLORS] };
   if (model.vertexLabels === undefined) return {};
   const positions = Object.fromEntries(model.vertexLabels.map(({ name, position }) => [name, position]));
   const halfWidth = GUIDE_HALF_WIDTH_RELATIVE * Math.max(...model.size);
-  const colors = [LINKED_PREVIEW_COLORS.shared, LINKED_PREVIEW_COLORS.planes[0], LINKED_PREVIEW_COLORS.planes[1]];
   return {
     planeColors: [...LINKED_PREVIEW_COLORS.planes],
-    guides: (['A', 'B', 'C'] as const).map((name, index) => ({
+    guides: (['A', 'B', 'C'] as const).map((name) => ({
       name: `${name}${name}1`,
       from: positions[name] as Vec3,
       to: positions[`${name}1`] as Vec3,
-      color: colors[index] as string,
+      color: LINKED_PREVIEW_COLORS.shared,
       halfWidth,
     })),
   };

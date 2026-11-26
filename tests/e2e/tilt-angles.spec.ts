@@ -7,6 +7,7 @@ import {
   expectPreviewOf,
   type ModelViewerElement,
   modelViewer,
+  openAllSections,
   openSection,
   parameterSection,
   previewViewport,
@@ -44,6 +45,7 @@ test('prism: angles and the equivalent offsets give the same preview and 3MF at 
   await page.goto('/');
   await printSize(page).fill('120');
   await shapeSelect(page).selectOption({ label: 'Призма' });
+  await openAllSections(page);
   await openSection(page, 'Нахил');
   await expect(mode(page, 'Зміщення')).toBeChecked();
   await entry(page, 'Висота h').fill('1');
@@ -92,6 +94,7 @@ test('prism: angles and the equivalent offsets give the same preview and 3MF at 
 test('pyramid and cone: angles give the same solid as the offsets they describe', async ({ page }) => {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Піраміда' });
+  await openAllSections(page);
   await openSection(page, 'Вершина');
   await entry(page, 'Висота піраміди h').fill('1');
   await mode(page, 'Кути').check();
@@ -109,6 +112,7 @@ test('pyramid and cone: angles give the same solid as the offsets they describe'
 
   // h/r = 2 at 45°: d/r = 2 along +X; a circular base has no direction to enter.
   await shapeSelect(page).selectOption({ label: 'Конус' });
+  await openAllSections(page);
   await openSection(page, 'Нахил');
   await mode(page, 'Кут').check();
   await expect(direction(page)).toHaveCount(0);
@@ -127,6 +131,7 @@ test('prism: β ≥ 15° in both modes, angles within the offset limits, and bot
   await page.goto('/');
   await printSize(page).fill('120');
   await shapeSelect(page).selectOption({ label: 'Призма' });
+  await openAllSections(page);
   await openSection(page, 'Нахил');
   await entry(page, 'Висота h').fill('1');
 
@@ -191,6 +196,7 @@ test('prism: β ≥ 15° in both modes, angles within the offset limits, and bot
 test('switching modes never changes the model, does not drift, and the reset keeps the mode', async ({ page }) => {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Призма' });
+  await openAllSections(page);
   await openSection(page, 'Нахил');
 
   // The default prism: the mode alone does not offer a reset.

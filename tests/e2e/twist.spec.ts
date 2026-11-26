@@ -6,6 +6,7 @@ import {
   collectErrors,
   type ModelViewerElement,
   modelViewer,
+  openAllSections,
   openSection,
   parameterSection,
   previewViewport,
@@ -21,10 +22,12 @@ const SIZE = 'Розмір кріплення, мм';
 async function chooseTallCylinder(page: Page): Promise<void> {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Циліндр' });
+  await openAllSections(page);
   await entry(page, 'Найбільший габарит').fill('100');
   await entry(page, 'Висота h').fill('3,333333');
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно основам' });
+  await openAllSections(page);
 }
 
 async function expectReady(page: Page): Promise<void> {
@@ -123,6 +126,7 @@ test('other cuts list it as unavailable, with the reason, and leave the other co
   const errors = collectErrors(page);
   await chooseTallCylinder(page);
   await entry(page, 'Тип перерізу').selectOption({ label: 'Вертикальний' });
+  await openAllSections(page);
   const option = entry(page, 'Тип кріплення').locator('option', { hasText: 'Поворотне з’єднання' });
   await expect(option).toBeDisabled();
   await expect(parameterSection(page, 'Кріплення').getByText('Поворотне з’єднання поки доступне лише')).toBeVisible();

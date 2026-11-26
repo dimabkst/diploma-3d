@@ -7,6 +7,7 @@ import {
   dimensionsLine,
   type ModelViewerElement,
   modelViewer,
+  openAllSections,
   openSection,
   parameterSection,
   previewViewport,
@@ -26,8 +27,10 @@ const compass = (page: Page) => page.locator('[data-direction]');
 async function chooseOblique(page: Page): Promise<void> {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Циліндр' });
+  await openAllSections(page);
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Похилий' });
+  await openAllSections(page);
 }
 
 async function expectReady(page: Page, size = '80 × 80 × 80 мм'): Promise<void> {
@@ -158,6 +161,7 @@ test('the compass shows the plane’s rise in the preview only, and follows the 
   expect(names).toHaveLength(2);
   // Only an oblique plane has one.
   await entry(page, 'Тип перерізу').selectOption({ label: 'Вертикальний' });
+  await openAllSections(page);
   await expectReady(page);
   await expect(compass(page)).toHaveCount(0);
 });
@@ -243,6 +247,7 @@ test('a new maximum dimension keeps the plane, and a reset restores its defaults
   await expect(entry(page, 'Найбільший габарит')).toHaveValue('160');
   await expect(entry(page, 'Тип перерізу')).toHaveValue('none');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Похилий' });
+  await openAllSections(page);
   await expect(entry(page, POSITION)).toHaveValue('50');
   await expect(entry(page, ANGLE)).toHaveValue('45');
   await expect(entry(page, DIRECTION)).toHaveValue('0');

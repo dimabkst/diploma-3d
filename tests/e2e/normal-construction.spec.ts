@@ -3,7 +3,7 @@ import { expect, type Page, test } from '@playwright/test';
 import { MODEL_SETTINGS_PATH } from '../../packages/engine/src/export/model-settings.ts';
 import { readThreeMf, readThreeMfPart } from '../../packages/engine/src/export/three-mf.test-helper.ts';
 import { findMeshDefects } from '../../packages/engine/src/mesh.ts';
-import { collectErrors, openSection, previewViewport, shapeSelect } from './helpers.ts';
+import { collectErrors, openAllSections, openSection, previewViewport, shapeSelect } from './helpers.ts';
 
 const partsButton = (page: Page) => page.getByRole('button', { name: 'Завантажити частини · 3MF', exact: true });
 const picker = (page: Page) => page.getByRole('button', { name: /^Перпендикулярно до/ });
@@ -18,8 +18,10 @@ async function expectLoaded(page: Page): Promise<void> {
 async function chooseInclined(page: Page, shape = 'Куб'): Promise<void> {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: shape });
+  await openAllSections(page);
   await openSection(page, 'Переріз');
   await page.getByLabel('Тип перерізу', { exact: true }).selectOption({ label: 'Похилий' });
+  await openAllSections(page);
   await expectLoaded(page);
 }
 
@@ -155,6 +157,7 @@ test('an oblique parallelepiped: the lateral edges by name and by a click alike,
 async function prismInclined(page: Page, polygon: string | undefined, lean?: string): Promise<void> {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Призма' });
+  await openAllSections(page);
   if (polygon !== undefined) {
     await openSection(page, 'Основа');
     await page
@@ -167,6 +170,7 @@ async function prismInclined(page: Page, polygon: string | undefined, lean?: str
   }
   await openSection(page, 'Переріз');
   await page.getByLabel('Тип перерізу', { exact: true }).selectOption({ label: 'Похилий' });
+  await openAllSections(page);
   await expectLoaded(page);
 }
 

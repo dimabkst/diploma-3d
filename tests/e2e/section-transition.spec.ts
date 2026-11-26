@@ -1,5 +1,5 @@
 import { expect, type Page, test } from '@playwright/test';
-import { type ModelViewerElement, modelViewer, openSection, previewViewport, shapeSelect } from './helpers.ts';
+import { type ModelViewerElement, modelViewer, openAllSections, openSection, previewViewport, shapeSelect } from './helpers.ts';
 
 /** What one animation frame shows: the camera's direction and distance, the model's extent, and the file shown. */
 type Frame = {
@@ -80,12 +80,17 @@ const orbit = (page: Page) =>
   });
 
 const cut = (page: Page, label: string) => page.getByLabel('Тип перерізу', { exact: true }).selectOption({ label });
-const connector = (page: Page, label: string) => page.getByLabel('Тип кріплення', { exact: true }).selectOption({ label });
+/** Chooses the connector in its group, which a section adds collapsed. */
+async function connector(page: Page, label: string): Promise<void> {
+  await openSection(page, 'Кріплення');
+  await page.getByLabel('Тип кріплення', { exact: true }).selectOption({ label });
+}
 
 async function openCylinder(page: Page, oblique = false): Promise<void> {
   await installRecorder(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Циліндр' });
+  await openAllSections(page);
   if (oblique) {
     await openSection(page, 'Нахил');
     await page.getByLabel('Зміщення верхньої основи', { exact: true }).fill('1');
@@ -226,6 +231,7 @@ for (const [name, oblique] of [
     await installRecorder(page);
     await page.goto('/');
     await shapeSelect(page).selectOption({ label: 'Конус' });
+    await openAllSections(page);
     if (oblique) {
       await openSection(page, 'Нахил');
       // A lean that every connector's defaults fit: at 1 × r the default tongue is 1,4 mm too long, and refused.
@@ -258,6 +264,7 @@ for (const [name, oblique] of [
     await installRecorder(page);
     await page.goto('/');
     await shapeSelect(page).selectOption({ label: 'Конус' });
+    await openAllSections(page);
     if (oblique) {
       await openSection(page, 'Нахил');
       await page.getByLabel('Зміщення вершини', { exact: true }).fill('0,5');
@@ -287,6 +294,7 @@ test('ball: its section, offset and connectors never turn the camera', async ({ 
   await installRecorder(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Куля' });
+  await openAllSections(page);
   await openSection(page, 'Переріз');
   await expect(page.getByText(/^Габарити: /)).toBeVisible({ timeout: 30_000 });
   await expectLoaded(page);
@@ -309,6 +317,7 @@ test('rapid offsets of a cone end on the last one, whatever finished in between'
   await installRecorder(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Конус' });
+  await openAllSections(page);
   await openSection(page, 'Переріз');
   await expect(page.getByText(/^Габарити: /)).toBeVisible({ timeout: 30_000 });
   await expectLoaded(page);

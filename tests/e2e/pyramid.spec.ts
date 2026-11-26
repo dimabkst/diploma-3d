@@ -6,6 +6,7 @@ import {
   expectPreviewOf,
   expectSizesClose,
   hasNoHorizontalOverflow,
+  openAllSections,
   previewPlace,
   previewViewport,
   shapeSelect,
@@ -79,6 +80,7 @@ test('pyramid: base and height drive the preview and the downloaded 3MF', async 
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: PYRAMID });
+  await openAllSections(page);
 
   // Defaults: square base with h = a, so a = h = 80 mm.
   await expect(baseSelect(page).locator('option')).toHaveText(Object.values(baseNames));
@@ -128,6 +130,7 @@ test('tetrahedron: a fixed preset with six equal edges, no adjustable proportion
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: TETRAHEDRON });
+  await openAllSections(page);
 
   await expect(baseSelect(page)).toHaveCount(0);
   await expect(heightRatio(page)).toHaveCount(0);
@@ -148,6 +151,7 @@ test('tetrahedron: a fixed preset with six equal edges, no adjustable proportion
 
   // The triangular pyramid at the nearest quarter, h = 0,75a, is a different, flatter solid.
   await shapeSelect(page).selectOption({ label: PYRAMID });
+  await openAllSections(page);
   await chooseBase(page, 3);
   await heightRatio(page).fill('0,75');
   await expectPreviewOf(page, pyramidSummary(3, 0.75));
@@ -158,6 +162,7 @@ test('tetrahedron: a fixed preset with six equal edges, no adjustable proportion
 test('pyramid: rapid base and height changes never offer outdated geometry for download', async ({ page }) => {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: PYRAMID });
+  await openAllSections(page);
   await expectPreviewOf(page, `${PYRAMID} · 80 × 80 × 80 мм`);
 
   const disabledRightAfterChange = await baseSelect(page).evaluate(async (select: HTMLSelectElement) => {
@@ -172,7 +177,9 @@ test('pyramid: rapid base and height changes never offer outdated geometry for d
   for (const sides of [5, 8, 3, 6, 4] as const) await chooseBase(page, sides);
   for (const ratio of ['3', '0,25', '2,5']) await heightRatio(page).fill(ratio);
   await shapeSelect(page).selectOption({ label: TETRAHEDRON });
+  await openAllSections(page);
   await shapeSelect(page).selectOption({ label: PYRAMID });
+  await openAllSections(page);
   await chooseBase(page, 6);
   await expectPreviewOf(page, pyramidSummary(6, 2.5));
   await expectDownloadedPyramid(page, 6, 2.5);
@@ -182,6 +189,7 @@ test('pyramid: an invalid height is explained and blocks the download until corr
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: PYRAMID });
+  await openAllSections(page);
   await expectPreviewOf(page, `${PYRAMID} · 80 × 80 × 80 мм`);
 
   for (const [text, message] of [
@@ -213,20 +221,24 @@ test('pyramid: an invalid height is explained and blocks the download until corr
 test('pyramid: switching shapes keeps the pyramid and prism parameters apart', async ({ page }) => {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: PYRAMID });
+  await openAllSections(page);
   await chooseBase(page, 6);
   await heightRatio(page).fill('0,5');
   await expectPreviewOf(page, pyramidSummary(6, 0.5));
 
   await shapeSelect(page).selectOption({ label: 'Призма' });
+  await openAllSections(page);
   // The prism has its own polygon and height fields.
   await expect(baseSelect(page).locator('option:checked')).toHaveText(baseNames[3]);
   await expect(page.getByLabel('Висота h', { exact: true })).toHaveValue('2');
   await expectPreviewOf(page, 'Призма · 40 × 34,6 × 80 мм');
 
   await shapeSelect(page).selectOption({ label: TETRAHEDRON });
+  await openAllSections(page);
   await expectPreviewOf(page, `${TETRAHEDRON} · 80 × 69,3 × 65,3 мм`);
 
   await shapeSelect(page).selectOption({ label: PYRAMID });
+  await openAllSections(page);
   await expect(baseSelect(page).locator('option:checked')).toHaveText(baseNames[6]);
   await expect(heightRatio(page)).toHaveValue('0,5');
   await expectPreviewOf(page, pyramidSummary(6, 0.5));
@@ -243,6 +255,7 @@ for (const [layout, width] of [
     await page.setViewportSize({ width, height: width < 600 ? 2400 : 900 });
     await page.goto('/');
     await shapeSelect(page).selectOption({ label: PYRAMID });
+    await openAllSections(page);
 
     let reference: Awaited<ReturnType<typeof previewPlace>> | undefined;
     for (const [sides, ratio] of [
@@ -264,6 +277,7 @@ for (const [layout, width] of [
 
     // The tetrahedron, a fixed solid with a single line instead of groups, leaves the preview where it was.
     await shapeSelect(page).selectOption({ label: TETRAHEDRON });
+    await openAllSections(page);
     await expectPreviewOf(page, `${TETRAHEDRON} · 80 × 69,3 × 65,3 мм`);
     expect(await previewPlace(page)).toEqual(reference);
     expect(await hasNoHorizontalOverflow(page)).toBe(true);

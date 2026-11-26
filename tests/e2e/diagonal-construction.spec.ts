@@ -3,7 +3,7 @@ import { expect, type Page, test } from '@playwright/test';
 import { MODEL_SETTINGS_PATH } from '../../packages/engine/src/export/model-settings.ts';
 import { readThreeMf, readThreeMfPart } from '../../packages/engine/src/export/three-mf.test-helper.ts';
 import { findMeshDefects } from '../../packages/engine/src/mesh.ts';
-import { collectErrors, openSection, previewViewport, shapeSelect } from './helpers.ts';
+import { collectErrors, openAllSections, openSection, previewViewport, shapeSelect } from './helpers.ts';
 
 const partsButton = (page: Page) => page.getByRole('button', { name: 'Завантажити частини · 3MF', exact: true });
 const picker = (page: Page) => page.getByRole('button', { name: /^Діагональ/ });
@@ -17,8 +17,10 @@ async function expectLoaded(page: Page): Promise<void> {
 async function chooseDiagonalSection(page: Page, shape = 'Куб'): Promise<void> {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: shape });
+  await openAllSections(page);
   await openSection(page, 'Переріз');
   await page.getByLabel('Тип перерізу', { exact: true }).selectOption({ label: 'Поздовжній' });
+  await openAllSections(page);
   await page.getByLabel('Слід на основі', { exact: true }).selectOption({ label: 'Через діагональ' });
   await expectLoaded(page);
 }

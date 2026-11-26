@@ -11,6 +11,7 @@ import {
   hasNoHorizontalOverflow,
   type ModelViewerElement,
   modelViewer,
+  openAllSections,
   openSection,
   parameterSection,
   previewPlace,
@@ -92,12 +93,83 @@ async function selectTrapezoidPrism(page: Page): Promise<void> {
   await shapeSelect(page).selectOption({ label: 'Куб' });
   await expectPreviewOf(page, 'Куб · 80 × 80 × 80 мм');
   await shapeSelect(page).selectOption({ label: 'Призма' });
+  await openSection(page, 'Основа');
   await entry(page, 'Тип основи').selectOption({ label: 'Трапеція' });
+  // In one column, opening the group may scroll the preview away; model-viewer loads a model only while it is on screen.
+  await page.evaluate(() => window.scrollTo(0, 0));
   await expectPreviewOf(page, TRAPEZOID_PRISM);
 }
 
-async function openAllSections(page: Page): Promise<void> {
-  for (const title of ['Основа', 'Висота', 'Нахил']) await openSection(page, title);
+/**
+ * Scrolls the sidebar, or in one column the page, until the control lies beneath the sticky header of the sidebar, 8 px below
+ * its top.
+ */
+const scrollBeneathHeader = (control: Locator) =>
+  control.evaluate(async (element) => {
+    const header = document.querySelector('.panel-header') as HTMLElement;
+    let scroller: HTMLElement | null = element.parentElement;
+    while (scroller !== null && !/auto|scroll/.test(getComputedStyle(scroller).overflowY)) scroller = scroller.parentElement;
+    const scrolling = scroller ?? (document.scrollingElement as HTMLElement);
+    for (let step = 0; step < 3; step += 1) {
+      scrolling.scrollTop += element.getBoundingClientRect().top - (header.getBoundingClientRect().top + 8);
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    }
+  });
+
+/**
+ * What is drawn topmost on the focus outline of the focused control (2px wide, 2px off it) and at both sides of the header,
+ * across the whole area the controls scroll in, its scrollbar excluded.
+ */
+const coverOfFocus = (page: Page) =>
+  page.evaluate(() => {
+    const header = document.querySelector('.panel-header') as HTMLElement;
+    const focused = document.activeElement as HTMLElement;
+    const control = focused.getBoundingClientRect();
+    const bar = header.getBoundingClientRect();
+    const area = header.parentElement as HTMLElement;
+    const left = area.getBoundingClientRect().left + area.clientLeft;
+    const right = left + area.clientWidth;
+    const owner = (x: number, y: number) => {
+      const element = document.elementFromPoint(x, y);
+      return element !== null && header.contains(element) ? 'header' : (element?.tagName ?? 'none');
+    };
+    const middle = control.top + Math.min(control.height, bar.bottom - control.top) / 2;
+    return {
+      outline: [owner(control.left - 3, middle), owner(control.right + 3, middle), owner(control.left + 6, control.top - 3)],
+      padding: [owner(left + 1, bar.top + 2), owner(right - 1, bar.bottom - 2)],
+      focusVisible: focused.matches(':focus-visible'),
+    };
+  });
+
+/**
+ * A focused control scrolled beneath the header keeps its focus outline, but the header covers it and takes the clicks there.
+ * Moving the focus by keyboard to a control hidden beneath the header brings that control into view below the header.
+ */
+async function expectHeaderCoversFocus(page: Page, control: Locator, next: Locator): Promise<void> {
+  await control.focus();
+  await page.keyboard.press('Shift+Tab');
+  await page.keyboard.press('Tab');
+  await expect(control).toBeFocused();
+  await scrollBeneathHeader(control);
+  expect(await coverOfFocus(page)).toEqual({
+    outline: ['header', 'header', 'header'],
+    padding: ['header', 'header'],
+    focusVisible: true,
+  });
+  const reset = sidebar(page).getByRole('button', { name: 'Скинути параметри фігури' });
+  await expect(reset).toBeEnabled();
+  await reset.click({ trial: true });
+
+  const header = sidebar(page).locator('.panel-header');
+  await scrollBeneathHeader(next);
+  const hidden = await windowBox(next);
+  const bar = await windowBox(header);
+  expect(hidden.y + hidden.height).toBeLessThanOrEqual(bar.y + bar.height);
+  await page.keyboard.press('Tab');
+  await expect(next).toBeFocused();
+  const shown = await windowBox(next);
+  expect(shown.y).toBeGreaterThanOrEqual((await windowBox(header)).y + bar.height - 0.5);
+  expect((await coverOfFocus(page)).outline).not.toContain('header');
 }
 
 test.describe('desktop workspace at 1366 × 768', () => {
@@ -258,6 +330,97 @@ test.describe('desktop workspace at 1366 × 768', () => {
     await page.waitForTimeout(500);
     await expectWholeModel(page);
   });
+
+  test('every group starts collapsed on load and with each figure chosen; one opened stays open while editing', async ({
+    page,
+  }) => {
+    const errors = collectErrors(page);
+    const openGroups = sidebar(page).locator('details[open] > summary');
+    await page.goto('/');
+    await expectPreviewOf(page, 'Куб · 80 × 80 × 80 мм');
+    await expect(sidebar(page).locator('summary')).toHaveText([/^Переріз\s*немає/]);
+    await expect(openGroups).toHaveCount(0);
+
+    // Headings and their summaries stay in view.
+    await shapeSelect(page).selectOption({ label: 'Призма' });
+    await expectPreviewOf(page, 'Призма · 40 × 34,6 × 80 мм');
+    await expect(sidebar(page).locator('summary')).toHaveText([/^Основа/, /^Висота/, /^Нахил\s*пряма/, /^Переріз\s*немає/]);
+    await expect(openGroups).toHaveCount(0);
+
+    // An opened group stays open while its values change, the model is rebuilt, the camera turns and other controls are used.
+    await openSection(page, 'Нахил');
+    await entry(page, 'Зміщення X').fill('0,5');
+    await expect(parameterSection(page, 'Нахил').locator('summary')).toContainText('похила');
+    await expect(dimensionsLine(page)).not.toHaveText('Габарити: 40 × 34,6 × 80 мм');
+    await expect(previewViewport(page)).toHaveAttribute('data-preview-status', 'loaded', { timeout: 30_000 });
+    await openSection(page, 'Основа');
+    await entry(page, 'Тип основи').selectOption({ label: 'Трапеція' });
+    await expect(previewViewport(page)).toHaveAttribute('data-preview-status', 'loaded', { timeout: 30_000 });
+    const box = await windowBox(previewViewport(page));
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 120, box.y + box.height / 2 + 30, { steps: 6 });
+    await page.mouse.up();
+    await fitButton(page).click();
+    await expect(openGroups).toHaveText([/^Основа/, /^Нахил/]);
+
+    // A section's own group starts collapsed too, the others stay as they are. Its construction picks on the model until
+    // the group is collapsed, which keeps the choice.
+    const overlay = previewViewport(page).locator('svg.overlay');
+    await openSection(page, 'Переріз');
+    await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно грані' });
+    await expect(parameterSection(page, 'Кріплення')).toHaveCount(1);
+    await expect(openGroups).toHaveText([/^Основа/, /^Нахил/, /^Переріз/]);
+    await sidebar(page)
+      .getByRole('button', { name: /^Грань/ })
+      .click();
+    await expect(overlay).toHaveCount(1);
+    await parameterSection(page, 'Переріз').locator('summary').click();
+    await expect(overlay).toHaveCount(0);
+    await expect(parameterSection(page, 'Переріз').locator('summary')).toContainText('паралельно грані');
+    await openSection(page, 'Переріз');
+    await sidebar(page)
+      .getByRole('button', { name: /^Грань/ })
+      .click();
+    await expect(overlay).toHaveCount(1);
+    await expect(previewViewport(page)).toHaveAttribute('data-preview-status', 'loaded', { timeout: 30_000 });
+
+    // Another figure, and back to this one: every group collapsed again, with the values and choices kept. A construction
+    // being edited ends.
+    await shapeSelect(page).selectOption({ label: 'Піраміда' });
+    await expect(previewViewport(page)).toHaveAttribute('data-preview-status', 'loaded', { timeout: 30_000 });
+    await expect(openGroups).toHaveCount(0);
+    await expect(overlay).toHaveCount(0);
+    await shapeSelect(page).selectOption({ label: 'Призма' });
+    await expect(sidebar(page).locator('summary')).toHaveText([
+      /^Основа/,
+      /^Висота/,
+      /^Нахил\s*похила/,
+      /^Переріз/,
+      /^Кріплення/,
+    ]);
+    await expect(openGroups).toHaveCount(0);
+    await openSection(page, 'Основа');
+    await expect(entry(page, 'Тип основи')).toHaveValue('trapezoid');
+    await openSection(page, 'Переріз');
+    await expect(entry(page, 'Тип перерізу')).toHaveValue('face-parallel');
+    await expect(overlay).toHaveCount(0);
+
+    expect(errors).toEqual([]);
+  });
+
+  test('the sidebar header covers the controls scrolled beneath it, focus outlines included, and keeps its reset', async ({
+    page,
+  }) => {
+    await page.goto('/');
+    await selectTrapezoidPrism(page);
+    await openAllSections(page);
+    await expectHeaderCoversFocus(
+      page,
+      entry(page, 'Висота трапеції t'),
+      page.getByRole('button', { name: 'Висота трапеції t: зменшити', exact: true }),
+    );
+  });
 });
 
 for (const [layout, viewport, deviceScaleFactor] of [
@@ -304,6 +467,17 @@ for (const [layout, viewport, deviceScaleFactor] of [
 
       expect(errors).toEqual([]);
     });
+
+    test('the sticky sidebar header covers the controls scrolled beneath it, focus outlines included', async ({ page }) => {
+      await page.goto('/');
+      await selectTrapezoidPrism(page);
+      await openAllSections(page);
+      await expectHeaderCoversFocus(
+        page,
+        entry(page, 'Висота трапеції t'),
+        page.getByRole('button', { name: 'Висота трапеції t: зменшити', exact: true }),
+      );
+    });
   });
 }
 
@@ -341,6 +515,7 @@ test.describe('touch scrolling on a phone (Chromium mobile emulation)', () => {
     const cdp = await context.newCDPSession(page);
     await page.goto('/');
     await selectTrapezoidPrism(page);
+    await openSection(page, 'Висота');
     await openSection(page, 'Нахил');
 
     // On a label, far from the page margins.
@@ -388,6 +563,7 @@ test.describe('touch scrolling on a phone (Chromium mobile emulation)', () => {
     await page.keyboard.press('Escape');
     await expect(shapeSelect(page)).toHaveValue('parallelepiped');
     await expectPreviewOf(page, 'Паралелепіпед · 80 × 46,2 × 53,3 мм');
+    await openSection(page, 'Висота');
     await entry(page, 'Висота h').scrollIntoViewIfNeeded();
     const height = await windowBox(page.getByText('Висота h', { exact: true }));
     before = await scrollY(page);

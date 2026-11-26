@@ -7,6 +7,7 @@ import {
   dimensionsLine,
   type ModelViewerElement,
   modelViewer,
+  openAllSections,
   openSection,
   parameterSection,
   previewViewport,
@@ -27,8 +28,10 @@ const button = (page: Page, label: string, action: 'збільшити' | 'зм�
 async function chooseCut(page: Page): Promise<void> {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Конус' });
+  await openAllSections(page);
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Похилий' });
+  await openAllSections(page);
 }
 
 async function chooseApex(page: Page): Promise<void> {
@@ -184,6 +187,7 @@ test('switching between the inclined and the apex section destroys neither’s s
   await expect(entry(page, 'Найбільший габарит')).toHaveValue('160');
   await expect(entry(page, 'Тип перерізу')).toHaveValue('none');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Похилий' });
+  await openAllSections(page);
   await expect(entry(page, POSITION)).toHaveValue('50');
   await entry(page, CUT).selectOption({ label: 'Через вершину' });
   await expect(entry(page, ANGLE)).toHaveValue('80');
@@ -328,9 +332,11 @@ test('through the apex from the main selector: the plane keeps the apex as the c
   // Back and forth: each type keeps its own fields, and the inclined one has no apex left in it.
   for (let round = 0; round < 2; round += 1) {
     await entry(page, 'Тип перерізу').selectOption({ label: 'Похилий' });
+    await openAllSections(page);
     await expect(entry(page, POSITION)).toHaveValue('50');
     await expect(page.getByRole('checkbox', { name: 'Осьовий переріз' })).toHaveCount(0);
     await entry(page, 'Тип перерізу').selectOption({ label: 'Через вершину' });
+    await openAllSections(page);
     await expect(entry(page, ANGLE)).toBeVisible();
   }
   expect(errors).toEqual([]);

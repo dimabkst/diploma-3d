@@ -14,6 +14,7 @@ import {
   dimensionsLine,
   type ModelViewerElement,
   modelViewer,
+  openAllSections,
   openSection,
   parameterSection,
   previewViewport,
@@ -30,8 +31,10 @@ const separation = (page: Page) => page.getByRole('checkbox', { name: 'Розс�
 async function chooseCut(page: Page): Promise<void> {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Конус' });
+  await openAllSections(page);
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно основі' });
+  await openAllSections(page);
 }
 
 async function expectReady(page: Page, size = '80 × 80 × 80 мм'): Promise<void> {
@@ -188,6 +191,7 @@ test('a new maximum dimension scales the parts together, and a reset keeps it', 
   await expect(entry(page, 'Найбільший габарит')).toHaveValue('160');
   await expect(entry(page, 'Тип перерізу')).toHaveValue('none');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно основі' });
+  await openAllSections(page);
   await expect(entry(page, POSITION)).toHaveValue('50');
 });
 
@@ -226,6 +230,7 @@ test('a strong lean refuses a connector with an explanation at a position where 
 test('selecting the cut turns neither the cone nor the camera', async ({ page }) => {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Конус' });
+  await openAllSections(page);
   await openSection(page, 'Переріз');
   await expect(previewViewport(page)).toHaveAttribute('data-preview-status', 'loaded', { timeout: 30_000 });
   const orbit = () =>
@@ -236,6 +241,7 @@ test('selecting the cut turns neither the cone nor the camera', async ({ page })
   const direction = await orbit();
   for (const label of ['Паралельно основі', 'Без перерізу', 'Паралельно основі']) {
     await entry(page, 'Тип перерізу').selectOption({ label });
+    await openAllSections(page);
     await page.waitForTimeout(250);
     await expect(previewViewport(page)).toHaveAttribute('data-preview-status', 'loaded', { timeout: 30_000 });
     expect(await orbit()).toEqual(direction);
@@ -252,10 +258,12 @@ test('the cone keeps its own section settings, apart from the cylinder’s', asy
   await chooseCut(page);
   await entry(page, POSITION).fill('30');
   await shapeSelect(page).selectOption({ label: 'Циліндр' });
+  await openAllSections(page);
   await openSection(page, 'Переріз');
   await expect(entry(page, 'Тип перерізу')).toHaveValue('none');
   await expect(entry(page, 'Тип перерізу').locator('option')).toHaveCount(5);
   await shapeSelect(page).selectOption({ label: 'Конус' });
+  await openAllSections(page);
   await expect(entry(page, 'Тип перерізу')).toHaveValue('parallel-to-bases');
   await expect(entry(page, POSITION)).toHaveValue('30');
 });

@@ -6,6 +6,7 @@ import {
   expectPreviewOf,
   expectSizesClose,
   hasNoHorizontalOverflow,
+  openAllSections,
   openSection,
   parameterSection,
   previewPlace,
@@ -127,6 +128,7 @@ test('pyramid: the apex moves within and beyond the square base, and returns abo
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Піраміда' });
+  await openAllSections(page);
   await expect(apexStatus(page)).toHaveText(/^Вершина\s*над центром\s*$/);
   await openSection(page, 'Вершина');
   await page.getByRole('button', { name: 'Як задано вершину?' }).click();
@@ -188,6 +190,7 @@ test('pyramid: triangle, parallelogram and trapezoid bases with their own fields
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Піраміда' });
+  await openAllSections(page);
   await expect(baseType(page).locator('option')).toHaveText(['Правильний багатокутник', 'Трикутник', 'Паралелограм', 'Трапеція']);
   await entry(page, 'Висота піраміди h').fill('1');
   await openSection(page, 'Вершина');
@@ -227,6 +230,7 @@ test('pyramid: triangle, parallelogram and trapezoid bases with their own fields
 test('pyramid: switching bases keeps the height and apex and validates only the active base', async ({ page }) => {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Піраміда' });
+  await openAllSections(page);
   await entry(page, 'Висота піраміди h').fill('0,75');
   await openSection(page, 'Вершина');
   await entry(page, 'Зміщення Y').fill('1,5');
@@ -278,6 +282,7 @@ for (const [layout, width] of [
     await page.setViewportSize({ width, height: width < 600 ? 2400 : 900 });
     await page.goto('/');
     await shapeSelect(page).selectOption({ label: 'Піраміда' });
+    await openAllSections(page);
     await baseType(page).selectOption({ label: 'Трапеція' });
     await openSection(page, 'Вершина');
 

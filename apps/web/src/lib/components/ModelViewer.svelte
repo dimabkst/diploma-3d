@@ -68,12 +68,12 @@ type LookMaterial = {
 
 /**
  * How opaque each kind of material stays in the construction view: the original solid's faces faint; the mesh's own outlines,
- * the cut faces and their outlines gone, as the view draws the solid's real edges and the sections of the construction being
+ * those of its cut faces among them, and the cut faces gone, as the view draws the solid's real edges and the sections of the construction being
  * edited itself. So every model built for the construction looks the same there, the original translucent solid, whichever
  * section it was cut by. BLEND also stops a material writing depth, so a material gone hides nothing behind it.
  */
 const constructionAlpha = (name: string): number | undefined =>
-  name === 'surface' ? 0.18 : name === 'edges' || name === 'cut' || /^plane-\d(-edges)?$/.test(name) ? 0 : undefined;
+  name === 'surface' ? 0.18 : name === 'edges' || name === 'cut' || /^plane-\d$/.test(name) ? 0 : undefined;
 
 const originalLook = new WeakMap<object, { readonly alpha: number; readonly mode: string }>();
 
@@ -300,10 +300,13 @@ type Shown = { readonly glb: Uint8Array<ArrayBuffer>; readonly labels: readonly 
 let loading: (Shown & { readonly url: string }) | undefined;
 let waiting: Shown | undefined;
 let shownUrl: string | undefined;
+// The element given the latest model, kept beyond its binding, which is cleared when it is removed.
+let sourceElement: CameraElement | undefined;
 
 function start(element: CameraElement, next: Shown) {
   const url = URL.createObjectURL(new Blob([next.glb], { type: GLB_MEDIA_TYPE }));
   loading = { ...next, url };
+  sourceElement = element;
   element.setAttribute('src', url);
 }
 
@@ -382,6 +385,9 @@ $effect(() => {
 });
 
 onMount(() => () => {
+  // A model given in the very update that removes the viewer, such as the parts set apart as a construction ends while another
+  // shape is chosen, is not fetched afterwards from its revoked URL: model-viewer loads its source only in its next update.
+  sourceElement?.removeAttribute('src');
   for (const url of [shownUrl, loading?.url]) if (url !== undefined) URL.revokeObjectURL(url);
 });
 </script>

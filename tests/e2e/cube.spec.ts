@@ -7,6 +7,7 @@ import {
   expectPreviewOf,
   type ModelViewerElement,
   modelViewer,
+  openAllSections,
   previewViewport,
   shapeSelect,
 } from './helpers.ts';
@@ -16,6 +17,7 @@ test('cube: selection, interactive preview and a valid 80 mm 3MF download', asyn
   await page.goto('/');
 
   await shapeSelect(page).selectOption('cube');
+  await openAllSections(page);
   await expectPreviewOf(page, 'Куб · 80 × 80 × 80 мм');
   const viewer = modelViewer(page);
   await expect.poll(() => viewer.evaluate((element) => (element as unknown as ModelViewerElement).loaded)).toBe(true);

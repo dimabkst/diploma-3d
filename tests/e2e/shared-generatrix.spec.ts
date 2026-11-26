@@ -3,7 +3,15 @@ import { expect, type Page, test } from '@playwright/test';
 import { MODEL_SETTINGS_PATH } from '../../packages/engine/src/export/model-settings.ts';
 import { readThreeMf, readThreeMfPart } from '../../packages/engine/src/export/three-mf.test-helper.ts';
 import { findMeshDefects, type MeshMeasurements, measureMesh } from '../../packages/engine/src/mesh.ts';
-import { collectErrors, dimensionsLine, openSection, parameterSection, previewViewport, shapeSelect } from './helpers.ts';
+import {
+  collectErrors,
+  dimensionsLine,
+  openAllSections,
+  openSection,
+  parameterSection,
+  previewViewport,
+  shapeSelect,
+} from './helpers.ts';
 
 const GENERATRIX = 'Положення спільної твірної';
 const PAIR = 'Повернути обидва перерізи';
@@ -20,12 +28,14 @@ const diagram = (page: Page) => page.getByRole('figure').filter({ hasText: 'Ни
 async function chooseLinked(page: Page, leaning = false): Promise<void> {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Циліндр' });
+  await openAllSections(page);
   if (leaning) {
     await openSection(page, 'Нахил');
     await entry(page, 'Зміщення верхньої основи').fill('0,8');
   }
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Через спільну твірну' });
+  await openAllSections(page);
 }
 
 async function expectReady(page: Page): Promise<void> {

@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { expect, type Page, test } from '@playwright/test';
 import { readThreeMfPart } from '../../packages/engine/src/export/three-mf.test-helper.ts';
-import { collectErrors, downloadButton, openSection, previewViewport, shapeSelect } from './helpers.ts';
+import { collectErrors, downloadButton, openAllSections, openSection, previewViewport, shapeSelect } from './helpers.ts';
 
 const SETTINGS = '3D/Other/model-settings.json';
 const partsButton = (page: Page) => page.getByRole('button', { name: 'Завантажити частини · 3MF', exact: true });
@@ -29,8 +29,10 @@ test('the parts and the dowels record the latest generated model, never an earli
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Циліндр' });
+  await openAllSections(page);
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно основам' });
+  await openAllSections(page);
   await entry(page, 'Тип кріплення').selectOption({ label: 'Знімні штифти' });
   // Two sizes in quick succession: the first generation, if it finishes at all, is outdated.
   await entry(page, 'Найбільший габарит').fill('100');

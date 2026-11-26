@@ -5,6 +5,7 @@ import {
   downloadThreeMf,
   expectPreviewOf,
   expectSizesClose,
+  openAllSections,
   previewViewport,
   shapeSelect,
 } from './helpers.ts';
@@ -22,6 +23,7 @@ test('pyramid: the entry, slider and buttons share 0,25…4, keep values between
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Піраміда' });
+  await openAllSections(page);
   const height = entry(page, 'Висота піраміди h');
   const heightSlider = slider(page, 'Висота піраміди h');
   await expect(heightSlider).toHaveAttribute('min', '0.25');
@@ -71,6 +73,7 @@ test('pyramid: the entry, slider and buttons share 0,25…4, keep values between
 test('cylinder: h/r = 4,8 off the slider steps is kept and exported; beyond 8 is refused', async ({ page }) => {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Циліндр' });
+  await openAllSections(page);
   const height = entry(page, 'Висота h');
   const heightSlider = slider(page, 'Висота h');
   await expect(heightSlider).toHaveAttribute('min', '0.5');

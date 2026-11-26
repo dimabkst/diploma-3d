@@ -9,6 +9,7 @@ import {
   expectSizesClose,
   type ModelViewerElement,
   modelViewer,
+  openAllSections,
   openSection,
   previewViewport,
   shapeSelect,
@@ -43,6 +44,7 @@ test('print size: a 120 mm cube is shown and exported at 120 mm, and the size is
 
   // Another shape keeps the shared size and only its proportions: 40 × 60 × 80 becomes 60 × 90 × 120 mm.
   await shapeSelect(page).selectOption({ label: 'Прямокутний паралелепіпед' });
+  await openAllSections(page);
   await expect(sizeField(page)).toHaveValue('120');
   await expectPreviewOf(page, 'Прямокутний паралелепіпед · 60 × 90 × 120 мм');
   expectSizesClose((await downloadThreeMf(page)).measurements.size, [60, 90, 120], 1e-4);
@@ -52,6 +54,7 @@ test('print size: a 120 mm cube is shown and exported at 120 mm, and the size is
   await expect(sizeField(page)).toHaveValue('120');
   await expectPreviewOf(page, 'Куб · 120 × 120 × 120 мм');
   await shapeSelect(page).selectOption({ label: 'Конус' });
+  await openAllSections(page);
   await expectPreviewOf(page, 'Конус · 120 × 120 × 120 мм');
 
   expect(errors).toEqual([]);
@@ -93,6 +96,7 @@ test('print size: incomplete or invalid input blocks the model and is never reme
 test('print size: an oblique prism keeps its proportions and its longest dimension is the requested size', async ({ page }) => {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Призма' });
+  await openAllSections(page);
   await page.getByLabel('Багатокутник', { exact: true }).selectOption({ label: 'Квадрат' });
   await entry(page, 'Висота h').fill('1');
   await openSection(page, 'Нахил');
@@ -115,6 +119,7 @@ test('print size: an oblique prism keeps its proportions and its longest dimensi
 test('print size: a 300 mm cylinder is subdivided finely enough to stay within the approximation tolerance', async ({ page }) => {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Циліндр' });
+  await openAllSections(page);
   await sizeField(page).fill('300');
   // h = 2r: r = 150 mm.
   await expectPreviewOf(page, 'Циліндр · 300 × 300 × 300 мм');
@@ -143,6 +148,7 @@ test('reset: a changed prism at 120 mm returns to a default prism at 120 mm, kee
 
   // A fresh default prism at 120 mm, for comparison. Changing the size alone leaves nothing of the prism to reset.
   await shapeSelect(page).selectOption({ label: 'Призма' });
+  await openAllSections(page);
   await expectPreviewOf(page, `Призма · ${formatSize(defaultPrism(120))}`);
   await expect(resetButton(page)).toBeDisabled();
   // No permanent explanation: the heading names the scope and the button its action.
@@ -152,8 +158,10 @@ test('reset: a changed prism at 120 mm returns to a default prism at 120 mm, kee
 
   // Another shape's own value, which the prism's reset must keep.
   await shapeSelect(page).selectOption({ label: 'Прямокутний паралелепіпед' });
+  await openAllSections(page);
   await entry(page, 'Ширина b').fill('3');
   await shapeSelect(page).selectOption({ label: 'Призма' });
+  await openAllSections(page);
 
   // Edit the triangle variant, then the trapezoid, the height and the inclination.
   await entry(page, 'Тип основи').selectOption({ label: 'Трикутник' });
@@ -209,6 +217,7 @@ test('reset: a changed prism at 120 mm returns to a default prism at 120 mm, kee
 
   // The cuboid kept its own value, and the size stays across shapes and a new visit.
   await shapeSelect(page).selectOption({ label: 'Прямокутний паралелепіпед' });
+  await openAllSections(page);
   await expect(entry(page, 'Ширина b')).toHaveValue('3');
   await expect(sizeField(page)).toHaveValue('120');
   await page.reload();
@@ -222,6 +231,7 @@ test('reset: one click recovers from an invalid draft in a prism field and leave
   await page.goto('/');
   await sizeField(page).fill('120');
   await shapeSelect(page).selectOption({ label: 'Призма' });
+  await openAllSections(page);
   await expectPreviewOf(page, `Призма · ${formatSize(defaultPrism(120))}`);
 
   await entry(page, 'Висота h').fill('');
@@ -248,6 +258,7 @@ test('reset: solids without parameters of their own offer no reset, whatever the
   await page.goto('/');
   for (const label of ['Додекаедр', 'Ікосаедр']) {
     await shapeSelect(page).selectOption({ label });
+    await openAllSections(page);
     await expect(sizeField(page)).toBeVisible();
     await expect(resetButton(page)).toHaveCount(0);
   }
@@ -257,9 +268,11 @@ test('reset: solids without parameters of their own offer no reset, whatever the
   await expect(page.getByRole('button', { name: /Скинути/ })).toHaveCount(0);
   // The cube and the tetrahedron have a section of their own to reset, but a new size alone is nothing to reset.
   await shapeSelect(page).selectOption({ label: 'Куб' });
+  await openAllSections(page);
   await expectPreviewOf(page, 'Куб · 40 × 40 × 40 мм');
   await expect(resetButton(page)).toBeDisabled();
   await shapeSelect(page).selectOption({ label: 'Правильний тетраедр' });
+  await openAllSections(page);
   await expect(resetButton(page)).toBeDisabled();
 });
 
@@ -286,6 +299,7 @@ test('print size in the header: 90 mm survives a prism reset in the field and in
 
   await sizeField(page).fill('90');
   await shapeSelect(page).selectOption({ label: 'Призма' });
+  await openAllSections(page);
   await expectPreviewOf(page, `Призма · ${formatSize(defaultPrism(90))}`);
   await entry(page, 'Тип основи').selectOption({ label: 'Трапеція' });
   await entry(page, 'Висота призми h').fill('1');

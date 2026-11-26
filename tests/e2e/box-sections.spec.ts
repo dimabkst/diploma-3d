@@ -3,7 +3,7 @@ import { expect, type Page, test } from '@playwright/test';
 import { boxVertices } from '../../packages/engine/src/connectors/box.ts';
 import { readThreeMf, readThreeMfPart } from '../../packages/engine/src/export/three-mf.test-helper.ts';
 import { measureMesh } from '../../packages/engine/src/mesh.ts';
-import { collectErrors, openSection, previewViewport, shapeSelect } from './helpers.ts';
+import { collectErrors, openAllSections, openSection, previewViewport, shapeSelect } from './helpers.ts';
 
 const partsButton = (page: Page) => page.getByRole('button', { name: 'Завантажити частини · 3MF', exact: true });
 const entry = (page: Page, label: string) => page.getByLabel(label, { exact: true });
@@ -24,8 +24,10 @@ test('a cube’s diagonal section, then a plane through an edge and a midpoint, 
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Куб' });
+  await openAllSections(page);
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Поздовжній' });
+  await openAllSections(page);
   await entry(page, 'Слід на основі').selectOption({ label: 'Через діагональ' });
   await expect(page.getByRole('button', { name: /^Діагональ/ })).toContainText('AC');
   await expect(page.getByText('Діагональний переріз: площина проходить через діагональ AC')).toBeVisible();
@@ -47,6 +49,7 @@ test('a cube’s diagonal section, then a plane through an edge and a midpoint, 
   );
 
   await entry(page, 'Тип перерізу').selectOption({ label: 'Через ребро або діагональ' });
+  await openAllSections(page);
   // A plane through an edge at an angle, named with the face it is measured from.
   await expect(page.getByRole('button', { name: /^Кут до ABCD/ })).toContainText('45°');
   // Through a point: the segment and M's edge, no face first; M starts at the midpoint.
@@ -105,8 +108,10 @@ test('a parallelepiped cut by two parallel planes into three parts, with magnets
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Паралелепіпед' });
+  await openAllSections(page);
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно грані' });
+  await openAllSections(page);
   await facePlane(page, undefined, ['3', '7'], ['Від ABCD', 'До A₁B₁C₁D₁']);
   await page.getByRole('button', { name: 'Додати паралельний переріз', exact: true }).click();
   await expect(page.getByRole('button', { name: /^Положення/ })).toContainText('3 : 7');
@@ -132,8 +137,10 @@ test('a triangle cut off a corner, perpendicular to a body diagonal', async ({ p
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Прямокутний паралелепіпед' });
+  await openAllSections(page);
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Похилий' });
+  await openAllSections(page);
   await page.getByRole('button', { name: /^Перпендикулярно до/ }).click();
   await entry(page, 'Або зі списку').selectOption({ label: 'AC₁' });
   await page.getByRole('button', { name: 'Готово', exact: true }).click();
@@ -155,8 +162,10 @@ test('the section through the diagonal AC and the midpoint of B₁C₁ of a para
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Паралелепіпед' });
+  await openAllSections(page);
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Через ребро або діагональ' });
+  await openAllSections(page);
   await entry(page, 'Спосіб').selectOption({ label: 'Через точку ребра' });
   await page.getByRole('button', { name: /^Відрізок/ }).click();
   await entry(page, 'Або зі списку').selectOption({ label: 'AC — діагональ грані' });
@@ -323,11 +332,13 @@ test('vertex labels stay on their vertices: unequal edges, both views, the camer
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Прямокутний паралелепіпед' });
+  await openAllSections(page);
   await entry(page, 'Ширина b').fill('0,25');
   await entry(page, 'Висота c').fill('3');
   const shape = { kind: 'cuboid', widthRatio: 0.25, heightRatio: 3 } as const;
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно грані' });
+  await openAllSections(page);
   await facePlane(page, 'BCC₁B₁ ∥ DAA₁D₁', ['3', '7'], ['Від BCC₁B₁', 'До DAA₁D₁']);
   // Apart: no vertex lies on the plane, so each is named once, on the part that keeps it.
   const apart = await expectLabelsOnVertices(page, shape);
@@ -350,6 +361,7 @@ test('vertex labels on a parallelepiped leaning both ways, cut through four vert
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Паралелепіпед' });
+  await openAllSections(page);
   await openSection(page, 'Нахил');
   await entry(page, 'Зміщення X').fill('0,5');
   await entry(page, 'Зміщення Y').fill('-0,4');
@@ -363,6 +375,7 @@ test('vertex labels on a parallelepiped leaning both ways, cut through four vert
   } as const;
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Поздовжній' });
+  await openAllSections(page);
   await entry(page, 'Слід на основі').selectOption({ label: 'Через діагональ' });
   // Apart, A, C, A1 and C1 on the plane are each shown on both parts, under the same name; assembled, once.
   const apart = await expectLabelsOnVertices(page, shape);
@@ -429,8 +442,10 @@ test('three parts of the cube by two diagonal planes through BD: both interfaces
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Куб' });
+  await openAllSections(page);
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Поздовжній' });
+  await openAllSections(page);
   await entry(page, 'Слід на основі').selectOption({ label: 'Через діагональ' });
   await page.getByRole('button', { name: /^Діагональ/ }).click();
   await entry(page, 'Або зі списку').selectOption({ label: 'BD (і B₁D₁)' });
@@ -564,8 +579,10 @@ test('vertex labels stay on the drawn vertices in every frame while sliders are 
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Паралелепіпед' });
+  await openAllSections(page);
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно грані' });
+  await openAllSections(page);
   await facePlane(page, undefined, ['3', '7'], ['Від ABCD', 'До A₁B₁C₁D₁']);
   await page.getByRole('button', { name: 'Додати паралельний переріз', exact: true }).click();
   await openSection(page, 'Нахил');
@@ -609,14 +626,17 @@ test('a triangular prism: through a median and a midline of its base, then throu
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Призма' });
+  await openAllSections(page);
   const shape = { kind: 'prism', baseType: 'regular', baseSides: 3, heightRatio: 2, offsetXRatio: 0, offsetYRatio: 0 } as const;
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно грані' });
+  await openAllSections(page);
   // The bases as one orientation, and the three lateral faces, no two of which are parallel.
   await page.getByRole('button', { name: /^Грань/ }).click();
   expect(await options(page, 'Або зі списку')).toEqual(['ABC ∥ A₁B₁C₁', 'ABB₁A₁', 'BCC₁B₁', 'CAA₁C₁']);
   await page.getByRole('button', { name: 'Готово', exact: true }).click();
   await entry(page, 'Тип перерізу').selectOption({ label: 'Поздовжній' });
+  await openAllSections(page);
   // An equilateral base: its median, altitude and bisector from a vertex are one line, offered once; no diagonals.
   expect(await options(page, 'Слід на основі')).toEqual([
     'Під кутом до ребра AB',
@@ -643,6 +663,7 @@ test('a triangular prism: through a median and a midline of its base, then throu
   expect(midline.section).toMatchObject({ trace: 'midline', traceSegment: ['A', 'B'], through: true });
 
   await entry(page, 'Тип перерізу').selectOption({ label: 'Через ребро або діагональ' });
+  await openAllSections(page);
   await entry(page, 'Спосіб').selectOption({ label: 'Через точку ребра' });
   // The edges and the lateral faces' diagonals, none of the bases, which have none.
   await page.getByRole('button', { name: /^Відрізок/ }).click();
@@ -672,10 +693,12 @@ test('a hexagonal prism: its shorter and longer base diagonals, each a section t
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Призма' });
+  await openAllSections(page);
   await openSection(page, 'Основа');
   await entry(page, 'Багатокутник').selectOption({ label: 'Правильний шестикутник' });
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно грані' });
+  await openAllSections(page);
   await page.getByRole('button', { name: /^Грань/ }).click();
   expect(await options(page, 'Або зі списку')).toEqual([
     'ABCDEF ∥ A₁B₁C₁D₁E₁F₁',
@@ -685,6 +708,7 @@ test('a hexagonal prism: its shorter and longer base diagonals, each a section t
   ]);
   await page.getByRole('button', { name: 'Готово', exact: true }).click();
   await entry(page, 'Тип перерізу').selectOption({ label: 'Поздовжній' });
+  await openAllSections(page);
   await entry(page, 'Слід на основі').selectOption({ label: 'Через діагональ' });
   await page.getByRole('button', { name: /^Діагональ/ }).click();
   const diagonals = await options(page, 'Або зі списку');
@@ -715,6 +739,7 @@ test('an oblique pentagonal prism cut perpendicular to its lateral edges, then i
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Призма' });
+  await openAllSections(page);
   await openSection(page, 'Основа');
   await entry(page, 'Багатокутник').selectOption({ label: 'Правильний п’ятикутник' });
   await openSection(page, 'Нахил');
@@ -722,6 +747,7 @@ test('an oblique pentagonal prism cut perpendicular to its lateral edges, then i
   const shape = { kind: 'prism', baseType: 'regular', baseSides: 5, heightRatio: 2, offsetXRatio: 0.4, offsetYRatio: 0 } as const;
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Похилий' });
+  await openAllSections(page);
   // The lateral edges are one of the segments of «Перпендикулярно до», as on every prism: no separate shortcut.
   await expect(page.getByRole('button', { name: 'Перпендикулярно бічним ребрам', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: /^Перпендикулярно до/ }).click();
@@ -763,10 +789,12 @@ test('a plane perpendicular to the lateral edges goes back to its angles where i
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Призма' });
+  await openAllSections(page);
   await openSection(page, 'Нахил');
   await entry(page, 'Зміщення X').fill('0,4');
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Похилий' });
+  await openAllSections(page);
   await entry(page, 'Кут до площини основи').fill('30');
   await page.getByRole('button', { name: 'Додати паралельний переріз', exact: true }).click();
   await entry(page, 'Тип кріплення').selectOption({ label: 'Магнітні гнізда' });
@@ -826,8 +854,10 @@ test('a tetrahedron through its apex, through a base edge and a lateral edge’s
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Правильний тетраедр' });
+  await openAllSections(page);
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Через вершину піраміди' });
+  await openAllSections(page);
   await entry(page, 'Слід на основі').selectOption({ label: 'Через медіану (= висоту)' });
   await page.getByRole('button', { name: /^З вершини/ }).click();
   await entry(page, 'Або зі списку').selectOption({ label: 'C' });
@@ -854,6 +884,7 @@ test('a tetrahedron through its apex, through a base edge and a lateral edge’s
   });
 
   await entry(page, 'Тип перерізу').selectOption({ label: 'Через ребро основи' });
+  await openAllSections(page);
   await entry(page, 'Спосіб').selectOption({ label: 'Через точку ребра' });
   await expect(page.getByRole('button', { name: /^Ребро основи/ })).toContainText('AB');
   // SA and SB give the face SAB with AB: only CS is offered.
@@ -872,6 +903,7 @@ test('a tetrahedron through its apex, through a base edge and a lateral edge’s
   await expectLabelsOnVertices(page, { kind: 'tetrahedron' });
 
   await entry(page, 'Тип перерізу').selectOption({ label: 'Похилий' });
+  await openAllSections(page);
   await page.getByRole('button', { name: /^Паралельно ребрам/ }).click();
   // The pair's own list, the one its open field shows.
   await entry(page, 'Або зі списку').filter({ visible: true }).selectOption({ label: 'SC і AB' });
@@ -898,11 +930,13 @@ test('an oblique square pyramid at half its height, and through its apex and a d
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Піраміда' });
+  await openAllSections(page);
   await openSection(page, 'Вершина');
   await entry(page, 'Зміщення X').fill('0,3');
   const shape = { kind: 'pyramid', baseType: 'regular', baseSides: 4, heightRatio: 1, apexXRatio: 0.3, apexYRatio: 0 } as const;
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно грані' });
+  await openAllSections(page);
   // Five faces, each its own orientation, in the construction's list.
   await page.getByRole('button', { name: /^Грань/ }).click();
   expect(await options(page, 'Або зі списку')).toEqual(['ABCD', 'SAB', 'SBC', 'SCD', 'SDA']);
@@ -913,6 +947,7 @@ test('an oblique square pyramid at half its height, and through its apex and a d
   expect(upper / (lower + upper)).toBeCloseTo(1 / 8, 5);
   await expectLabelsOnVertices(page, shape);
   await entry(page, 'Тип перерізу').selectOption({ label: 'Через вершину піраміди' });
+  await openAllSections(page);
   await entry(page, 'Слід на основі').selectOption({ label: 'Через діагональ' });
   await expect(page.getByText(/Діагональний переріз: площина проходить через вершину S і діагональ AC/)).toBeVisible();
   const diagonal = await partVolumes(page);

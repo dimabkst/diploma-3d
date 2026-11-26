@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { expect, type Page, test } from '@playwright/test';
 import { readThreeMf } from '../../packages/engine/src/export/three-mf.test-helper.ts';
 import { findMeshDefects, measureMesh } from '../../packages/engine/src/mesh.ts';
-import { collectErrors, openSection, parameterSection, previewViewport, shapeSelect } from './helpers.ts';
+import { collectErrors, openAllSections, openSection, parameterSection, previewViewport, shapeSelect } from './helpers.ts';
 
 const partsButton = (page: Page) => page.getByRole('button', { name: 'Завантажити частини · 3MF', exact: true });
 const pinsButton = (page: Page) => page.getByRole('button', { name: 'Завантажити лише штифти', exact: true });
@@ -13,10 +13,12 @@ const SIZE = 'Діаметр вихідного кола, мм';
 async function chooseTallCylinder(page: Page): Promise<void> {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Циліндр' });
+  await openAllSections(page);
   await entry(page, 'Найбільший габарит').fill('100');
   await entry(page, 'Висота h').fill('3,333333');
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно основам' });
+  await openAllSections(page);
 }
 
 async function expectReady(page: Page): Promise<void> {

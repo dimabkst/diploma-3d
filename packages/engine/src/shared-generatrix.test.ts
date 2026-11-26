@@ -514,6 +514,11 @@ describe('the files and the preview of a cut through a shared generatrix', () =>
         .listMaterials()
         .map((material) => material.getName());
       expect(materials).toEqual(expect.arrayContaining(['plane-1', 'plane-2', 'plane-3', 'guide-AA1', 'guide-BB1', 'guide-CC1']));
+      // The guides run along the cut faces' rims, so they are white like every outline; no outline takes a plane's colour.
+      expect(materials.filter((name) => name.endsWith('-edges'))).toEqual([]);
+      for (const material of document.getRoot().listMaterials()) {
+        if (material.getName().startsWith('guide-')) expect(material.getBaseColorFactor()).toEqual([1, 1, 1, 1]);
+      }
       // Each plane's faces in its own material, on every part that has them.
       const used = new Set(
         document

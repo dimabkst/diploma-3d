@@ -11,6 +11,7 @@ import {
   expectSizesClose,
   type ModelViewerElement,
   modelViewer,
+  openAllSections,
   openSection,
   parameterSection,
   previewViewport,
@@ -70,13 +71,14 @@ test('cylinder: a section parallel to the bases is previewed in two parts and ex
   await shapeSelect(page).selectOption({ label: 'Циліндр' });
   await expectPreviewOf(page, 'Циліндр · 80 × 80 × 80 мм');
 
-  // Optional, so collapsed, with "немає" in its summary.
+  // Collapsed, with "немає" in its summary.
   const group = parameterSection(page, 'Переріз');
   await expect(group).not.toHaveAttribute('open', '');
   await expect(group.locator('summary')).toContainText('немає');
   await openSection(page, 'Переріз');
   await expect(position(page)).toHaveCount(0);
   await sectionType(page).selectOption({ label: 'Паралельно основам' });
+  await openAllSections(page);
   await expect(group.locator('summary')).toContainText('паралельно основам');
   await expect(position(page)).toHaveValue('50');
   await expect(positionSlider(page)).toHaveAttribute('min', '10');
@@ -141,6 +143,7 @@ test('cylinder: a section parallel to the bases is previewed in two parts and ex
   expect(whole.fileName).toBe('cylinder.3mf');
   expectSizesClose(whole.measurements.size, [120, 120, 120], 1e-3);
   await sectionType(page).selectOption({ label: 'Паралельно основам' });
+  await openAllSections(page);
   await expect(position(page)).toHaveValue('50');
   await expect(separation(page)).toBeChecked();
 
@@ -150,6 +153,7 @@ test('cylinder: a section parallel to the bases is previewed in two parts and ex
 test('oblique cylinder: the section stays parallel to the bases and moves with the axis', async ({ page }) => {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Циліндр' });
+  await openAllSections(page);
   await openSection(page, 'Нахил');
   await page.getByLabel('Зміщення верхньої основи', { exact: true }).fill('1');
   // The box is (2 + 1)r × 2r × 2r: r = 80/3 mm, d = r, h = 2r.
@@ -157,6 +161,7 @@ test('oblique cylinder: the section stays parallel to the bases and moves with t
   await expectPreviewOf(page, 'Циліндр · 80 × 53,3 × 53,3 мм');
   await openSection(page, 'Переріз');
   await sectionType(page).selectOption({ label: 'Паралельно основам' });
+  await openAllSections(page);
 
   // At t the cut circle is centred t·d from the lower base's centre: the lower part spans 2r + t·d along X, the upper
   // part 2r + (1 − t)·d.

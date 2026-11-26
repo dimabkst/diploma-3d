@@ -6,6 +6,7 @@ import {
   collectErrors,
   type ModelViewerElement,
   modelViewer,
+  openAllSections,
   openSection,
   parameterSection,
   previewViewport,
@@ -30,8 +31,10 @@ test('a cone’s axial cut: the groove opens at the top or towards the base, wit
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Конус' });
+  await openAllSections(page);
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Вертикальний' });
+  await openAllSections(page);
   await entry(page, 'Тип кріплення').selectOption({ label: 'Ластівчин хвіст' });
   await expect(entry(page, ENTRANCE).locator('option')).toHaveText(['Зверху', 'Знизу']);
   await expect(entry(page, ENTRANCE)).toHaveValue('standard');
@@ -75,8 +78,10 @@ test('a horizontal cut names the two lateral sides', async ({ page }) => {
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Циліндр' });
+  await openAllSections(page);
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно основам' });
+  await openAllSections(page);
   await entry(page, 'Тип кріплення').selectOption({ label: 'Ластівчин хвіст' });
   await expect(entry(page, ENTRANCE).locator('option')).toHaveText(['З одного боку', 'З протилежного боку']);
   await entry(page, ENTRANCE).selectOption({ label: 'З протилежного боку' });

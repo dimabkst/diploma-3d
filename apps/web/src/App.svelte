@@ -558,6 +558,16 @@ function openConstruction(field: ConstructionField | undefined) {
   construction = { field, pending: undefined, notice: undefined };
 }
 
+/**
+ * A figure chosen in the header, also the one chosen before: its groups start collapsed, and a construction in progress ends as
+ * when its group is collapsed. Rebuilding a model never comes here, so the groups opened meanwhile stay open.
+ */
+function chooseShape(shape: string) {
+  selectedShape = shape;
+  openConstruction(undefined);
+  controls?.collapseGroups();
+}
+
 function choosePilot(choice: PilotChoice) {
   if (selectedKind === undefined) return;
   if (choice.kind === 'angle-side') {
@@ -935,7 +945,7 @@ function downloadPrintFile() {
   <AppHeader>
     <div class="shape-picker">
       <label for="shape">Геометричне тіло</label>
-      <Select id="shape" bind:value={selectedShape} options={shapeOptions} />
+      <Select id="shape" bind:value={() => selectedShape, chooseShape} options={shapeOptions} />
     </div>
     <!-- The print size belongs to the export, not to one shape: it is shared by all and kept between visits. -->
     <div class="export-controls">

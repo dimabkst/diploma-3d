@@ -48,11 +48,23 @@ export const parameterSection = (page: Page, title: string) =>
       has: page.locator('summary').filter({ hasText: new RegExp(`^${title}`) }),
     });
 
-/** Opens the group, such as the initially collapsed "Нахил", unless it is open already. */
+/** Opens the group, such as "Нахил", unless it is open already; every group starts collapsed. */
 export async function openSection(page: Page, title: string): Promise<void> {
   const section = parameterSection(page, title);
   if ((await section.getAttribute('open')) === null) await section.locator('summary').click();
   await expect(section).toHaveAttribute('open', '');
+}
+
+/**
+ * Opens every group of the sidebar shown now. All start collapsed, also when a figure is chosen again; a group that appears
+ * later, such as "Кріплення" with a section, starts collapsed too. The page goes back to where it was, as clicking a summary
+ * in one column scrolls it, and model-viewer loads a model only while it is on screen.
+ */
+export async function openAllSections(page: Page): Promise<void> {
+  const scrollY = await page.evaluate(() => window.scrollY);
+  const closed = page.getByRole('complementary', { name: 'Налаштування моделі' }).locator('details:not([open]) > summary');
+  for (let count = await closed.count(); count > 0; count = await closed.count()) await closed.first().click();
+  await page.evaluate((y) => window.scrollTo(0, y), scrollY);
 }
 
 /** Bounding box of the model shown by model-viewer, in its Y-up frame and in millimetres. */

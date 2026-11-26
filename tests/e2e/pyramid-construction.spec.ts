@@ -3,7 +3,7 @@ import { expect, type Page, test } from '@playwright/test';
 import { MODEL_SETTINGS_PATH } from '../../packages/engine/src/export/model-settings.ts';
 import { readThreeMf, readThreeMfPart } from '../../packages/engine/src/export/three-mf.test-helper.ts';
 import { findMeshDefects, measureMesh } from '../../packages/engine/src/mesh.ts';
-import { collectErrors, openSection, previewViewport, shapeSelect } from './helpers.ts';
+import { collectErrors, openAllSections, openSection, previewViewport, shapeSelect } from './helpers.ts';
 
 const partsButton = (page: Page) => page.getByRole('button', { name: 'Завантажити частини · 3MF', exact: true });
 const picker = (page: Page, name: RegExp) => page.getByRole('button', { name });
@@ -20,8 +20,10 @@ async function pyramidWith(page: Page, section: string, apexX?: string, polygon 
   await page.goto('/');
   if (apexX === undefined) {
     await shapeSelect(page).selectOption({ label: 'Правильний тетраедр' });
+    await openAllSections(page);
   } else {
     await shapeSelect(page).selectOption({ label: 'Піраміда' });
+    await openAllSections(page);
     await openSection(page, 'Основа');
     await page.getByLabel('Багатокутник', { exact: true }).selectOption({ label: polygon });
     await openSection(page, 'Вершина');
@@ -29,6 +31,7 @@ async function pyramidWith(page: Page, section: string, apexX?: string, polygon 
   }
   await openSection(page, 'Переріз');
   await page.getByLabel('Тип перерізу', { exact: true }).selectOption({ label: section });
+  await openAllSections(page);
   await expectLoaded(page);
 }
 
@@ -91,6 +94,7 @@ test('a tetrahedron: parallel to ABC at 1 : 1 to S, an eighth at the apex; AB an
   await done(page);
   // Through the base edge AB, its two vertices clicked; M on CS clicked along it, then 1 : 2 by the arrows.
   await page.getByLabel('Тип перерізу', { exact: true }).selectOption({ label: 'Через ребро основи' });
+  await openAllSections(page);
   await page.getByLabel('Спосіб', { exact: true }).selectOption({ label: 'Через точку ребра' });
   await picker(page, /^Ребро основи/).click();
   await click(page, await screenPoint(page, 'B'));
@@ -211,6 +215,7 @@ test('a tetrahedron cut by AB and the midpoint of CS takes dowels; a plane throu
   await page.getByLabel('Тип кріплення', { exact: true }).selectOption({ label: 'Без кріплення' });
   // Through the apex and the median from C, then a second plane parallel to it, which does not pass through S.
   await page.getByLabel('Тип перерізу', { exact: true }).selectOption({ label: 'Через вершину піраміди' });
+  await openAllSections(page);
   await page.getByLabel('Слід на основі', { exact: true }).selectOption({ label: 'Через медіану (= висоту)' });
   await page.getByRole('button', { name: 'Додати паралельний переріз', exact: true }).click();
   const two = await download(page);
@@ -264,6 +269,7 @@ test('a square pyramid: SAB to CD at 1 : 1; SA with M at C the diagonal section,
   expect((await download(page)).section).toMatchObject({ type: 'face-parallel', face: 'SAB', positionPercent: 50 });
   await done(page);
   await page.getByLabel('Тип перерізу', { exact: true }).selectOption({ label: 'Через вершину піраміди' });
+  await openAllSections(page);
   await page.getByLabel('Слід на основі', { exact: true }).selectOption({ label: 'Через бічне ребро й точку' });
   await picker(page, /^Бічне ребро/).click();
   await click(page, await screenPoint(page, 'A'));
@@ -283,6 +289,7 @@ test('a square pyramid: SAB to CD at 1 : 1; SA with M at C the diagonal section,
   await done(page);
   // Through AB and M on a lateral edge off it: CS and DS both offered.
   await page.getByLabel('Тип перерізу', { exact: true }).selectOption({ label: 'Через ребро основи' });
+  await openAllSections(page);
   await page.getByLabel('Спосіб', { exact: true }).selectOption({ label: 'Через точку ребра' });
   await picker(page, /^Точка M/).click();
   expect(await list(page, 'Ребро зі списку').locator('option').allTextContents()).toEqual(
@@ -339,6 +346,7 @@ test.describe('on a phone', () => {
     await expect(picker(page, /^Ребро основи/)).toContainText('AC');
     await done(page);
     await page.getByLabel('Тип перерізу', { exact: true }).selectOption({ label: 'Похилий' });
+    await openAllSections(page);
     await picker(page, /^Паралельно ребрам/).click();
     const edge = await between(page, 'S', 'C', 0.5);
     await page.touchscreen.tap(edge.x, edge.y);

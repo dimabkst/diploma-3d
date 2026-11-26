@@ -6,6 +6,7 @@ import {
   expectPreviewOf,
   expectSizesClose,
   hasNoHorizontalOverflow,
+  openAllSections,
   openSection,
   parameterSection,
   previewPlace,
@@ -60,6 +61,7 @@ test('oblique cylinder: the upper base moves along X, the dimensions and file fo
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: NAMES.cylinder });
+  await openAllSections(page);
   await expect(status(page)).toHaveText(tiltState('прямий'));
   await openSection(page, 'Нахил');
   await expect(offset(page, 'cylinder')).toHaveValue('0');
@@ -115,6 +117,7 @@ test('oblique cone: the apex moves beyond the base and the tilt can be removed',
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: NAMES.cone });
+  await openAllSections(page);
   await expect(status(page)).toHaveText(tiltState('прямий'));
   await openSection(page, 'Нахил');
 
@@ -146,6 +149,7 @@ test('oblique cone: the apex moves beyond the base and the tilt can be removed',
 test('oblique cylinder and cone: invalid displacements, separate values and no outdated download', async ({ page }) => {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: NAMES.cylinder });
+  await openAllSections(page);
   await expectPreviewOf(page, summary('cylinder', geometry('cylinder', 2, 0)));
   await openSection(page, 'Нахил');
 
@@ -177,10 +181,12 @@ test('oblique cylinder and cone: invalid displacements, separate values and no o
 
   // The cone keeps its own, still zero, displacement; the cylinder gets its own back.
   await shapeSelect(page).selectOption({ label: NAMES.cone });
+  await openAllSections(page);
   await openSection(page, 'Нахил');
   await expect(offset(page, 'cone')).toHaveValue('0');
   await expectPreviewOf(page, summary('cone', geometry('cone', 2, 0)));
   await shapeSelect(page).selectOption({ label: NAMES.cylinder });
+  await openAllSections(page);
   await expect(offset(page, 'cylinder')).toHaveValue('2');
   await expectPreviewOf(page, summary('cylinder', geometry('cylinder', 2, 2)));
   await expectDownloaded(page, 'cylinder', geometry('cylinder', 2, 2));
@@ -198,6 +204,7 @@ for (const [layout, width] of [
     await page.goto('/');
     for (const kind of ['cylinder', 'cone'] as const) {
       await shapeSelect(page).selectOption({ label: NAMES[kind] });
+      await openAllSections(page);
       await openSection(page, 'Нахил');
       let reference: Awaited<ReturnType<typeof previewPlace>> | undefined;
       for (const [h, d] of [

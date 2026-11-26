@@ -3,7 +3,15 @@ import { expect, type Page, test } from '@playwright/test';
 import { MODEL_SETTINGS_PATH } from '../../packages/engine/src/export/model-settings.ts';
 import { readThreeMf, readThreeMfPart } from '../../packages/engine/src/export/three-mf.test-helper.ts';
 import { findMeshDefects, measureMesh } from '../../packages/engine/src/mesh.ts';
-import { collectErrors, dimensionsLine, openSection, parameterSection, previewViewport, shapeSelect } from './helpers.ts';
+import {
+  collectErrors,
+  dimensionsLine,
+  openAllSections,
+  openSection,
+  parameterSection,
+  previewViewport,
+  shapeSelect,
+} from './helpers.ts';
 
 const partsButton = (page: Page) => page.getByRole('button', { name: 'Завантажити частини · 3MF', exact: true });
 const entry = (page: Page, label: string) => page.getByLabel(label, { exact: true });
@@ -35,8 +43,10 @@ test('cylinder: a second plane parallel to the bases, on either side of the firs
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Циліндр' });
+  await openAllSections(page);
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно основам' });
+  await openAllSections(page);
   await entry(page, 'Від нижньої основи').fill('30');
   await expectReady(page);
   await action(page, 'Додати паралельний переріз').click();
@@ -76,8 +86,10 @@ test('cone: a plane through the apex and a parallel second plane off it, joined 
   const errors = collectErrors(page);
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Конус' });
+  await openAllSections(page);
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Через вершину' });
+  await openAllSections(page);
   await expectReady(page);
   const angle = await entry(page, 'Кут до площини основи').inputValue();
   await action(page, 'Додати паралельний переріз').click();

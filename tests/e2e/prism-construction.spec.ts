@@ -3,7 +3,7 @@ import { expect, type Page, test } from '@playwright/test';
 import { MODEL_SETTINGS_PATH } from '../../packages/engine/src/export/model-settings.ts';
 import { readThreeMf, readThreeMfPart } from '../../packages/engine/src/export/three-mf.test-helper.ts';
 import { findMeshDefects } from '../../packages/engine/src/mesh.ts';
-import { collectErrors, openSection, previewViewport, shapeSelect } from './helpers.ts';
+import { collectErrors, openAllSections, openSection, previewViewport, shapeSelect } from './helpers.ts';
 
 const partsButton = (page: Page) => page.getByRole('button', { name: 'Завантажити частини · 3MF', exact: true });
 const picker = (page: Page, name: RegExp) => page.getByRole('button', { name });
@@ -19,6 +19,7 @@ async function expectLoaded(page: Page): Promise<void> {
 async function prismWith(page: Page, section: string, lean?: string, polygon?: string): Promise<void> {
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Призма' });
+  await openAllSections(page);
   if (polygon !== undefined) {
     await openSection(page, 'Основа');
     await page.getByLabel('Багатокутник', { exact: true }).selectOption({ label: polygon });
@@ -29,6 +30,7 @@ async function prismWith(page: Page, section: string, lean?: string, polygon?: s
   }
   await openSection(page, 'Переріз');
   await page.getByLabel('Тип перерізу', { exact: true }).selectOption({ label: section });
+  await openAllSections(page);
   await expectLoaded(page);
 }
 
@@ -163,6 +165,7 @@ test('an oblique prism: a median by an upper vertex, its trace drawn; the latera
   expect((await download(page)).section).toMatchObject({ trace: 'median', traceVertex: 'B', through: true });
   await done(page);
   await page.getByLabel('Тип перерізу', { exact: true }).selectOption({ label: 'Похилий' });
+  await openAllSections(page);
   await expect(page.getByRole('button', { name: 'Перпендикулярно бічним ребрам', exact: true })).toHaveCount(0);
   await picker(page, /^Перпендикулярно до/).click();
   await click(page, await between(page, 'C', 'C1', 0.4));
@@ -245,6 +248,7 @@ test('an oblique pentagonal prism: its five base diagonals, one by two vertices 
   await done(page);
   // A lateral face has no parallel one: its far side is the lateral edge DD₁.
   await page.getByLabel('Тип перерізу', { exact: true }).selectOption({ label: 'Паралельно грані' });
+  await openAllSections(page);
   await picker(page, /^Грань/).click();
   expect(await list(page).locator('option').count()).toBe(6);
   // The model was turned away from ABB₁A₁ above: by name.
@@ -321,6 +325,7 @@ test.describe('on a phone', () => {
     await expect(picker(page, /^Грань/)).toContainText('ABB₁A₁');
     await done(page);
     await page.getByLabel('Тип перерізу', { exact: true }).selectOption({ label: 'Через ребро або діагональ' });
+    await openAllSections(page);
     await picker(page, /^Відрізок/).click();
     const [a, b1] = [await screenPoint(page, 'A'), await screenPoint(page, 'B1')];
     await page.touchscreen.tap(a.x, a.y);

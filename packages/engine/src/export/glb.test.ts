@@ -127,6 +127,29 @@ describe('createPreviewGlb', () => {
     }
   });
 
+  it('draws the rims of faces on a section plane in the one edge material, only the faces in the plane’s colour', async () => {
+    const kernel = await loadGeometryKernel();
+    const cubeMesh = generateModel(kernel, defaultModelSpecs.cube).solids[0]?.mesh as TriangleMesh;
+    // The top face, as if made by a plane: its rim borders the original surface.
+    const newFaces = Uint8Array.from({ length: triangleCount(cubeMesh) }, (_, triangle) => {
+      const [a, b, c] = triangleAt(cubeMesh, triangle).map((vertex) => vertexAt(cubeMesh, vertex)) as [Vec3, Vec3, Vec3];
+      return cross(subtract(b, a), subtract(c, a))[2] > 0 ? 2 : 0;
+    });
+    const glb = await createPreviewGlb([{ name: 'cube', mesh: cubeMesh, newFaces }], { planeColors: ['#f7bb6b', '#2ed1a2'] });
+    const primitives = (await new WebIO().readBinary(glb)).getRoot().listMeshes()[0]?.listPrimitives() ?? [];
+    const named = primitives.map((primitive) => [primitive.getMode(), primitive.getMaterial()?.getName()]);
+    expect(named).toEqual([
+      [TRIANGLES, 'surface'],
+      [TRIANGLES, 'plane-1'],
+      [LINES, 'edges'],
+    ]);
+    const edges = primitives.find((primitive) => primitive.getMode() === LINES);
+    expect(edges?.getAttribute('POSITION')?.getCount()).toBe(24);
+    expect(edges?.getMaterial()?.getEmissiveFactor()).toEqual([0, 0, 0]);
+    const [r = 0, g = 0, b = 0] = edges?.getMaterial()?.getBaseColorFactor() ?? [];
+    expect(Math.min(r, g, b)).toBeGreaterThan(0.85);
+  });
+
   it('lifts every edge of a slanted solid the same distance off both adjacent faces and joins them at the vertices', async () => {
     const { edges } = await readPrimitives(await createPreviewGlb([{ name: 'tetrahedron', mesh: tetrahedron }]));
     // Back to Z-up millimetres: glTF (x, y, z) in metres is (x, −z, y) × 1000.
