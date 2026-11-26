@@ -237,16 +237,16 @@ test.describe('desktop workspace at 1366 × 768', () => {
     const reference = await previewPlace(page);
 
     // An invalid height: the old model is dimmed, no dimensions or download are offered, and the field is named.
-    await entry(page, 'Висота призми h').fill('5');
+    await entry(page, 'Висота AA₁').fill('5');
     await expect(page.getByText('Допустимі значення — від 0,25 до 4.')).toBeVisible();
     await expect(previewViewport(page)).toHaveAttribute('data-preview-status', 'invalid');
     await expect(dimensionsLine(page)).toHaveText('Габарити: — мм');
     await expect(downloadButton(page)).toBeDisabled();
-    await expect(previewViewport(page).getByRole('button', { name: 'Висота призми h' })).toBeVisible();
+    await expect(previewViewport(page).getByRole('button', { name: 'Висота AA₁' })).toBeVisible();
     expect(await previewPlace(page)).toEqual(reference);
 
     // Corrected: h = a with b = t = a/2 gives a = h = 80 mm, a box of 80 × 40 × 80 mm.
-    await entry(page, 'Висота призми h').fill('1');
+    await entry(page, 'Висота AA₁').fill('1');
     await expectPreviewOf(page, 'Призма · 80 × 40 × 80 мм');
     expect(await previewPlace(page)).toEqual(reference);
 
@@ -309,7 +309,7 @@ test.describe('desktop workspace at 1366 × 768', () => {
     expect(afterSidebar.radius).toBeCloseTo(turned.radius, 6);
 
     // Editing a parameter keeps the direction.
-    await entry(page, 'Висота призми h').fill('1,5');
+    await entry(page, 'Висота AA₁').fill('1,5');
     // h = 1,5a: a = 160/3 mm.
     await expectPreviewOf(page, 'Призма · 53,3 × 26,7 × 80 мм');
     await expect.poll(async () => (await orbit(page)).theta).toBeCloseTo(turned.theta, 3);
@@ -417,8 +417,8 @@ test.describe('desktop workspace at 1366 × 768', () => {
     await openAllSections(page);
     await expectHeaderCoversFocus(
       page,
-      entry(page, 'Висота трапеції t'),
-      page.getByRole('button', { name: 'Висота трапеції t: зменшити', exact: true }),
+      entry(page, 'Відстань між AB і CD'),
+      page.getByRole('button', { name: 'Відстань між AB і CD: зменшити', exact: true }),
     );
   });
 });
@@ -474,8 +474,8 @@ for (const [layout, viewport, deviceScaleFactor] of [
       await openAllSections(page);
       await expectHeaderCoversFocus(
         page,
-        entry(page, 'Висота трапеції t'),
-        page.getByRole('button', { name: 'Висота трапеції t: зменшити', exact: true }),
+        entry(page, 'Відстань між AB і CD'),
+        page.getByRole('button', { name: 'Відстань між AB і CD: зменшити', exact: true }),
       );
     });
   });
@@ -519,8 +519,8 @@ test.describe('touch scrolling on a phone (Chromium mobile emulation)', () => {
     await openSection(page, 'Нахил');
 
     // On a label, far from the page margins.
-    await entry(page, 'Висота трапеції t').scrollIntoViewIfNeeded();
-    const label = await windowBox(page.getByText('Висота трапеції t', { exact: true }));
+    await entry(page, 'Відстань між AB і CD').scrollIntoViewIfNeeded();
+    const label = await windowBox(page.getByText('Відстань між AB і CD', { exact: true }));
     let before = await scrollY(page);
     expect(before).toBeGreaterThan(300);
     await drag(page, cdp, [label.x + 10, label.y + label.height / 2], [0, 300]);
@@ -545,12 +545,12 @@ test.describe('touch scrolling on a phone (Chromium mobile emulation)', () => {
     expect(await scrollY(page)).toBeLessThan(before - 150);
 
     // A horizontal drag on a slider changes its value and leaves the page where it is.
-    const slider = page.getByRole('slider', { name: 'Висота призми h: повзунок' });
+    const slider = page.getByRole('slider', { name: 'Висота AA₁: повзунок' });
     await slider.scrollIntoViewIfNeeded();
     const track = await windowBox(slider);
     before = await scrollY(page);
     await drag(page, cdp, [track.x + track.width * 0.45, track.y + track.height / 2], [track.width * 0.4, 0]);
-    await expect(entry(page, 'Висота призми h')).not.toHaveValue('2');
+    await expect(entry(page, 'Висота AA₁')).not.toHaveValue('2');
     expect(await scrollY(page)).toBe(before);
 
     // The shape picker: open it, choose a shape, open it again and dismiss it; the page still scrolls by touch.
@@ -564,8 +564,8 @@ test.describe('touch scrolling on a phone (Chromium mobile emulation)', () => {
     await expect(shapeSelect(page)).toHaveValue('parallelepiped');
     await expectPreviewOf(page, 'Паралелепіпед · 80 × 46,2 × 53,3 мм');
     await openSection(page, 'Висота');
-    await entry(page, 'Висота h').scrollIntoViewIfNeeded();
-    const height = await windowBox(page.getByText('Висота h', { exact: true }));
+    await entry(page, 'Висота AA₁').scrollIntoViewIfNeeded();
+    const height = await windowBox(page.getByText('Висота AA₁', { exact: true }));
     before = await scrollY(page);
     expect(before).toBeGreaterThan(150);
     await drag(page, cdp, [height.x + 10, height.y + height.height / 2], [0, 250]);

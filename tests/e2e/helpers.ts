@@ -67,6 +67,9 @@ export async function openAllSections(page: Page): Promise<void> {
   await page.evaluate((y) => window.scrollTo(0, y), scrollY);
 }
 
+/** A prism's or parallelepiped's height field: "Висота AA₁" while the solid is right, "Висота" while it leans. */
+export const prismHeight = (page: Page) => page.getByLabel(/^\s*Висота( AA₁)?\s*$/);
+
 /** Bounding box of the model shown by model-viewer, in its Y-up frame and in millimetres. */
 async function viewerDimensionsMm(page: Page): Promise<[number, number, number]> {
   const { x, y, z } = await modelViewer(page).evaluate((element) => (element as unknown as ModelViewerElement).getDimensions());

@@ -15,14 +15,16 @@ import {
 } from './helpers.ts';
 
 type Field =
-  | 'Висота піраміди h'
+  | 'Висота'
   | 'Зміщення X'
   | 'Зміщення Y'
-  | 'Сторона основи b'
-  | 'Кут α'
-  | 'Паралельна сторона b'
-  | 'Висота трапеції t'
-  | 'Зміщення сторони b';
+  | 'Сторона AC'
+  | 'Кут BAC'
+  | 'Сторона AD'
+  | 'Кут BAD'
+  | 'Сторона CD'
+  | 'Відстань між AB і CD'
+  | 'Зміщення сторони CD';
 type Vec2 = readonly [number, number];
 
 const entry = (page: Page, field: Field) => page.getByLabel(field, { exact: true });
@@ -132,7 +134,7 @@ test('pyramid: the apex moves within and beyond the square base, and returns abo
   await expect(apexStatus(page)).toHaveText(/^Вершина\s*над центром\s*$/);
   await openSection(page, 'Вершина');
   await page.getByRole('button', { name: 'Як задано вершину?' }).click();
-  await expect(page.getByText('Зміщення відлічується від центра мас основи')).toBeVisible();
+  await expect(page.getByText('Зміщення вершини S відлічується від центра мас основи')).toBeVisible();
   await expect(entry(page, 'Зміщення X')).toHaveValue('0');
   await expect(resetApex(page)).toBeDisabled();
 
@@ -164,7 +166,7 @@ test('pyramid: the apex moves within and beyond the square base, and returns abo
   await expect(x).toHaveValue('3,732');
   await expect(stepButton(page, 'Зміщення X', 'збільшити')).toBeDisabled();
   // At h = 2a the apex may lie as far as (2,35a, −3,05a): about 3,85a from the centroid.
-  await entry(page, 'Висота піраміди h').fill('2');
+  await entry(page, 'Висота').fill('2');
   await x.fill('2.35');
   await x.blur();
   await expect(x).toHaveValue('2.35');
@@ -174,11 +176,11 @@ test('pyramid: the apex moves within and beyond the square base, and returns abo
   await expectDownloadedPyramid(page, 'pyramid-4-sided.3mf', far);
 
   // Back above the centre: only the apex changes.
-  await entry(page, 'Висота піраміди h').fill('1,5');
+  await entry(page, 'Висота').fill('1,5');
   await resetApex(page).click();
   await expect(x).toHaveValue('0');
   await expect(entry(page, 'Зміщення Y')).toHaveValue('0');
-  await expect(entry(page, 'Висота піраміди h')).toHaveValue('1,5');
+  await expect(entry(page, 'Висота')).toHaveValue('1,5');
   await expect(apexStatus(page)).toHaveText(/^Вершина\s*над центром\s*$/);
   await expect(resetApex(page)).toBeDisabled();
   await expectPreviewOf(page, summary(geometry(bases.square(), 1.5)));
@@ -192,33 +194,33 @@ test('pyramid: triangle, parallelogram and trapezoid bases with their own fields
   await shapeSelect(page).selectOption({ label: 'Піраміда' });
   await openAllSections(page);
   await expect(baseType(page).locator('option')).toHaveText(['Правильний багатокутник', 'Трикутник', 'Паралелограм', 'Трапеція']);
-  await entry(page, 'Висота піраміди h').fill('1');
+  await entry(page, 'Висота').fill('1');
   await openSection(page, 'Вершина');
   await entry(page, 'Зміщення X').fill('0,25');
 
   // The right triangle a = 4, b = 3 (in units of a/4); the apex keeps its offset.
   await baseType(page).selectOption({ label: 'Трикутник' });
   await expect(page.getByLabel('Багатокутник', { exact: true })).toHaveCount(0);
-  await entry(page, 'Сторона основи b').fill('0,75');
-  await entry(page, 'Кут α').fill('90');
+  await entry(page, 'Сторона AC').fill('0,75');
+  await entry(page, 'Кут BAC').fill('90');
   const triangle = geometry(bases.triangle(0.75, 90), 1, 0.25, 0);
   await expectPreviewOf(page, summary(triangle));
   await expectDownloadedPyramid(page, 'pyramid-triangle.3mf', triangle);
 
   // The parallelogram with b = 2a and α = 120°, with an off-step angle.
   await baseType(page).selectOption({ label: 'Паралелограм' });
-  await expect(entry(page, 'Сторона основи b')).toHaveValue('1');
-  await entry(page, 'Сторона основи b').fill('2');
-  await entry(page, 'Кут α').fill('117,5');
+  await expect(entry(page, 'Сторона AD')).toHaveValue('1');
+  await entry(page, 'Сторона AD').fill('2');
+  await entry(page, 'Кут BAD').fill('117,5');
   const parallelogram = geometry(bases.parallelogram(2, 117.5), 1, 0.25, 0);
   await expectPreviewOf(page, summary(parallelogram));
   await expectDownloadedPyramid(page, 'pyramid-parallelogram.3mf', parallelogram);
 
   // The right trapezoid of the prism reference, aligned with the existing action, and the apex across the base.
   await baseType(page).selectOption({ label: 'Трапеція' });
-  await entry(page, 'Висота трапеції t').fill('0,375');
+  await entry(page, 'Відстань між AB і CD').fill('0,375');
   await page.getByRole('button', { name: 'Вирівняти зліва', exact: true }).click();
-  await expect(entry(page, 'Зміщення сторони b')).toHaveValue('-0,25');
+  await expect(entry(page, 'Зміщення сторони CD')).toHaveValue('-0,25');
   await entry(page, 'Зміщення Y').fill('-0,75');
   const trapezoid = geometry(bases.trapezoid(0.5, 0.375, -0.25), 1, 0.25, -0.75);
   await expectPreviewOf(page, summary(trapezoid));
@@ -231,7 +233,7 @@ test('pyramid: switching bases keeps the height and apex and validates only the 
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Піраміда' });
   await openAllSections(page);
-  await entry(page, 'Висота піраміди h').fill('0,75');
+  await entry(page, 'Висота').fill('0,75');
   await openSection(page, 'Вершина');
   await entry(page, 'Зміщення Y').fill('1,5');
   await expectPreviewOf(page, summary(geometry(bases.square(), 0.75, 0, 1.5)));
@@ -245,18 +247,18 @@ test('pyramid: switching bases keeps the height and apex and validates only the 
     return button?.disabled;
   });
   expect(disabledRightAfterSwitch).toBe(true);
-  await expect(entry(page, 'Висота піраміди h')).toHaveValue('0,75');
+  await expect(entry(page, 'Висота')).toHaveValue('0,75');
   await expect(entry(page, 'Зміщення Y')).toHaveValue('1,5');
   await expectPreviewOf(page, summary(geometry(bases.triangle(1, 60), 0.75, 0, 1.5)));
 
   // An invalid parallelogram angle blocks only the parallelogram.
   await baseType(page).selectOption({ label: 'Паралелограм' });
-  await entry(page, 'Кут α').fill('170');
+  await entry(page, 'Кут BAD').fill('170');
   await expect(page.getByText('Допустимі значення — від 15° до 165°.')).toBeVisible();
   await expect(previewViewport(page)).toHaveAttribute('data-preview-status', 'invalid');
   await expect(downloadButton(page)).toBeDisabled();
   await baseType(page).selectOption({ label: 'Трикутник' });
-  await expect(entry(page, 'Кут α')).toHaveValue('60');
+  await expect(entry(page, 'Кут BAC')).toHaveValue('60');
   await expect(downloadButton(page)).toBeEnabled({ timeout: 30_000 });
   expect((await downloadThreeMf(page)).fileName).toBe('pyramid-triangle.3mf');
 
@@ -298,7 +300,7 @@ for (const [layout, width] of [
     ] as const) {
       await entry(page, 'Зміщення X').fill(x);
       await entry(page, 'Зміщення Y').fill(y);
-      await entry(page, 'Висота піраміди h').fill(h);
+      await entry(page, 'Висота').fill(h);
       const [qx, qy, h0] = [x, y, h].map((text) => Number(text.replace(',', '.'))) as [number, number, number];
       await expectPreviewOf(page, summary(geometry(bases.trapezoid(0.5, 0.5, 0), h0, qx, qy)));
       const current = await previewPlace(page);

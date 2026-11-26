@@ -333,8 +333,8 @@ test('vertex labels stay on their vertices: unequal edges, both views, the camer
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Прямокутний паралелепіпед' });
   await openAllSections(page);
-  await entry(page, 'Ширина b').fill('0,25');
-  await entry(page, 'Висота c').fill('3');
+  await entry(page, 'Ширина AD').fill('0,25');
+  await entry(page, 'Висота AA₁').fill('3');
   const shape = { kind: 'cuboid', widthRatio: 0.25, heightRatio: 3 } as const;
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно грані' });
@@ -350,7 +350,7 @@ test('vertex labels stay on their vertices: unequal edges, both views, the camer
   await page.setViewportSize({ width: 900, height: 700 });
   await expectLabelsOnVertices(page, shape);
   // The dimensions change: the labels go with the new vertices.
-  await entry(page, 'Висота c').fill('1,5');
+  await entry(page, 'Висота AA₁').fill('1,5');
   await expectLabelsOnVertices(page, { kind: 'cuboid', widthRatio: 0.25, heightRatio: 1.5 });
   expect(errors).toEqual([]);
 });
@@ -390,7 +390,7 @@ test('vertex labels on a parallelepiped leaning both ways, cut through four vert
   expect(new Set(three.flatMap((label) => label.parts))).toEqual(new Set(['part-1', 'middle', 'part-2']));
   await orbit(page, '-60deg 40deg auto');
   await expectLabelsOnVertices(page, shape);
-  await entry(page, 'Висота h').fill('1,6');
+  await entry(page, 'Висота').fill('1,6');
   await expectLabelsOnVertices(page, { ...shape, heightRatio: 1.6 });
   expect(errors).toEqual([]);
 });
@@ -592,9 +592,9 @@ test('vertex labels stay on the drawn vertices in every frame while sliders are 
     await expect(previewViewport(page)).toHaveAttribute('data-preview-status', 'loaded', { timeout: 30_000 });
     const stop = await recordFrames(page);
     await drag(page, 'Зміщення X', 0.5, 0.75);
-    await drag(page, 'Висота h', 0.3, 0.45);
+    await drag(page, 'Висота AA₁', 0.3, 0.45);
     // Typed in quick succession: only the last one is the model in the end.
-    for (const height of ['1,2', '1,3', '1,4', '1,5']) await entry(page, 'Висота h').fill(height);
+    for (const height of ['1,2', '1,3', '1,4', '1,5']) await entry(page, 'Висота AA₁').fill(height);
     await expect(previewViewport(page)).toHaveAttribute('data-preview-status', 'loaded', { timeout: 30_000 });
     await page.waitForTimeout(300);
     const { frames, replaced } = await stop();
@@ -613,7 +613,7 @@ test('vertex labels stay on the drawn vertices in every frame while sliders are 
       offsetXRatio: offset,
       offsetYRatio: 0,
     });
-    await expect(entry(page, 'Висота h')).toHaveValue('1,5');
+    await expect(entry(page, 'Висота AA₁')).toHaveValue('1,5');
   }
   expect(errors).toEqual([]);
 });

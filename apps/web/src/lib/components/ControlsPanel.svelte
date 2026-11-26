@@ -446,7 +446,7 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
               {#each field.fields as trapezoidField (trapezoidField.key)}
                 {@render numberField(trapezoidField)}
               {/each}
-              <div class="group-actions" role="group" aria-label="Вирівнювання сторони b">
+              <div class="group-actions" role="group" aria-label="Вирівнювання сторони CD">
                 {#each alignments as { alignment, label } (alignment)}
                   <Button
                     variant="secondary"

@@ -604,7 +604,7 @@ export const printSizeField: NumericField = {
   range: { min: MIN_LONGEST_DIMENSION_MM, max: MAX_LONGEST_DIMENSION_MM, increment: 5 },
 };
 
-/** "Що означає × a?": what the reference length is and how the print size rescales everything. */
+/** "Що означає × AB?": what the reference length is and how the print size rescales everything. */
 function referenceHelp(reference: string, meaning: string): Help {
   return {
     label: `Що означає × ${reference}?`,
@@ -618,15 +618,15 @@ function referenceHelp(reference: string, meaning: string): Help {
 const shiftHelp: Help = {
   label: 'Як працює зміщення?',
   text:
-    'Верхня основа зсувається відносно нижньої: X — уздовж сторони a, Y — перпендикулярно до неї. Обидва нулі дають ' +
-    'пряме тіло. Висота h — відстань між основами — не змінюється.',
+    'Верхня основа зсувається відносно нижньої: X — уздовж AB, Y — перпендикулярно до AB. Обидва нулі дають пряме тіло. ' +
+    'Висота — перпендикулярна відстань між площинами основ — не змінюється; бічне ребро AA₁ стає похилим і довшим за неї.',
 };
 
 const apexHelp: Help = {
   label: 'Як задано вершину?',
   text:
-    'Зміщення відлічується від центра мас основи: X — уздовж сторони a, Y — перпендикулярно до неї. Висота h лишається ' +
-    'перпендикуляром до основи; вершина може лежати й поза нею.',
+    'Зміщення вершини S відлічується від центра мас основи: X — уздовж AB, Y — перпендикулярно до AB. Висота лишається ' +
+    'перпендикуляром з S до площини основи; S може лежати й поза основою.',
 };
 
 const roundShiftHelp = (moving: string): Help => ({
@@ -636,20 +636,36 @@ const roundShiftHelp = (moving: string): Help => ({
 
 const directionText =
   'Напрям зміщення відлічується від осі X проти годинникової стрілки, якщо дивитися згори: 0° — уздовж X ' +
-  '(сторони a), 90° — уздовж Y. Від повороту камери він не залежить.';
+  '(уздовж AB), 90° — уздовж Y. Від повороту камери він не залежить.';
 
 const edgeAngleHelp: Help = {
   label: 'Як задано кути?',
   text:
-    'Кут до площини основи — кут між бічним ребром, напрямленим від нижньої основи до верхньої, і площиною основи; ' +
-    `90° дає пряме тіло. ${directionText} Висота h не змінюється.`,
+    'Кут між AA₁ і основою — кут між бічним ребром AA₁, напрямленим від нижньої основи до верхньої, і площиною основи; ' +
+    `інші бічні ребра йому паралельні. 90° дає пряме тіло. ${directionText} Висота не змінюється.`,
 };
 
 const apexAngleHelp: Help = {
   label: 'Як задано кути?',
   text:
-    'Кут до площини основи — кут між цією площиною і відрізком від центра мас основи до вершини; 90° ставить вершину ' +
-    `над центром. ${directionText} Висота h не змінюється.`,
+    'Кут до площини основи — кут між цією площиною і відрізком від центра мас основи до вершини S; 90° ставить S ' +
+    `над центром. ${directionText} Висота не змінюється.`,
+};
+
+/** The lateral edges of a prism or parallelepiped, which its height equals only while the solid is right. */
+const prismHeightHelp = (solid: string): Help => ({
+  label: 'Що таке висота?',
+  text:
+    `Перпендикулярна відстань між площинами основ ${solid}. У прямого тіла вона дорівнює бічному ребру AA₁, і поле ` +
+    'називається «Висота AA₁». У похилого AA₁ довше за висоту, тому поле називається просто «Висота»; зміщення висоти ' +
+    'не змінює.',
+});
+
+const pyramidHeightHelp: Help = {
+  label: 'Що таке висота?',
+  text:
+    'Перпендикулярна відстань від вершини S до площини основи. Бічне ребро, наприклад SA, — інший відрізок: воно не ' +
+    'коротше за висоту й дорівнює їй, лише коли S лежить точно над A.',
 };
 
 const roundAngleHelp = (line: string, right: string, moving: string): Help => ({
@@ -668,30 +684,30 @@ const roundAngleHelps: Readonly<Record<'cylinder' | 'cone', Help>> = {
 
 const triangleHelp: Help = {
   label: 'Як задано трикутник?',
-  text: 'Сторонами a і b та кутом α між ними; третя сторона обчислюється автоматично.',
+  text: 'Сторонами AB і AC та кутом BAC між ними; третя сторона BC обчислюється автоматично.',
 };
 
 const parallelogramHelp: Help = {
   label: 'Як задано паралелограм?',
-  text: 'Сторонами a і b та кутом α між ними; протилежні сторони рівні й паралельні.',
+  text: 'Сторонами AB і AD та кутом BAD між ними; протилежні сторони рівні й паралельні: CD = AB, BC = AD.',
 };
 
 const trapezoidHelp: Help = {
   label: 'Як задано трапецію?',
   text:
-    'a і b — паралельні сторони; висота трапеції t — відстань між ними. Зміщення δ зсуває середину b уздовж X відносно ' +
-    'середини a. Якщо b = a, основа — паралелограм, а без зміщення — прямокутник.',
+    'AB і CD — паралельні сторони; відстань між ними — висота трапеції. Зміщення сторони CD зсуває її середину уздовж AB ' +
+    'відносно середини AB. Якщо CD = AB, основа — паралелограм, а без зміщення — прямокутник.',
 };
 
 const trapezoidKindNames: Readonly<Record<TrapezoidKind, string>> = {
   general: 'трапеція',
   isosceles: 'рівнобічна трапеція',
   right: 'прямокутна трапеція',
-  parallelogram: 'паралелограм (b = a)',
-  rectangle: 'прямокутник (b = a)',
+  parallelogram: 'паралелограм (CD = AB)',
+  rectangle: 'прямокутник (CD = AB)',
 };
 
-/** The special case of the trapezoid base, such as "рівнобічна трапеція"; undefined while b or δ is not valid. */
+/** The special case of the trapezoid base, such as "рівнобічна трапеція"; undefined while CD or its shift is not valid. */
 export const trapezoidKindName = (sideRatio: number | undefined, shiftRatio: number | undefined): string | undefined =>
   sideRatio === undefined || shiftRatio === undefined ? undefined : trapezoidKindNames[trapezoidKind(sideRatio, shiftRatio)];
 
@@ -706,7 +722,8 @@ const shiftRange: StepRange = { ...BASE_SHIFT_LIMITS, increment: 0.25 };
 const INCLINATION_INCREMENT = 5;
 const directionRange: StepRange = { ...DIRECTION_LIMITS, increment: 15 };
 
-const ratioField = (key: ParameterKey, label: string, reference = 'a'): NumericField => ({
+/** A length relative to the reference: AB, the first side of a base, or the radius r of a round solid. */
+const ratioField = (key: ParameterKey, label: string, reference = 'AB'): NumericField => ({
   type: 'number',
   key,
   label,
@@ -715,10 +732,20 @@ const ratioField = (key: ParameterKey, label: string, reference = 'a'): NumericF
   range: reference === 'r' ? roundHeightRange : ratioRange,
 });
 
-const twoSidesAndAngle = ([side, angle]: readonly [ParameterKey, ParameterKey]): NumericField[] => [
-  ratioField(side, 'Сторона основи b'),
-  { type: 'number', key: angle, label: 'Кут α', suffix: '°', range: angleRange },
+/**
+ * The second side and the angle of a base built from AB along X, another side from A and the angle between them at A: AC and
+ * ∠BAC of a triangle, AD and ∠BAD of a parallelogram, as the engine places A, B, C, D.
+ */
+const twoSidesAndAngle = (
+  [side, angle]: readonly [ParameterKey, ParameterKey],
+  [sideName, angleName]: readonly [string, string],
+): NumericField[] => [
+  ratioField(side, `Сторона ${sideName}`),
+  { type: 'number', key: angle, label: `Кут ${angleName}`, suffix: '°', range: angleRange },
 ];
+
+const TRIANGLE_NAMES = ['AC', 'BAC'] as const;
+const PARALLELOGRAM_NAMES = ['AD', 'BAD'] as const;
 
 const section = (
   key: string,
@@ -765,6 +792,8 @@ export type PanelContext = {
 
 type TiltConfig = {
   readonly title: string;
+  /** The inclination's label, such as "Кут між AA₁ і основою"; "Кут до площини основи" by default. */
+  readonly inclinationLabel?: string;
   readonly offsetFields: TiltGroup['fields'];
   readonly offsetHelp: Help;
   readonly angleHelp: Help;
@@ -790,7 +819,7 @@ function tiltSection(
   const inclination: NumericField = {
     type: 'number',
     key: keys.inclination,
-    label: 'Кут до площини основи',
+    label: config.inclinationLabel ?? 'Кут до площини основи',
     suffix: '°',
     range: { ...inclinationRange(circular, height, direction), increment: INCLINATION_INCREMENT },
   };
@@ -827,8 +856,8 @@ function tiltSection(
 
 /** The offsets X and Y; their ranges follow from the current values, see `tiltSection`. */
 const offsetFields = ([x, y]: readonly [ParameterKey, ParameterKey]): TiltGroup['fields'] => [
-  { type: 'number', key: x, label: 'Зміщення X', suffix: '× a', range: ratioRange },
-  { type: 'number', key: y, label: 'Зміщення Y', suffix: '× a', range: ratioRange },
+  { type: 'number', key: x, label: 'Зміщення X', suffix: '× AB', range: ratioRange },
+  { type: 'number', key: y, label: 'Зміщення Y', suffix: '× AB', range: ratioRange },
 ];
 
 const baseTypeNames: Readonly<Record<PyramidBaseType, string>> = {
@@ -874,16 +903,17 @@ function baseSection(kind: 'prism' | 'pyramid', keys: BaseFieldKeys, baseType: P
         options: PRISM_BASE_SIDES.map((sides) => ({ value: sides, label: baseNames[sides] })),
       },
     ],
-    triangle: twoSidesAndAngle(keys.triangle),
-    parallelogram: keys.parallelogram === undefined ? [] : twoSidesAndAngle(keys.parallelogram),
+    triangle: twoSidesAndAngle(keys.triangle, TRIANGLE_NAMES),
+    parallelogram: keys.parallelogram === undefined ? [] : twoSidesAndAngle(keys.parallelogram, PARALLELOGRAM_NAMES),
     trapezoid: [
       {
         type: 'trapezoid',
         key: keys.trapezoid.key,
         fields: [
-          ratioField(side, 'Паралельна сторона b'),
-          ratioField(height, 'Висота трапеції t'),
-          { type: 'number', key: shift, label: 'Зміщення сторони b', suffix: '× a', range: shiftRange },
+          ratioField(side, 'Сторона CD'),
+          // The trapezoid's height: its feet on AB and CD are not named points.
+          ratioField(height, 'Відстань між AB і CD'),
+          { type: 'number', key: shift, label: 'Зміщення сторони CD', suffix: '× AB', range: shiftRange },
         ],
       },
     ],
@@ -920,7 +950,7 @@ const pyramidBaseKeys: BaseFieldKeys = {
   },
 };
 
-const sideAMeaning = 'a — сторона основи.';
+const sideAMeaning = 'AB — сторона основи.';
 
 // A cut's position and its distance from the axis move in steps of 5 percentage points; a typed value between them is kept.
 const SECTION_PERCENT_INCREMENT = 5;
@@ -3254,6 +3284,19 @@ const boxSections = (kind: BoxSolid, choices: ParameterChoices, context: PanelCo
   ...connectorSection(kind, choices, context),
 ];
 
+/** The angle of a prism's or parallelepiped's lateral edges, all parallel to AA₁, with the plane of its base. */
+const LATERAL_EDGE_ANGLE_LABEL = 'Кут між AA₁ і основою';
+
+/**
+ * The height of a prism or parallelepiped: "Висота AA₁" while the solid is right, as AA₁ is then its altitude; "Висота" once it
+ * leans or while its displacement is not valid, as AA₁ is then a slanted lateral edge, longer than the height.
+ */
+function heightField(solid: 'prism' | 'parallelepiped', { values = {} }: PanelContext): NumericField {
+  const { height, offsets } = tiltKeys[solid];
+  const right = offsets.every((key) => values[key] === 0);
+  return ratioField(height, right ? 'Висота AA₁' : 'Висота');
+}
+
 /** The sidebar of the selected shape; for a prism or pyramid, only the selected base type's fields. */
 export function shapePanel(kind: ShapeKind, choices: ParameterChoices, context: PanelContext = {}): ShapePanel {
   switch (kind) {
@@ -3274,11 +3317,12 @@ export function shapePanel(kind: ShapeKind, choices: ParameterChoices, context: 
     case 'cuboid':
       return {
         type: 'parameters',
-        help: referenceHelp('a', 'a — довжина; ширину b і висоту c задано відносно неї.'),
+        help: referenceHelp('AB', 'AB — довжина; ширину AD і висоту AA₁ задано відносно неї.'),
         sections: [
           section('cuboid-size', 'Розміри', [
-            ratioField('cuboidWidthRatio', 'Ширина b'),
-            ratioField('cuboidHeightRatio', 'Висота c'),
+            ratioField('cuboidWidthRatio', 'Ширина AD'),
+            // Always right: its lateral edge is its height.
+            ratioField('cuboidHeightRatio', 'Висота AA₁'),
           ]),
           ...boxSections(kind, choices, context),
         ],
@@ -3286,22 +3330,25 @@ export function shapePanel(kind: ShapeKind, choices: ParameterChoices, context: 
     case 'parallelepiped':
       return {
         type: 'parameters',
-        help: referenceHelp('a', sideAMeaning),
+        help: referenceHelp('AB', sideAMeaning),
         sections: [
           section(
             'parallelepiped-base',
             'Основа',
-            twoSidesAndAngle(['parallelepipedBaseSideRatio', 'parallelepipedBaseAngleDeg']),
+            twoSidesAndAngle(['parallelepipedBaseSideRatio', 'parallelepipedBaseAngleDeg'], PARALLELOGRAM_NAMES),
             {
               help: parallelogramHelp,
             },
           ),
-          section('parallelepiped-height', 'Висота', [ratioField('parallelepipedHeightRatio', 'Висота h')]),
+          section('parallelepiped-height', 'Висота', [heightField('parallelepiped', context)], {
+            help: prismHeightHelp('паралелепіпеда'),
+          }),
           tiltSection(
             'parallelepiped',
             'parallelepiped-tilt',
             {
               title: 'Нахил',
+              inclinationLabel: LATERAL_EDGE_ANGLE_LABEL,
               offsetFields: offsetFields(['parallelepipedOffsetXRatio', 'parallelepipedOffsetYRatio']),
               offsetHelp: shiftHelp,
               angleHelp: edgeAngleHelp,
@@ -3316,18 +3363,16 @@ export function shapePanel(kind: ShapeKind, choices: ParameterChoices, context: 
     case 'prism':
       return {
         type: 'parameters',
-        help: referenceHelp('a', sideAMeaning),
+        help: referenceHelp('AB', sideAMeaning),
         sections: [
           baseSection('prism', prismBaseKeys, choices.prismBaseType),
-          // "Висота призми h" next to the trapezoid's own height t.
-          section('prism-height', 'Висота', [
-            ratioField('prismHeightRatio', choices.prismBaseType === 'trapezoid' ? 'Висота призми h' : 'Висота h'),
-          ]),
+          section('prism-height', 'Висота', [heightField('prism', context)], { help: prismHeightHelp('призми') }),
           tiltSection(
             'prism',
             'prism-tilt',
             {
               title: 'Нахил',
+              inclinationLabel: LATERAL_EDGE_ANGLE_LABEL,
               offsetFields: offsetFields(['prismOffsetXRatio', 'prismOffsetYRatio']),
               offsetHelp: shiftHelp,
               angleHelp: edgeAngleHelp,
@@ -3342,10 +3387,11 @@ export function shapePanel(kind: ShapeKind, choices: ParameterChoices, context: 
     case 'pyramid':
       return {
         type: 'parameters',
-        help: referenceHelp('a', sideAMeaning),
+        help: referenceHelp('AB', sideAMeaning),
         sections: [
           baseSection('pyramid', pyramidBaseKeys, choices.pyramidBaseType),
-          section('pyramid-height', 'Висота', [ratioField('pyramidHeightRatio', 'Висота піраміди h')]),
+          // The foot of the altitude from S is not a named point, and a lateral edge such as SA is not the height.
+          section('pyramid-height', 'Висота', [ratioField('pyramidHeightRatio', 'Висота')], { help: pyramidHeightHelp }),
           tiltSection(
             'pyramid',
             'pyramid-apex',

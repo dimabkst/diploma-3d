@@ -378,6 +378,37 @@ describe('createPreviewGlb shading', () => {
     expect(Math.max(...edgeHeights)).toBeGreaterThan(0.04 + 0.03);
   });
 
+  it('lifts the rim of a ball’s cut evenly all round: the facets beside it count as one surface, not as planes of their own', async () => {
+    const kernel = await loadGeometryKernel();
+    // At 45 % of r = 40 mm the plane is z = 58 mm; on the cap two facets about 2° apart meet each rim vertex, which solved as
+    // separate planes drove the offset several lifts along the rim and, shortened, off the surfaces in bumps.
+    const upper = generateModel(kernel, {
+      shape: { kind: 'ball' },
+      scale: { longestDimensionMm: 80 },
+      section: { type: 'horizontal', offsetPercent: 45 },
+    }).solids.find((solid) => solid.part === 'upper');
+    if (upper === undefined) throw new Error('No upper part');
+    const { edges } = await readPrimitives(await createPreviewGlb([{ ...upper, smoothShading: true }]));
+    const rim = Array.from({ length: upper.mesh.positions.length / 3 }, (_, vertex) => vertexAt(upper.mesh, vertex)).filter(
+      ([, , z]) => Math.abs(z - 58) < 1e-4,
+    );
+    const endpoints = vectors(edges?.getAttribute('POSITION') ?? null).map(([x, y, z]): Vec3 => [x * 1000, -z * 1000, y * 1000]);
+    // The outline is the rim itself, one segment per rim edge, nothing else.
+    expect(endpoints).toHaveLength(2 * rim.length);
+    const heights = endpoints.map(([, , z]) => z - 58);
+    expect(Math.max(...heights) - Math.min(...heights)).toBeLessThan(1e-3);
+    // Below the plane, as the cap lies above it, and out of the sphere; each point beside its own rim vertex, not along the rim.
+    expect(Math.max(...heights)).toBeLessThan(0);
+    for (const point of endpoints) {
+      const nearest = rim.reduce((best, corner) =>
+        Math.hypot(...subtract(corner, point)) < Math.hypot(...subtract(best, point)) ? corner : best,
+      );
+      const angle = Math.atan2(point[1], point[0]) - Math.atan2(nearest[1], nearest[0]);
+      expect(Math.abs(Math.sin(angle)) * Math.hypot(nearest[0], nearest[1])).toBeLessThan(0.01);
+      expect(Math.hypot(point[0], point[1]) - Math.hypot(nearest[0], nearest[1])).toBeGreaterThan(0);
+    }
+  });
+
   it('keeps exactly flat normals for polyhedra and when smooth shading is off', async () => {
     for (const [spec, smoothShading] of [
       [{ shape: { kind: 'prism', baseSides: 8, heightRatio: 0.25 }, scale: { longestDimensionMm: 80 } }, undefined],

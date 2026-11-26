@@ -12,7 +12,7 @@ import {
   shapeSelect,
 } from './helpers.ts';
 
-type Field = 'Зміщення X' | 'Зміщення Y' | 'Висота h' | 'Сторона основи b' | 'Кут α';
+type Field = 'Зміщення X' | 'Зміщення Y' | 'Висота AA₁' | 'Висота' | 'Сторона AD' | 'Кут BAD';
 
 const entry = (page: Page, field: Field) => page.getByLabel(field, { exact: true });
 const slider = (page: Page, field: Field) => page.getByRole('slider', { name: `${field}: повзунок`, exact: true });
@@ -69,7 +69,7 @@ test('oblique prism: offsets tilt the square prism, change the 3MF, and can be r
   await openSection(page, 'Основа');
   await openSection(page, 'Висота');
   await page.getByLabel('Багатокутник', { exact: true }).selectOption({ label: 'Квадрат' });
-  await entry(page, 'Висота h').fill('1');
+  await entry(page, 'Висота AA₁').fill('1');
 
   // The tilt stays collapsed; its summary still says the prism is right.
   await expect(tiltSection(page)).not.toHaveAttribute('open');
@@ -86,15 +86,18 @@ test('oblique prism: offsets tilt the square prism, change the 3MF, and can be r
   await expect(help).toHaveAttribute('aria-expanded', 'false');
   await help.click();
   await expect(help).toHaveAttribute('aria-expanded', 'true');
-  await expect(page.getByText('X — уздовж сторони a, Y — перпендикулярно до неї')).toBeVisible();
+  await expect(page.getByText('X — уздовж AB, Y — перпендикулярно до AB')).toBeVisible();
   await help.press('Enter');
-  await expect(page.getByText('X — уздовж сторони a, Y — перпендикулярно до неї')).toBeHidden();
+  await expect(page.getByText('X — уздовж AB, Y — перпендикулярно до AB')).toBeHidden();
 
   // The reference case: h = a and the upper base moved by a along X. The box is 2a × a × a, so a = h = 40 mm and the
   // volume is a²h = 64 000 mm³.
   await entry(page, 'Зміщення X').fill('1');
   await expect(status(page)).toHaveText(/^Нахил\s*похила\s*$/);
   await expect(resetButton(page)).toBeEnabled();
+  // Leaning, AA₁ is a slanted lateral edge, no longer the height: the field keeps its value under the plain name.
+  await expect(entry(page, 'Висота AA₁')).toHaveCount(0);
+  await expect(entry(page, 'Висота')).toHaveValue('1');
   const reference = geometry(1, 90, 1, 1, 0);
   await expectPreviewOf(page, 'Призма · 80 × 40 × 40 мм');
   const { measurements } = await downloadThreeMf(page);
@@ -140,7 +143,7 @@ test('oblique prism: offsets tilt the square prism, change the 3MF, and can be r
   await resetButton(page).click();
   await expect(offsetX).toHaveValue('0');
   await expect(entry(page, 'Зміщення Y')).toHaveValue('0');
-  await expect(entry(page, 'Висота h')).toHaveValue('1');
+  await expect(entry(page, 'Висота AA₁')).toHaveValue('1');
   await expect(page.getByLabel('Багатокутник', { exact: true }).locator('option:checked')).toHaveText('Квадрат');
   await expect(status(page)).toHaveText(/^Нахил\s*пряма\s*$/);
   await expect(resetButton(page)).toBeDisabled();
@@ -159,9 +162,9 @@ test('oblique parallelepiped: offsets over a rectangle and a rhombus, with the r
   await openSection(page, 'Нахил');
 
   // α = 90°: an oblique solid over a 40 × 60 mm rectangle, h = 80 mm, the top moved by (20, −20) mm.
-  await entry(page, 'Сторона основи b').fill('1,5');
-  await entry(page, 'Висота h').fill('2');
-  await entry(page, 'Кут α').fill('90');
+  await entry(page, 'Сторона AD').fill('1,5');
+  await entry(page, 'Висота AA₁').fill('2');
+  await entry(page, 'Кут BAD').fill('90');
   await entry(page, 'Зміщення X').fill('0,5');
   await entry(page, 'Зміщення Y').fill('-0,5');
   await expect(status(page)).toHaveText(/^Нахил\s*похилий\s*$/);
@@ -173,9 +176,9 @@ test('oblique parallelepiped: offsets over a rectangle and a rhombus, with the r
   await expectDownload(page, 'parallelepiped.3mf', rectangle);
 
   // A rhombus with α = 60° and the top moved across the base.
-  await entry(page, 'Сторона основи b').fill('1');
-  await entry(page, 'Висота h').fill('1');
-  await entry(page, 'Кут α').fill('60');
+  await entry(page, 'Сторона AD').fill('1');
+  await entry(page, 'Висота').fill('1');
+  await entry(page, 'Кут BAD').fill('60');
   await entry(page, 'Зміщення X').fill('-0,25');
   await entry(page, 'Зміщення Y').fill('1,1');
   const rhombus = geometry(1, 60, 1, -0.25, 1.1);
@@ -183,8 +186,8 @@ test('oblique parallelepiped: offsets over a rectangle and a rhombus, with the r
   await expectDownload(page, 'parallelepiped.3mf', rhombus);
 
   await resetButton(page).click();
-  await expect(entry(page, 'Кут α')).toHaveValue('60');
-  await expect(entry(page, 'Сторона основи b')).toHaveValue('1');
+  await expect(entry(page, 'Кут BAD')).toHaveValue('60');
+  await expect(entry(page, 'Сторона AD')).toHaveValue('1');
   await expect(status(page)).toHaveText(/^Нахил\s*прямий\s*$/);
   await expectPreviewOf(page, summaryOf('Паралелепіпед', geometry(1, 60, 1, 0, 0)));
   await expectDownload(page, 'parallelepiped.3mf', geometry(1, 60, 1, 0, 0));
@@ -236,7 +239,7 @@ test('oblique prism: offsets belong to each shape and a change never offers outd
   await entry(page, 'Зміщення X').fill('1');
   const prism = geometry(1, 90, 1, 1, 0);
   await page.getByLabel('Багатокутник', { exact: true }).selectOption({ label: 'Квадрат' });
-  await entry(page, 'Висота h').fill('1');
+  await entry(page, 'Висота').fill('1');
   await expectPreviewOf(page, summaryOf('Призма', prism));
 
   // Edit an offset and read the download button in the same task, before any rebuild can run.

@@ -17,10 +17,10 @@ type BaseSides = 3 | 4 | 5 | 6 | 8;
 const PYRAMID = 'Піраміда';
 const TETRAHEDRON = 'Правильний тетраедр';
 const baseSelect = (page: Page) => page.getByLabel('Багатокутник', { exact: true });
-const heightRatio = (page: Page) => page.getByLabel('Висота піраміди h', { exact: true });
-const heightSlider = (page: Page) => page.getByRole('slider', { name: 'Висота піраміди h: повзунок', exact: true });
+const heightRatio = (page: Page) => page.getByLabel('Висота', { exact: true });
+const heightSlider = (page: Page) => page.getByRole('slider', { name: 'Висота: повзунок', exact: true });
 const stepButton = (page: Page, action: 'зменшити' | 'збільшити') =>
-  page.getByRole('button', { name: `Висота піраміди h: ${action}`, exact: true });
+  page.getByRole('button', { name: `Висота: ${action}`, exact: true });
 
 const baseNames: Readonly<Record<BaseSides, string>> = {
   3: 'Рівносторонній трикутник',
@@ -230,7 +230,7 @@ test('pyramid: switching shapes keeps the pyramid and prism parameters apart', a
   await openAllSections(page);
   // The prism has its own polygon and height fields.
   await expect(baseSelect(page).locator('option:checked')).toHaveText(baseNames[3]);
-  await expect(page.getByLabel('Висота h', { exact: true })).toHaveValue('2');
+  await expect(page.getByLabel('Висота AA₁', { exact: true })).toHaveValue('2');
   await expectPreviewOf(page, 'Призма · 40 × 34,6 × 80 мм');
 
   await shapeSelect(page).selectOption({ label: TETRAHEDRON });

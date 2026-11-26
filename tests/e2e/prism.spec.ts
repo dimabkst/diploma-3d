@@ -18,10 +18,10 @@ type BaseSides = 3 | 4 | 5 | 6 | 8;
 
 const NAME = 'Призма';
 const baseSelect = (page: Page) => page.getByLabel('Багатокутник', { exact: true });
-const heightRatio = (page: Page) => page.getByLabel('Висота h', { exact: true });
-const heightSlider = (page: Page) => page.getByRole('slider', { name: 'Висота h: повзунок', exact: true });
+const heightRatio = (page: Page) => page.getByLabel('Висота AA₁', { exact: true });
+const heightSlider = (page: Page) => page.getByRole('slider', { name: 'Висота AA₁: повзунок', exact: true });
 const stepButton = (page: Page, action: 'зменшити' | 'збільшити') =>
-  page.getByRole('button', { name: `Висота h: ${action}`, exact: true });
+  page.getByRole('button', { name: `Висота AA₁: ${action}`, exact: true });
 
 const baseNames: Readonly<Record<BaseSides, string>> = {
   3: 'Рівносторонній трикутник',
@@ -210,7 +210,7 @@ test('prism: switching shapes keeps the prism base and height and the cuboid rat
 
   await shapeSelect(page).selectOption('cuboid');
   await openAllSections(page);
-  await expect(page.getByLabel('Висота c', { exact: true })).toHaveValue('2');
+  await expect(page.getByLabel('Висота AA₁', { exact: true })).toHaveValue('2');
   await expectPreviewOf(page, 'Прямокутний паралелепіпед · 40 × 60 × 80 мм');
 
   await shapeSelect(page).selectOption({ label: NAME });

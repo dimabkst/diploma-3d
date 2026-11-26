@@ -14,7 +14,7 @@ import {
   shapeSelect,
 } from './helpers.ts';
 
-type Field = 'Сторона основи b' | 'Висота h' | 'Кут α';
+type Field = 'Сторона AD' | 'Висота AA₁' | 'Висота' | 'Кут BAD';
 
 const NAME = 'Паралелепіпед';
 const entry = (page: Page, field: Field) => page.getByLabel(field, { exact: true });
@@ -48,9 +48,9 @@ const summary = (b0: number, h0: number, angleDeg: number) =>
     .join(' × ')} мм`;
 
 async function setFields(page: Page, b: string, h: string, angle: string): Promise<void> {
-  await entry(page, 'Сторона основи b').fill(b);
-  await entry(page, 'Висота h').fill(h);
-  await entry(page, 'Кут α').fill(angle);
+  await entry(page, 'Сторона AD').fill(b);
+  await entry(page, 'Висота AA₁').fill(h);
+  await entry(page, 'Кут BAD').fill(angle);
 }
 
 async function expectDownloadedParallelepiped(page: Page, b0: number, h0: number, angleDeg: number): Promise<void> {
@@ -76,13 +76,13 @@ test('parallelepiped: side ratio, height and angle drive the preview, its dimens
   await openAllSections(page);
 
   // Defaults: a rhombus with α = 60° and h = a. The base is 1,5a wide, so a = b = h = 80 / 1,5 ≈ 53,3 mm.
-  await expect(entry(page, 'Сторона основи b')).toHaveValue('1');
-  await expect(entry(page, 'Висота h')).toHaveValue('1');
-  await expect(entry(page, 'Кут α')).toHaveValue('60');
+  await expect(entry(page, 'Сторона AD')).toHaveValue('1');
+  await expect(entry(page, 'Висота AA₁')).toHaveValue('1');
+  await expect(entry(page, 'Кут BAD')).toHaveValue('60');
   // Groups: the base and the height open, the optional tilt collapsed; the base explains itself on demand.
   await expect(page.locator('summary')).toHaveText([/^Основа/, /^Висота/, /^Нахил/, /^Переріз/]);
   await page.getByRole('button', { name: 'Як задано паралелограм?' }).click();
-  await expect(page.getByText('Сторонами a і b та кутом α між ними')).toBeVisible();
+  await expect(page.getByText('Сторонами AB і AD та кутом BAD між ними')).toBeVisible();
   await expect(page.getByRole('term')).toHaveCount(0);
   await expectPreviewOf(page, summary(1, 1, 60));
   await expectDownloadedParallelepiped(page, 1, 1, 60);
@@ -103,45 +103,45 @@ test('parallelepiped: the controls keep typed values between steps and step to t
   await expectPreviewOf(page, summary(1, 1, 60));
 
   // The angle moves in 5° steps: 62° steps down to 60° and up to 65°, and a typed 62° is kept as typed.
-  const angle = entry(page, 'Кут α');
+  const angle = entry(page, 'Кут BAD');
   await angle.fill('62');
   await angle.blur();
   await expect(angle).toHaveValue('62');
-  await expect(slider(page, 'Кут α')).toHaveValue('62');
+  await expect(slider(page, 'Кут BAD')).toHaveValue('62');
   await expectPreviewOf(page, summary(1, 1, 62));
-  await stepButton(page, 'Кут α', 'зменшити').click();
+  await stepButton(page, 'Кут BAD', 'зменшити').click();
   await expect(angle).toHaveValue('60');
   await angle.fill('62');
-  await stepButton(page, 'Кут α', 'збільшити').click();
+  await stepButton(page, 'Кут BAD', 'збільшити').click();
   await expect(angle).toHaveValue('65');
   await angle.press('ArrowUp');
   await expect(angle).toHaveValue('70');
-  await slider(page, 'Кут α').press('ArrowLeft');
+  await slider(page, 'Кут BAD').press('ArrowLeft');
   await expect(angle).toHaveValue('65');
   await angle.fill('72.5');
   await angle.blur();
   await expect(angle).toHaveValue('72.5');
-  await expect(slider(page, 'Кут α')).toHaveAttribute('aria-valuetext', '72,5');
+  await expect(slider(page, 'Кут BAD')).toHaveAttribute('aria-valuetext', '72,5');
 
   // The limits 15° and 165° are reachable and stop stepping.
-  await slider(page, 'Кут α').press('Home');
+  await slider(page, 'Кут BAD').press('Home');
   await expect(angle).toHaveValue('15');
-  await expect(stepButton(page, 'Кут α', 'зменшити')).toBeDisabled();
+  await expect(stepButton(page, 'Кут BAD', 'зменшити')).toBeDisabled();
   await expectPreviewOf(page, summary(1, 1, 15));
-  await slider(page, 'Кут α').press('End');
+  await slider(page, 'Кут BAD').press('End');
   await expect(angle).toHaveValue('165');
-  await expect(stepButton(page, 'Кут α', 'збільшити')).toBeDisabled();
+  await expect(stepButton(page, 'Кут BAD', 'збільшити')).toBeDisabled();
   await expectPreviewOf(page, summary(1, 1, 165));
 
   // Both ratios use the 0,25 grid with the decimal comma or point.
-  const side = entry(page, 'Сторона основи b');
+  const side = entry(page, 'Сторона AD');
   await side.fill('2.05');
-  await stepButton(page, 'Сторона основи b', 'зменшити').click();
+  await stepButton(page, 'Сторона AD', 'зменшити').click();
   await expect(side).toHaveValue('2');
-  await stepButton(page, 'Висота h', 'збільшити').click();
-  await expect(entry(page, 'Висота h')).toHaveValue('1,25');
-  await slider(page, 'Висота h').press('ArrowRight');
-  await expect(entry(page, 'Висота h')).toHaveValue('1,5');
+  await stepButton(page, 'Висота AA₁', 'збільшити').click();
+  await expect(entry(page, 'Висота AA₁')).toHaveValue('1,25');
+  await slider(page, 'Висота AA₁').press('ArrowRight');
+  await expect(entry(page, 'Висота AA₁')).toHaveValue('1,5');
   await angle.fill('62');
 
   // The download carries the latest values.
@@ -164,17 +164,17 @@ test('parallelepiped: an invalid angle is explained and blocks the download unti
     ['170', 'Допустимі значення — від 15° до 165°.'],
     ['14,9', 'Допустимі значення — від 15° до 165°.'],
   ] as const) {
-    await entry(page, 'Кут α').fill(text);
-    await expect(entry(page, 'Кут α')).toHaveAttribute('aria-invalid', 'true');
+    await entry(page, 'Кут BAD').fill(text);
+    await expect(entry(page, 'Кут BAD')).toHaveAttribute('aria-invalid', 'true');
     await expect(page.getByText(message)).toBeVisible();
     await expect(previewViewport(page)).toHaveAttribute('data-preview-status', 'invalid');
     await expect(downloadButton(page)).toBeDisabled();
-    await expect(slider(page, 'Кут α')).toBeDisabled();
+    await expect(slider(page, 'Кут BAD')).toBeDisabled();
     // The other fields stay editable and valid.
-    await expect(entry(page, 'Висота h')).not.toHaveAttribute('aria-invalid', 'true');
+    await expect(entry(page, 'Висота AA₁')).not.toHaveAttribute('aria-invalid', 'true');
   }
 
-  await entry(page, 'Кут α').fill('45');
+  await entry(page, 'Кут BAD').fill('45');
   await expectPreviewOf(page, summary(1, 1, 45));
   expect(errors).toEqual([]);
 });
@@ -206,7 +206,7 @@ test('parallelepiped: switching shapes keeps its values apart and never offers o
   await expectPreviewOf(page, summary(1.75, 0.75, 50));
 
   // Edit the angle and read the download button in the same task, before any rebuild can run.
-  const disabledRightAfterEdit = await entry(page, 'Кут α').evaluate(async (input: HTMLInputElement) => {
+  const disabledRightAfterEdit = await entry(page, 'Кут BAD').evaluate(async (input: HTMLInputElement) => {
     input.value = '130';
     input.dispatchEvent(new Event('input', { bubbles: true }));
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -219,19 +219,19 @@ test('parallelepiped: switching shapes keeps its values apart and never offers o
   // The cuboid and prism keep their own ratios; the same label "Висота h" belongs to each shape separately.
   await shapeSelect(page).selectOption('cuboid');
   await openAllSections(page);
-  await expect(page.getByLabel('Ширина b', { exact: true })).toHaveValue('1,5');
+  await expect(page.getByLabel('Ширина AD', { exact: true })).toHaveValue('1,5');
   await expectPreviewOf(page, 'Прямокутний паралелепіпед · 40 × 60 × 80 мм');
   await shapeSelect(page).selectOption('prism');
   await openAllSections(page);
-  await expect(entry(page, 'Висота h')).toHaveValue('2');
-  await expect(entry(page, 'Кут α')).toHaveCount(0);
+  await expect(entry(page, 'Висота AA₁')).toHaveValue('2');
+  await expect(entry(page, 'Кут BAD')).toHaveCount(0);
   await expectPreviewOf(page, 'Призма · 40 × 34,6 × 80 мм');
 
   // Rapid switches end on the parallelepiped with its last values.
   for (const kind of ['cube', 'parallelepiped', 'ball', 'cuboid', 'parallelepiped']) await shapeSelect(page).selectOption(kind);
-  await expect(entry(page, 'Сторона основи b')).toHaveValue('1,75');
-  await expect(entry(page, 'Висота h')).toHaveValue('0,75');
-  await expect(entry(page, 'Кут α')).toHaveValue('130');
+  await expect(entry(page, 'Сторона AD')).toHaveValue('1,75');
+  await expect(entry(page, 'Висота AA₁')).toHaveValue('0,75');
+  await expect(entry(page, 'Кут BAD')).toHaveValue('130');
   await expectPreviewOf(page, summary(1.75, 0.75, 130));
   await expectDownloadedParallelepiped(page, 1.75, 0.75, 130);
 });

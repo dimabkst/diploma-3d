@@ -208,7 +208,7 @@ async function trapezoidB1D1(page: Page, height: string): Promise<void> {
   await openSection(page, 'Основа');
   await page.getByLabel('Тип основи', { exact: true }).selectOption({ label: 'Трапеція' });
   await openSection(page, 'Висота');
-  await page.getByLabel('Висота призми h', { exact: true }).fill(height);
+  await page.getByLabel('Висота AA₁', { exact: true }).fill(height);
   await openSection(page, 'Переріз');
   await page.getByLabel('Тип перерізу', { exact: true }).selectOption({ label: 'Через ребро або діагональ' });
   await openAllSections(page);
@@ -231,12 +231,12 @@ test('the reported B₁D₁ at 45°: no switch to the thin plane; one made thin 
   await expect(other(page)).toHaveCount(0);
   // Lower, both planes are usable: switched to the other one.
   await openSection(page, 'Висота');
-  await page.getByLabel('Висота призми h', { exact: true }).fill('1,5');
+  await page.getByLabel('Висота AA₁', { exact: true }).fill('1,5');
   await expect(other(page)).toBeVisible();
   await other(page).click();
   expect(await download(page)).toMatchObject({ line: ['B1', 'D1'], angleDeg: 135 });
   // Taller again: that plane is now too thin. Said inline, the angle and the segment kept, the button the way back.
-  await page.getByLabel('Висота призми h', { exact: true }).fill('2');
+  await page.getByLabel('Висота AA₁', { exact: true }).fill('2');
   await expect(
     page.getByText(/^За цього кута одна з частин була б надто тонкою\. .* Або оберіть «Інше положення перерізу»\.$/),
   ).toBeVisible();

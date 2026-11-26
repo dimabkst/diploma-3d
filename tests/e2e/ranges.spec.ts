@@ -24,21 +24,21 @@ test('pyramid: the entry, slider and buttons share 0,25…4, keep values between
   await page.goto('/');
   await shapeSelect(page).selectOption({ label: 'Піраміда' });
   await openAllSections(page);
-  const height = entry(page, 'Висота піраміди h');
-  const heightSlider = slider(page, 'Висота піраміди h');
+  const height = entry(page, 'Висота');
+  const heightSlider = slider(page, 'Висота');
   await expect(heightSlider).toHaveAttribute('min', '0.25');
   await expect(heightSlider).toHaveAttribute('max', '4');
 
   // Both ends are allowed: the square base a = 80 mm with h = a/4 = 20 mm, V = a²h/3.
   await heightSlider.press('Home');
   await expect(height).toHaveValue('0,25');
-  await expect(stepButton(page, 'Висота піраміди h', 'зменшити')).toBeDisabled();
+  await expect(stepButton(page, 'Висота', 'зменшити')).toBeDisabled();
   await expectPreviewOf(page, 'Піраміда · 80 × 80 × 20 мм');
   const { measurements } = await downloadThreeMf(page);
   expectSizesClose(measurements.size, [80, 80, 20], 1e-3);
   expect(Math.abs(measurements.volume / ((80 ** 2 * 20) / 3) - 1)).toBeLessThan(1e-6);
   await height.fill('4');
-  await expect(stepButton(page, 'Висота піраміди h', 'збільшити')).toBeDisabled();
+  await expect(stepButton(page, 'Висота', 'збільшити')).toBeDisabled();
   await expectPreviewOf(page, 'Піраміда · 20 × 20 × 80 мм');
 
   // A typed value between the steps stays as typed.
@@ -55,7 +55,7 @@ test('pyramid: the entry, slider and buttons share 0,25…4, keep values between
     await expect(downloadButton(page)).toBeDisabled();
     await expect(heightSlider).toHaveAttribute('min', '0.25');
     await expect(heightSlider).toHaveAttribute('max', '4');
-    await expect(stepButton(page, 'Висота піраміди h', 'збільшити')).toBeDisabled();
+    await expect(stepButton(page, 'Висота', 'збільшити')).toBeDisabled();
   }
 
   // The print size scales the same proportions; the reset restores the figure, not the print size.

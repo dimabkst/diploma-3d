@@ -13,11 +13,11 @@ import {
   shapeSelect,
 } from './helpers.ts';
 
-type RatioField = 'Ширина b' | 'Висота c';
+type RatioField = 'Ширина AD' | 'Висота AA₁';
 
 const entry = (page: Page, field: RatioField) => page.getByLabel(field, { exact: true });
-const widthRatio = (page: Page) => entry(page, 'Ширина b');
-const heightRatio = (page: Page) => entry(page, 'Висота c');
+const widthRatio = (page: Page) => entry(page, 'Ширина AD');
+const heightRatio = (page: Page) => entry(page, 'Висота AA₁');
 const slider = (page: Page, field: RatioField) => page.getByRole('slider', { name: `${field}: повзунок`, exact: true });
 const stepButton = (page: Page, field: RatioField, action: 'зменшити' | 'збільшити') =>
   page.getByRole('button', { name: `${field}: ${action}`, exact: true });
@@ -49,8 +49,8 @@ test('cuboid: ratios drive the preview and the downloaded 3MF', async ({ page })
 
   await shapeSelect(page).selectOption('cuboid');
   await openAllSections(page);
-  await expectSynchronized(page, 'Ширина b', '1,5');
-  await expectSynchronized(page, 'Висота c', '2');
+  await expectSynchronized(page, 'Ширина AD', '1,5');
+  await expectSynchronized(page, 'Висота AA₁', '2');
   await expectPreviewOf(page, `${NAME} · 40 × 60 × 80 мм`);
   // Z-up a × b × c becomes glTF X × Y × Z = a × c × b: the height is the viewer's vertical axis.
   await expectViewerBox(page, [40, 60, 80]);
@@ -89,17 +89,17 @@ test('cuboid: rapid edits never offer outdated geometry for download', async ({ 
   await expectPreviewOf(page, `${NAME} · 26,7 × 80 × 53,3 мм`);
 
   // The same holds for a stepping button and for the slider.
-  const disabledRightAfterStep = await stepButton(page, 'Ширина b', 'зменшити').evaluate(async (button: HTMLButtonElement) => {
+  const disabledRightAfterStep = await stepButton(page, 'Ширина AD', 'зменшити').evaluate(async (button: HTMLButtonElement) => {
     button.click();
     await new Promise((resolve) => setTimeout(resolve, 0));
     const download = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.includes('3MF'));
     return download?.disabled;
   });
   expect(disabledRightAfterStep).toBe(true);
-  await expectSynchronized(page, 'Ширина b', '2,75');
+  await expectSynchronized(page, 'Ширина AD', '2,75');
   await expectPreviewOf(page, cuboidSummary(2.75, 2));
 
-  const disabledRightAfterDrag = await slider(page, 'Ширина b').evaluate(async (input: HTMLInputElement) => {
+  const disabledRightAfterDrag = await slider(page, 'Ширина AD').evaluate(async (input: HTMLInputElement) => {
     input.value = '1.3';
     input.dispatchEvent(new Event('input', { bubbles: true }));
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -107,7 +107,7 @@ test('cuboid: rapid edits never offer outdated geometry for download', async ({ 
     return download?.disabled;
   });
   expect(disabledRightAfterDrag).toBe(true);
-  await expectSynchronized(page, 'Ширина b', '1,25');
+  await expectSynchronized(page, 'Ширина AD', '1,25');
 
   for (const value of ['0,75', '4', '1,25', '0,5']) {
     await heightRatio(page).fill(value);
@@ -130,68 +130,68 @@ test('cuboid: typed values are kept exactly until the user steps or drags', asyn
   // exactly instead of a value rounded to its grid.
   await widthRatio(page).fill('2.05');
   await widthRatio(page).blur();
-  await expectSynchronized(page, 'Ширина b', '2.05');
+  await expectSynchronized(page, 'Ширина AD', '2.05');
   await expectPreviewOf(page, cuboidSummary(2.05, 2));
   await heightRatio(page).fill('1,1');
   await heightRatio(page).blur();
-  await expectSynchronized(page, 'Висота c', '1,1');
+  await expectSynchronized(page, 'Висота AA₁', '1,1');
   await expectPreviewOf(page, cuboidSummary(2.05, 1.1));
   await expect(widthRatio(page)).toHaveValue('2.05');
 
   // Buttons move to the neighbouring quarters.
-  await stepButton(page, 'Ширина b', 'зменшити').click();
-  await expectSynchronized(page, 'Ширина b', '2');
-  await stepButton(page, 'Ширина b', 'збільшити').click();
-  await expectSynchronized(page, 'Ширина b', '2,25');
+  await stepButton(page, 'Ширина AD', 'зменшити').click();
+  await expectSynchronized(page, 'Ширина AD', '2');
+  await stepButton(page, 'Ширина AD', 'збільшити').click();
+  await expectSynchronized(page, 'Ширина AD', '2,25');
   await expectPreviewOf(page, cuboidSummary(2.25, 1.1));
 
   // Arrow keys in the entry: one press is exactly one step.
   await heightRatio(page).focus();
   await page.keyboard.press('ArrowUp');
-  await expectSynchronized(page, 'Висота c', '1,25');
+  await expectSynchronized(page, 'Висота AA₁', '1,25');
   await page.keyboard.press('ArrowDown');
-  await expectSynchronized(page, 'Висота c', '1');
+  await expectSynchronized(page, 'Висота AA₁', '1');
   await page.keyboard.press('ArrowDown');
-  await expectSynchronized(page, 'Висота c', '0,75');
+  await expectSynchronized(page, 'Висота AA₁', '0,75');
 
   // The buttons work from the keyboard; the tab order is entry, decrease, slider, increase.
-  await stepButton(page, 'Висота c', 'збільшити').focus();
+  await stepButton(page, 'Висота AA₁', 'збільшити').focus();
   await page.keyboard.press('Enter');
   await page.keyboard.press('Space');
-  await expectSynchronized(page, 'Висота c', '1,25');
+  await expectSynchronized(page, 'Висота AA₁', '1,25');
   await page.keyboard.press('Shift+Tab');
-  await expect(slider(page, 'Висота c')).toBeFocused();
+  await expect(slider(page, 'Висота AA₁')).toBeFocused();
   await page.keyboard.press('Shift+Tab');
   await page.keyboard.press('Space');
-  await expectSynchronized(page, 'Висота c', '1');
+  await expectSynchronized(page, 'Висота AA₁', '1');
 
   // Slider keys: arrows move by one quarter per press, Home and End jump to the limits.
-  await slider(page, 'Висота c').focus();
+  await slider(page, 'Висота AA₁').focus();
   await page.keyboard.press('ArrowRight');
-  await expectSynchronized(page, 'Висота c', '1,25');
+  await expectSynchronized(page, 'Висота AA₁', '1,25');
   await page.keyboard.press('ArrowUp');
-  await expectSynchronized(page, 'Висота c', '1,5');
+  await expectSynchronized(page, 'Висота AA₁', '1,5');
   await page.keyboard.press('ArrowLeft');
   await page.keyboard.press('ArrowDown');
-  await expectSynchronized(page, 'Висота c', '1');
+  await expectSynchronized(page, 'Висота AA₁', '1');
   await page.keyboard.press('End');
-  await expectSynchronized(page, 'Висота c', '4');
+  await expectSynchronized(page, 'Висота AA₁', '4');
   await page.keyboard.press('ArrowRight');
-  await expectSynchronized(page, 'Висота c', '4');
-  await expect(stepButton(page, 'Висота c', 'збільшити')).toBeDisabled();
+  await expectSynchronized(page, 'Висота AA₁', '4');
+  await expect(stepButton(page, 'Висота AA₁', 'збільшити')).toBeDisabled();
   await page.keyboard.press('Home');
-  await expectSynchronized(page, 'Висота c', '0,25');
-  await expect(stepButton(page, 'Висота c', 'зменшити')).toBeDisabled();
+  await expectSynchronized(page, 'Висота AA₁', '0,25');
+  await expect(stepButton(page, 'Висота AA₁', 'зменшити')).toBeDisabled();
   await page.keyboard.press('ArrowLeft');
-  await expectSynchronized(page, 'Висота c', '0,25');
+  await expectSynchronized(page, 'Висота AA₁', '0,25');
   await page.keyboard.press('ArrowUp');
-  await expectSynchronized(page, 'Висота c', '0,5');
+  await expectSynchronized(page, 'Висота AA₁', '0,5');
 
   // An off-grid value stays until a slider key changes it explicitly.
   await heightRatio(page).fill('1.1');
-  await expectSynchronized(page, 'Висота c', '1.1');
-  await slider(page, 'Висота c').press('ArrowLeft');
-  await expectSynchronized(page, 'Висота c', '1');
+  await expectSynchronized(page, 'Висота AA₁', '1.1');
+  await slider(page, 'Висота AA₁').press('ArrowLeft');
+  await expectSynchronized(page, 'Висота AA₁', '1');
 
   // The geometry and the download follow the last selected values: b = 2,25 × a and c = 1 × a.
   await expectPreviewOf(page, cuboidSummary(2.25, 1));
@@ -213,9 +213,9 @@ test('cuboid: dragging the slider selects the nearest quarter and updates the mo
 
   // The off-grid value is shown exactly until the drag starts.
   await widthRatio(page).fill('2,05');
-  await expectSynchronized(page, 'Ширина b', '2,05');
+  await expectSynchronized(page, 'Ширина AD', '2,05');
 
-  const track = await slider(page, 'Ширина b').boundingBox();
+  const track = await slider(page, 'Ширина AD').boundingBox();
   if (track === null) throw new Error('The width slider is not visible.');
   const y = track.y + track.height / 2;
   const readWidth = async () => Number((await widthRatio(page).inputValue()).replace(',', '.'));
@@ -223,7 +223,7 @@ test('cuboid: dragging the slider selects the nearest quarter and updates the mo
   // Press at the right end and drag across the track with the mouse; every intermediate value is a quarter.
   await page.mouse.move(track.x + track.width - 2, y);
   await page.mouse.down();
-  await expectSynchronized(page, 'Ширина b', '4');
+  await expectSynchronized(page, 'Ширина AD', '4');
   const seen = new Set<number>();
   for (let step = 1; step <= 6; step += 1) {
     await page.mouse.move(track.x + track.width * (1 - step / 8), y, { steps: 3 });
@@ -236,15 +236,15 @@ test('cuboid: dragging the slider selects the nearest quarter and updates the mo
   const dropped = await readWidth();
   expect(dropped).toBeGreaterThan(0.25);
   expect(dropped).toBeLessThan(2);
-  await expectSynchronized(page, 'Ширина b', String(dropped).replace('.', ','));
+  await expectSynchronized(page, 'Ширина AD', String(dropped).replace('.', ','));
 
   // Dragging beyond the left end selects the lower limit.
   await page.mouse.move(track.x + track.width / 2, y);
   await page.mouse.down();
   await page.mouse.move(track.x - 20, y, { steps: 4 });
   await page.mouse.up();
-  await expectSynchronized(page, 'Ширина b', '0,25');
-  await expect(stepButton(page, 'Ширина b', 'зменшити')).toBeDisabled();
+  await expectSynchronized(page, 'Ширина AD', '0,25');
+  await expect(stepButton(page, 'Ширина AD', 'зменшити')).toBeDisabled();
 
   // Positions between the quarters, as a drag produces them, select the nearest quarter.
   for (const [position, text] of [
@@ -253,18 +253,18 @@ test('cuboid: dragging the slider selects the nearest quarter and updates the mo
     ['3.88', '4'],
     ['0.3', '0,25'],
   ] as const) {
-    await slider(page, 'Ширина b').evaluate((input: HTMLInputElement, value) => {
+    await slider(page, 'Ширина AD').evaluate((input: HTMLInputElement, value) => {
       input.value = value;
       input.dispatchEvent(new Event('input', { bubbles: true }));
     }, position);
-    await expectSynchronized(page, 'Ширина b', text);
+    await expectSynchronized(page, 'Ширина AD', text);
   }
 
-  await slider(page, 'Ширина b').evaluate((input: HTMLInputElement) => {
+  await slider(page, 'Ширина AD').evaluate((input: HTMLInputElement) => {
     input.value = '2.6';
     input.dispatchEvent(new Event('input', { bubbles: true }));
   });
-  await expectSynchronized(page, 'Ширина b', '2,5');
+  await expectSynchronized(page, 'Ширина AD', '2,5');
   await expectPreviewOf(page, cuboidSummary(2.5, 2));
   const { measurements } = await downloadThreeMf(page);
   expectSizesClose(measurements.size, cuboidEdges(2.5, 2), 1e-4);
@@ -295,10 +295,10 @@ test('cuboid: invalid ratios are explained and block stepping and the download u
     await expect(page.getByRole('alert')).toContainText('Модель не оновлено');
     await expect(downloadButton(page)).toBeDisabled();
     // Nothing invents a value: stepping waits until the text is valid, and the slider stays at the last valid value.
-    await expect(stepButton(page, 'Ширина b', 'зменшити')).toBeDisabled();
-    await expect(stepButton(page, 'Ширина b', 'збільшити')).toBeDisabled();
-    await expect(slider(page, 'Ширина b')).toBeDisabled();
-    await expect(slider(page, 'Ширина b')).toHaveValue('1.5');
+    await expect(stepButton(page, 'Ширина AD', 'зменшити')).toBeDisabled();
+    await expect(stepButton(page, 'Ширина AD', 'збільшити')).toBeDisabled();
+    await expect(slider(page, 'Ширина AD')).toBeDisabled();
+    await expect(slider(page, 'Ширина AD')).toHaveValue('1.5');
     await widthRatio(page).press('ArrowUp');
     await expect(widthRatio(page)).toHaveValue(text);
   }
@@ -307,7 +307,7 @@ test('cuboid: invalid ratios are explained and block stepping and the download u
   await widthRatio(page).fill('0,25');
   await heightRatio(page).fill('4');
   await expect(widthRatio(page)).not.toHaveAttribute('aria-invalid');
-  await expect(slider(page, 'Ширина b')).toBeEnabled();
+  await expect(slider(page, 'Ширина AD')).toBeEnabled();
   // L / 4 = 20 mm: a × b × c = 20 × 5 × 80 mm.
   await expectPreviewOf(page, `${NAME} · 20 × 5 × 80 мм`);
 

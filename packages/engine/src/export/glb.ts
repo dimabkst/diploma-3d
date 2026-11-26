@@ -479,7 +479,7 @@ function featureEdgeSegments(
 ): Float32Array<ArrayBuffer> {
   const firstTriangleOfEdge = new Map<string, number>();
   const edges: [number, number][] = [];
-  const adjacentNormals = new Map<number, Vec3[]>();
+  const adjacentFaces = new Map<number, AdjacentFace[]>();
 
   for (let triangle = 0; triangle < triangleCount(mesh); triangle += 1) {
     const corners = triangleAt(mesh, triangle);
@@ -496,9 +496,9 @@ function featureEdgeSegments(
       ) {
         edges.push([from, to]);
         for (const vertex of [from, to]) {
-          const normals = adjacentNormals.get(vertex) ?? [];
-          normals.push(unitNormal(mesh, triangle), unitNormal(mesh, neighbour));
-          adjacentNormals.set(vertex, normals);
+          const faces = adjacentFaces.get(vertex) ?? [];
+          for (const face of [triangle, neighbour]) faces.push({ normal: unitNormal(mesh, face), kind: newFaces?.[face] ?? 0 });
+          adjacentFaces.set(vertex, faces);
         }
       }
     }
@@ -506,16 +506,38 @@ function featureEdgeSegments(
 
   const lift = EDGE_LIFT_RELATIVE * length(measureMesh(mesh).size);
   const liftedPoints = new Map(
-    [...adjacentNormals].map(([vertex, normals]) => [
+    [...adjacentFaces].map(([vertex, faces]) => [
       vertex,
-      toGltfPosition(add(vertexAt(mesh, vertex), vertexOffset(normals, lift))),
+      toGltfPosition(add(vertexAt(mesh, vertex), vertexOffset(surfaceNormals(faces, minCosine), lift))),
     ]),
   );
   return Float32Array.from(edges.flatMap(([from, to]) => [...(liftedPoints.get(from) ?? []), ...(liftedPoints.get(to) ?? [])]));
 }
 
+/** A triangle at a vertex with a feature edge: its unit normal and its kind, as `PreviewObject.newFaces` marks it. */
+type AdjacentFace = { readonly normal: Vec3; readonly kind: number };
+
 /**
- * The offset o that puts a vertex `lift` outside the plane of every given face: n·o = lift for each unit normal n.
+ * One normal per surface meeting at a vertex: the faces of one kind within the feature-edge angle of each other are one
+ * surface, such as the facets of a ball next to a cut's rim, and take their mean normal. Solved face by face, a cut face and two
+ * facets 2° apart would be three planes: their exact offset runs up to several lifts along the rim, and shortened to the
+ * maximum it no longer clears the surfaces, so the outline would wander off the rim in bumps. Distinct faces of a polyhedron
+ * stay apart, as its feature-edge angle is that of rounding noise.
+ */
+function surfaceNormals(faces: readonly AdjacentFace[], minCosine: number): Vec3[] {
+  const surfaces: { kind: number; sum: Vec3 }[] = [];
+  for (const { normal, kind } of faces) {
+    const surface = surfaces.find(
+      (candidate) => candidate.kind === kind && dot(candidate.sum, normal) >= minCosine * length(candidate.sum),
+    );
+    if (surface === undefined) surfaces.push({ kind, sum: normal });
+    else surface.sum = add(surface.sum, normal);
+  }
+  return surfaces.map(({ sum }) => scale(sum, 1 / length(sum)));
+}
+
+/**
+ * The offset o that puts a vertex `lift` outside the plane of every given surface: n·o = lift for each unit normal n.
  * This is exact for up to three independent planes, such as at a box corner (o = lift·(±1, ±1, ±1)) or along a straight
  * edge, and a least-squares compromise where more faces meet. The solution of the regularised normal equations
  * (NᵀN + εI) o = Nᵀ·lift tends to the shortest such offset when the planes leave a direction free.

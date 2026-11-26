@@ -98,7 +98,7 @@ test('print size: an oblique prism keeps its proportions and its longest dimensi
   await shapeSelect(page).selectOption({ label: 'Призма' });
   await openAllSections(page);
   await page.getByLabel('Багатокутник', { exact: true }).selectOption({ label: 'Квадрат' });
-  await entry(page, 'Висота h').fill('1');
+  await entry(page, 'Висота AA₁').fill('1');
   await openSection(page, 'Нахил');
   await entry(page, 'Зміщення X').fill('1');
   await entry(page, 'Зміщення Y').fill('0,5');
@@ -159,19 +159,19 @@ test('reset: a changed prism at 120 mm returns to a default prism at 120 mm, kee
   // Another shape's own value, which the prism's reset must keep.
   await shapeSelect(page).selectOption({ label: 'Прямокутний паралелепіпед' });
   await openAllSections(page);
-  await entry(page, 'Ширина b').fill('3');
+  await entry(page, 'Ширина AD').fill('3');
   await shapeSelect(page).selectOption({ label: 'Призма' });
   await openAllSections(page);
 
   // Edit the triangle variant, then the trapezoid, the height and the inclination.
   await entry(page, 'Тип основи').selectOption({ label: 'Трикутник' });
   await expect(resetButton(page)).toBeEnabled();
-  await entry(page, 'Сторона основи b').fill('2');
-  await entry(page, 'Кут α').fill('97,5');
+  await entry(page, 'Сторона AC').fill('2');
+  await entry(page, 'Кут BAC').fill('97,5');
   await entry(page, 'Тип основи').selectOption({ label: 'Трапеція' });
-  await entry(page, 'Паралельна сторона b').fill('1,5');
-  await entry(page, 'Висота трапеції t').fill('0,8');
-  await entry(page, 'Висота призми h').fill('1,25');
+  await entry(page, 'Сторона CD').fill('1,5');
+  await entry(page, 'Відстань між AB і CD').fill('0,8');
+  await entry(page, 'Висота AA₁').fill('1,25');
   await openSection(page, 'Нахил');
   await entry(page, 'Зміщення X').fill('0,5');
   await entry(page, 'Зміщення Y').fill('-1');
@@ -194,7 +194,7 @@ test('reset: a changed prism at 120 mm returns to a default prism at 120 mm, kee
   await expect(shapeSelect(page).locator('option:checked')).toHaveText('Призма');
   await expect(entry(page, 'Тип основи').locator('option:checked')).toHaveText('Правильний багатокутник');
   await expect(page.getByLabel('Багатокутник', { exact: true }).locator('option:checked')).toHaveText('Рівносторонній трикутник');
-  await expect(entry(page, 'Висота h')).toHaveValue('2');
+  await expect(entry(page, 'Висота AA₁')).toHaveValue('2');
   await expect(entry(page, 'Зміщення X')).toHaveValue('0');
   await expect(entry(page, 'Зміщення Y')).toHaveValue('0');
   // The shared size is not part of the figure.
@@ -209,16 +209,16 @@ test('reset: a changed prism at 120 mm returns to a default prism at 120 mm, kee
 
   // The inactive base variants were reset too: their old edits do not reappear.
   await entry(page, 'Тип основи').selectOption({ label: 'Трикутник' });
-  await expect(entry(page, 'Сторона основи b')).toHaveValue('1');
-  await expect(entry(page, 'Кут α')).toHaveValue('60');
+  await expect(entry(page, 'Сторона AC')).toHaveValue('1');
+  await expect(entry(page, 'Кут BAC')).toHaveValue('60');
   await entry(page, 'Тип основи').selectOption({ label: 'Трапеція' });
-  await expect(entry(page, 'Паралельна сторона b')).toHaveValue('0,5');
-  await expect(entry(page, 'Висота трапеції t')).toHaveValue('0,5');
+  await expect(entry(page, 'Сторона CD')).toHaveValue('0,5');
+  await expect(entry(page, 'Відстань між AB і CD')).toHaveValue('0,5');
 
   // The cuboid kept its own value, and the size stays across shapes and a new visit.
   await shapeSelect(page).selectOption({ label: 'Прямокутний паралелепіпед' });
   await openAllSections(page);
-  await expect(entry(page, 'Ширина b')).toHaveValue('3');
+  await expect(entry(page, 'Ширина AD')).toHaveValue('3');
   await expect(sizeField(page)).toHaveValue('120');
   await page.reload();
   await expect(sizeField(page)).toHaveValue('120');
@@ -234,15 +234,15 @@ test('reset: one click recovers from an invalid draft in a prism field and leave
   await openAllSections(page);
   await expectPreviewOf(page, `Призма · ${formatSize(defaultPrism(120))}`);
 
-  await entry(page, 'Висота h').fill('');
+  await entry(page, 'Висота AA₁').fill('');
   await expect(page.getByText('Введіть значення.')).toBeVisible();
   await expect(previewViewport(page)).toHaveAttribute('data-preview-status', 'invalid');
   await expect(downloadButton(page)).toBeDisabled();
 
   await expect(resetButton(page)).toBeEnabled();
   await resetButton(page).click();
-  await expect(entry(page, 'Висота h')).toHaveValue('2');
-  await expect(entry(page, 'Висота h')).not.toHaveAttribute('aria-invalid');
+  await expect(entry(page, 'Висота AA₁')).toHaveValue('2');
+  await expect(entry(page, 'Висота AA₁')).not.toHaveAttribute('aria-invalid');
   await expect(page.getByText('Введіть значення.')).toHaveCount(0);
   await expect(sizeField(page)).toHaveValue('120');
   await expectPreviewOf(page, `Призма · ${formatSize(defaultPrism(120))}`);
@@ -302,14 +302,14 @@ test('print size in the header: 90 mm survives a prism reset in the field and in
   await openAllSections(page);
   await expectPreviewOf(page, `Призма · ${formatSize(defaultPrism(90))}`);
   await entry(page, 'Тип основи').selectOption({ label: 'Трапеція' });
-  await entry(page, 'Висота призми h').fill('1');
+  await entry(page, 'Висота AA₁').fill('1');
   await openSection(page, 'Нахил');
   await entry(page, 'Зміщення X').fill('0,75');
   await expect(downloadButton(page)).toBeEnabled({ timeout: 30_000 });
 
   await resetButton(page).click();
   await expect(entry(page, 'Тип основи').locator('option:checked')).toHaveText('Правильний багатокутник');
-  await expect(entry(page, 'Висота h')).toHaveValue('2');
+  await expect(entry(page, 'Висота AA₁')).toHaveValue('2');
   await expect(entry(page, 'Зміщення X')).toHaveValue('0');
   await expect(sizeField(page)).toHaveValue('90');
   await expectPreviewOf(page, `Призма · ${formatSize(defaultPrism(90))}`);

@@ -10,10 +10,11 @@ import {
   openSection,
   previewPlace,
   previewViewport,
+  prismHeight,
   shapeSelect,
 } from './helpers.ts';
 
-type Field = 'Сторона основи b' | 'Кут α' | 'Висота h' | 'Зміщення X' | 'Зміщення Y';
+type Field = 'Сторона AC' | 'Кут BAC' | 'Висота AA₁' | 'Висота' | 'Зміщення X' | 'Зміщення Y';
 
 const entry = (page: Page, field: Field) => page.getByLabel(field, { exact: true });
 const slider = (page: Page, field: Field) => page.getByRole('slider', { name: `${field}: повзунок`, exact: true });
@@ -75,22 +76,24 @@ test('triangle prism: the base type shows its own fields and help, and the right
   await shapeSelect(page).selectOption({ label: 'Призма' });
   await openAllSections(page);
   await expect(baseType(page).locator('option:checked')).toHaveText('Правильний багатокутник');
-  await expect(entry(page, 'Кут α')).toHaveCount(0);
+  await expect(entry(page, 'Кут BAC')).toHaveCount(0);
 
   await chooseBaseType(page, 'Трикутник');
   await expect(polygonSelect(page)).toHaveCount(0);
-  await expect(entry(page, 'Сторона основи b')).toHaveValue('1');
-  await expect(entry(page, 'Кут α')).toHaveValue('60');
+  await expect(entry(page, 'Сторона AC')).toHaveValue('1');
+  await expect(entry(page, 'Кут BAC')).toHaveValue('60');
   await page.getByRole('button', { name: 'Як задано трикутник?' }).click();
-  await expect(page.getByText('Сторонами a і b та кутом α між ними; третя сторона обчислюється автоматично.')).toBeVisible();
+  await expect(
+    page.getByText('Сторонами AB і AC та кутом BAC між ними; третя сторона BC обчислюється автоматично.'),
+  ).toBeVisible();
   // The default b = a, α = 60° with the prism's h = 2a: the equilateral triangle, a = b = c = 40 mm.
   await expectPreviewOf(page, summary(geometry(1, 60, 2)));
   await expectDownloadedTriangle(page, geometry(1, 60, 2));
 
   // The right-triangle reference: a = 80, b = 60, c = 100, h = 80 mm.
-  await entry(page, 'Сторона основи b').fill('0,75');
-  await entry(page, 'Кут α').fill('90');
-  await entry(page, 'Висота h').fill('1');
+  await entry(page, 'Сторона AC').fill('0,75');
+  await entry(page, 'Кут BAC').fill('90');
+  await entry(page, 'Висота AA₁').fill('1');
   // V = 2400 · 80 = 192 000 mm³ and S = 2 · 2400 + (80 + 60 + 100) · 80 = 24 000 mm².
   await expectPreviewOf(page, 'Призма · 80 × 60 × 80 мм');
   await expectDownloadedTriangle(page, geometry(0.75, 90, 1));
@@ -105,22 +108,22 @@ test('triangle prism: side, angle and displacement controls step and keep typed 
   await openAllSections(page);
   await chooseBaseType(page, 'Трикутник');
 
-  const angle = entry(page, 'Кут α');
+  const angle = entry(page, 'Кут BAC');
   await angle.fill('62');
-  await stepButton(page, 'Кут α', 'зменшити').click();
+  await stepButton(page, 'Кут BAC', 'зменшити').click();
   await expect(angle).toHaveValue('60');
   await angle.fill('62');
-  await stepButton(page, 'Кут α', 'збільшити').click();
+  await stepButton(page, 'Кут BAC', 'збільшити').click();
   await expect(angle).toHaveValue('65');
-  await slider(page, 'Кут α').press('End');
+  await slider(page, 'Кут BAC').press('End');
   await expect(angle).toHaveValue('165');
   await angle.fill('97,5');
   await angle.blur();
   await expect(angle).toHaveValue('97,5');
 
-  const side = entry(page, 'Сторона основи b');
+  const side = entry(page, 'Сторона AC');
   await side.fill('2.05');
-  await stepButton(page, 'Сторона основи b', 'зменшити').click();
+  await stepButton(page, 'Сторона AC', 'зменшити').click();
   await expect(side).toHaveValue('2');
   await side.press('ArrowUp');
   await expect(side).toHaveValue('2,25');
@@ -129,7 +132,7 @@ test('triangle prism: side, angle and displacement controls step and keep typed 
   await expect(side).toHaveValue('1.3');
 
   // An obtuse oblique prism: the base is wider than a, and the upper base moves by (−0,5a, 0,75a).
-  await entry(page, 'Висота h').fill('1');
+  await entry(page, 'Висота AA₁').fill('1');
   await openSection(page, 'Нахил');
   await entry(page, 'Зміщення X').fill('-0,5');
   await entry(page, 'Зміщення Y').fill('0,75');
@@ -151,7 +154,7 @@ test('triangle prism: switching base types keeps the shared height and displacem
   await shapeSelect(page).selectOption({ label: 'Призма' });
   await openAllSections(page);
   await polygonSelect(page).selectOption({ label: 'Правильний шестикутник' });
-  await entry(page, 'Висота h').fill('1,5');
+  await entry(page, 'Висота AA₁').fill('1,5');
   await openSection(page, 'Нахил');
   await entry(page, 'Зміщення X').fill('0,5');
   // The hexagon is 2a wide and √3·a deep; with dx = 0,5a and h = 1,5a the box is 2,5a × √3·a × 1,5a, so a = 32 mm.
@@ -166,26 +169,26 @@ test('triangle prism: switching base types keeps the shared height and displacem
     return button?.disabled;
   });
   expect(disabledRightAfterSwitch).toBe(true);
-  await expect(entry(page, 'Висота h')).toHaveValue('1,5');
+  await expect(entry(page, 'Висота')).toHaveValue('1,5');
   await expect(entry(page, 'Зміщення X')).toHaveValue('0,5');
   await expectPreviewOf(page, summary(geometry(1, 60, 1.5, 0.5)));
 
   // An invalid triangle angle blocks only the triangle base.
-  await entry(page, 'Кут α').fill('170');
+  await entry(page, 'Кут BAC').fill('170');
   await expect(page.getByText('Допустимі значення — від 15° до 165°.')).toBeVisible();
   await expect(previewViewport(page)).toHaveAttribute('data-preview-status', 'invalid');
   await expect(downloadButton(page)).toBeDisabled();
   await chooseBaseType(page, 'Правильний багатокутник');
   await expect(polygonSelect(page).locator('option:checked')).toHaveText('Правильний шестикутник');
-  await expect(entry(page, 'Висота h')).toHaveValue('1,5');
+  await expect(entry(page, 'Висота')).toHaveValue('1,5');
   await expect(page.getByText('Допустимі значення — від 15° до 165°.')).toHaveCount(0);
   await expect(downloadButton(page)).toBeEnabled({ timeout: 30_000 });
   expect((await downloadThreeMf(page)).fileName).toBe('prism-6-sided.3mf');
 
   // Back to the triangle: its typed angle is still there, and fixing it builds the latest geometry.
   await chooseBaseType(page, 'Трикутник');
-  await expect(entry(page, 'Кут α')).toHaveValue('170');
-  await entry(page, 'Кут α').fill('120');
+  await expect(entry(page, 'Кут BAC')).toHaveValue('170');
+  await entry(page, 'Кут BAC').fill('120');
   await entry(page, 'Зміщення Y').fill('-1');
   const latest = geometry(1, 120, 1.5, 0.5, -1);
   await expectPreviewOf(page, summary(latest));
@@ -213,9 +216,9 @@ for (const [layout, width] of [
       [0.25, 165, 4, -2],
       [4, 60, 1, 0],
     ] as const) {
-      await entry(page, 'Сторона основи b').fill(String(b).replace('.', ','));
-      await entry(page, 'Кут α').fill(String(angle));
-      await entry(page, 'Висота h').fill(String(h).replace('.', ','));
+      await entry(page, 'Сторона AC').fill(String(b).replace('.', ','));
+      await entry(page, 'Кут BAC').fill(String(angle));
+      await prismHeight(page).fill(String(h).replace('.', ','));
       await entry(page, 'Зміщення X').fill(String(x));
       await expectPreviewOf(page, summary(geometry(b, angle, h, x)));
       const current = await previewPlace(page);

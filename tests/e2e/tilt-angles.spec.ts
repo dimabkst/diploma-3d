@@ -11,12 +11,16 @@ import {
   openSection,
   parameterSection,
   previewViewport,
+  prismHeight,
   shapeSelect,
 } from './helpers.ts';
 
 const entry = (page: Page, label: string) => page.getByLabel(label, { exact: true });
 const mode = (page: Page, label: 'Зміщення' | 'Кути' | 'Кут') => page.getByRole('radio', { name: label, exact: true });
-const inclination = (page: Page) => entry(page, 'Кут до площини основи');
+/** A prism's lateral edges against its base; a pyramid's and a cone's angle is that of the line to the apex. */
+const PRISM_ANGLE = 'Кут між AA₁ і основою';
+const APEX_ANGLE = 'Кут до площини основи';
+const inclination = (page: Page, label: string = PRISM_ANGLE) => entry(page, label);
 const direction = (page: Page) => entry(page, 'Напрям зміщення');
 const resetShape = (page: Page) => page.getByRole('button', { name: 'Скинути параметри фігури', exact: true });
 const printSize = (page: Page) => entry(page, 'Найбільший габарит');
@@ -48,7 +52,7 @@ test('prism: angles and the equivalent offsets give the same preview and 3MF at 
   await openAllSections(page);
   await openSection(page, 'Нахил');
   await expect(mode(page, 'Зміщення')).toBeChecked();
-  await entry(page, 'Висота h').fill('1');
+  await prismHeight(page).fill('1');
 
   // A right prism shows 90°; the mode alone neither changes the model nor offers a reset.
   await mode(page, 'Кути').check();
@@ -56,7 +60,7 @@ test('prism: angles and the equivalent offsets give the same preview and 3MF at 
   await expect(direction(page)).toHaveValue('0');
   await expect(resetShape(page)).toBeEnabled(); // The height was edited.
   await page.getByRole('button', { name: 'Як задано кути?' }).click();
-  await expect(page.getByText(/бічним ребром, напрямленим від нижньої основи до верхньої/)).toBeVisible();
+  await expect(page.getByText(/бічним ребром AA₁, напрямленим від нижньої основи до верхньої/)).toBeVisible();
 
   // H = 1, β = 45°, φ = 90°: the upper base moves by (0, 1)·a.
   await inclination(page).fill('45');
@@ -76,13 +80,13 @@ test('prism: angles and the equivalent offsets give the same preview and 3MF at 
   await mode(page, 'Кути').check();
   await expect(inclination(page)).toHaveValue('45');
   await expect(direction(page)).toHaveValue('90');
-  await entry(page, 'Висота h').fill('2');
+  await prismHeight(page).fill('2');
   await expect(downloadButton(page)).toBeEnabled({ timeout: 30_000 });
   await mode(page, 'Зміщення').check();
   await expect(entry(page, 'Зміщення X')).toHaveValue('0');
   await expect(entry(page, 'Зміщення Y')).toHaveValue('2');
   // In the offset mode a new height keeps the offsets, so the angle changes.
-  await entry(page, 'Висота h').fill('1');
+  await prismHeight(page).fill('1');
   await mode(page, 'Кути').check();
   await expect(inclination(page)).toHaveValue('26,5651');
   await expect(direction(page)).toHaveValue('90');
@@ -96,12 +100,12 @@ test('pyramid and cone: angles give the same solid as the offsets they describe'
   await shapeSelect(page).selectOption({ label: 'Піраміда' });
   await openAllSections(page);
   await openSection(page, 'Вершина');
-  await entry(page, 'Висота піраміди h').fill('1');
+  await prismHeight(page).fill('1');
   await mode(page, 'Кути').check();
   await page.getByRole('button', { name: 'Як задано кути?' }).click();
   await expect(page.getByText(/відрізком від центра мас основи до вершини/)).toBeVisible();
   // 45° towards −X from the centroid: the apex at (−1, 0)·a.
-  await inclination(page).fill('45');
+  await inclination(page, APEX_ANGLE).fill('45');
   await direction(page).fill('180');
   const pyramidAngles = await exported(page);
   await mode(page, 'Зміщення').check();
@@ -116,8 +120,8 @@ test('pyramid and cone: angles give the same solid as the offsets they describe'
   await openSection(page, 'Нахил');
   await mode(page, 'Кут').check();
   await expect(direction(page)).toHaveCount(0);
-  await expect(inclination(page)).toHaveValue('90');
-  await inclination(page).fill('45');
+  await expect(inclination(page, APEX_ANGLE)).toHaveValue('90');
+  await inclination(page, APEX_ANGLE).fill('45');
   const coneAngle = await exported(page);
   await mode(page, 'Зміщення').check();
   await expect(entry(page, 'Зміщення вершини')).toHaveValue('2');
@@ -133,7 +137,7 @@ test('prism: β ≥ 15° in both modes, angles within the offset limits, and bot
   await shapeSelect(page).selectOption({ label: 'Призма' });
   await openAllSections(page);
   await openSection(page, 'Нахил');
-  await entry(page, 'Висота h').fill('1');
+  await prismHeight(page).fill('1');
 
   // Offsets: at h = a the lean reaches 15° at a / tan 15° ≈ 3,732a, so the sliders end there, not at ±4.
   await expect(slider(page, 'Зміщення X')).toHaveAttribute('min', '-3.732');
@@ -151,26 +155,26 @@ test('prism: β ≥ 15° in both modes, angles within the offset limits, and bot
   await expect(downloadButton(page)).toBeEnabled({ timeout: 30_000 });
   await expect(slider(page, 'Зміщення Y')).toHaveAttribute('max', '3.15');
   // A lower height keeps the offsets, which now lean too flat: both are at fault, the last model stays.
-  await entry(page, 'Висота h').fill('0,5');
+  await prismHeight(page).fill('0,5');
   await expect(entry(page, 'Зміщення X')).toHaveAttribute('aria-invalid', 'true');
   await expect(entry(page, 'Зміщення Y')).toHaveAttribute('aria-invalid', 'true');
   await expect(downloadButton(page)).toBeDisabled();
-  await entry(page, 'Висота h').fill('1');
+  await prismHeight(page).fill('1');
   await expect(downloadButton(page)).toBeEnabled({ timeout: 30_000 });
 
   // Angles: the same 15° floor.
   await mode(page, 'Кути').check();
-  await expect(slider(page, 'Кут до площини основи')).toHaveAttribute('min', '15');
+  await expect(slider(page, PRISM_ANGLE)).toHaveAttribute('min', '15');
   await inclination(page).fill('14');
   await expect(page.getByText('Допустимі значення — від 15° до 90°.')).toBeVisible();
   await expect(downloadButton(page)).toBeDisabled();
 
   // h/a = 4 at 30° along +X would need X/a = 4√3 ≈ 6,93: the offset limit 4 requires β ≥ 45° there.
-  await entry(page, 'Висота h').fill('4');
+  await prismHeight(page).fill('4');
   await direction(page).fill('0');
   await inclination(page).fill('30');
   await expect(page.getByText('Допустимі значення за цієї висоти й напряму — від 45° до 90°.')).toBeVisible();
-  await expect(slider(page, 'Кут до площини основи')).toHaveAttribute('min', '45');
+  await expect(slider(page, PRISM_ANGLE)).toHaveAttribute('min', '45');
   await expect(downloadButton(page)).toBeDisabled();
   // Along the diagonal the corner (4, 4) is reachable from atan2(4, 4√2) ≈ 35,26°.
   await direction(page).fill('45');
@@ -210,7 +214,7 @@ test('switching modes never changes the model, does not drift, and the reset kee
   await mode(page, 'Зміщення').check();
   await expect(resetShape(page)).toBeDisabled();
 
-  await entry(page, 'Висота h').fill('1,37');
+  await prismHeight(page).fill('1,37');
   await entry(page, 'Зміщення X').fill('-0,3137');
   await entry(page, 'Зміщення Y').fill('1,2345');
   const original = await exported(page);
@@ -231,7 +235,7 @@ test('switching modes never changes the model, does not drift, and the reset kee
   await resetShape(page).click();
   await expect(mode(page, 'Кути')).toBeChecked();
   await expect(inclination(page)).toHaveValue('90');
-  await expect(entry(page, 'Висота h')).toHaveValue('2');
+  await expect(prismHeight(page)).toHaveValue('2');
   await expect(resetShape(page)).toBeDisabled();
   await expectPreviewOf(page, 'Призма · 40 × 34,6 × 80 мм');
 });

@@ -366,7 +366,7 @@ test('a new shape of the solid keeps the drafted segment, M and its ratio, also 
   await segmentList(page).selectOption({ label: 'A₁D₁ — ребро' });
   await expectFaceDraft(page);
   await openSection(page, 'Розміри');
-  await page.getByLabel('Ширина b', { exact: true }).fill('1,6');
+  await page.getByLabel('Ширина AD', { exact: true }).fill('1,6');
   await expectFaceDraft(page);
   await expect(picker(page, SEGMENT)).toContainText('A₁D₁');
   await expect(picker(page, POINT)).toContainText('DM : MD₁ = 1 : 2');
