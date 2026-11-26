@@ -182,6 +182,7 @@ import {
   initialBoxChoices,
   isBoxSolid,
   normalSelection,
+  oppositeEdgePairs,
   pairOf,
   pairSelection,
   pilotActive,
@@ -243,7 +244,7 @@ import {
   type TiltSolid,
   tiltKeys,
 } from './tilt.ts';
-import { lowerSide, lowerVertex } from './traceConstruction.ts';
+import { apexDraft, apexPointActive, lowerSide, lowerVertex } from './traceConstruction.ts';
 
 /** The fields of planes through a shared generatrix as the schema defaults them: a right cylinder's generatrices 120° apart. */
 const LINKED_DEFAULTS = sharedGeneratrixSectionSchema.parse({ type: 'shared-generatrix' });
@@ -675,6 +676,8 @@ const boxTexts = (solid: BoxSolid): Record<BoxNumberKey, string> => {
     SecondRatioFirst: 7,
     SecondRatioSecond: 3,
     TracePointPercent: 50,
+    TracePointRatioFirst: 1,
+    TracePointRatioSecond: 1,
     PlaneInclinationDeg: DEFAULT_OBLIQUE_SECTION.inclinationDeg,
     PlaneDirectionDeg: DEFAULT_OBLIQUE_SECTION.directionDeg,
     DovetailSize: DEFAULT_DOVETAIL.sizeFactor,
@@ -937,6 +940,8 @@ const boxValidators = (solid: BoxSolid): Record<BoxNumberKey, (text: string, exa
     SecondRatioSecond: validateRatioPart,
     TracePointPercent: (text, exact) =>
       validateNumber(text, inclusiveRange({ min: 0, max: 100 }), { min: 0, max: 100 }, '50', ' %', exact),
+    TracePointRatioFirst: validateRatioPart,
+    TracePointRatioSecond: validateRatioPart,
     PlaneInclinationDeg: angleWithin({ min: 0, max: 90 }, '45'),
     PlaneDirectionDeg: validateObliqueDirection,
     DovetailSize: validateConnectorDimension,
@@ -1278,10 +1283,12 @@ function resolveRequest(
             [box.SectionPercent, 'first'],
             [box.SectionSecondPercent, 'second'],
           ]
-        : [
-            [box.PointRatioFirst, 'first'],
-            [box.LineAngleDeg, 'first'],
-          ];
+        : activeSection(kind, choices) === 'through-apex'
+          ? [[box.TracePointPercent, 'first']]
+          : [
+              [box.PointRatioFirst, 'first'],
+              [box.LineAngleDeg, 'first'],
+            ];
     for (const [key, position] of said) {
       const thin = checked.errors[key];
       if (thin === undefined) continue;
@@ -1625,15 +1632,6 @@ export function throughHeightFoot(kind: ShapeKind, state: ParameterState, values
   return { ...state, texts: { ...state.texts, [key]: formatDecimal(percent) }, exact: { ...state.exact, [key]: percent } };
 }
 
-/** The state with the point of a plane through a pyramid's lateral edge at the middle of its base edge. */
-export function tracePointAtMidpoint(kind: ShapeKind, state: ParameterState): ParameterState {
-  if (!isBoxSolid(kind)) return state;
-  const keys = boxKeysOf(kind);
-  const exact = { ...state.exact };
-  delete exact[keys.TracePointPercent];
-  return { ...state, texts: { ...state.texts, [keys.TracePointPercent]: '50' }, exact };
-}
-
 /**
  * A point of a base edge for a plane through a pyramid's lateral edge, on a newly chosen edge, stays where it is when it gives a
  * usable plane there, and otherwise moves to the edge's midpoint or the middle of its usable positions, as `startPoint` does.
@@ -1646,6 +1644,8 @@ export function startTracePoint(kind: ShapeKind, state: ParameterState, values: 
   const context = boxContextFrom(kind, values, choices);
   const { kind: trace, vertex, segment } = traceSelection(keys, choices, context);
   if (trace !== 'edge-point' || vertex === undefined || segment === undefined) return undefined;
+  // The construction's M is where its midpoint or ratio puts it, said when that leaves a part too thin; nothing moves it.
+  if (apexPointActive(keys, choices as unknown as BoxChoices)) return undefined;
   const marker = `apex:${vertex}:${segmentKey(segment)}`;
   if (choices[keys.PointFor] === marker) return undefined;
   const { shape } = context;
@@ -1663,15 +1663,6 @@ export function startTracePoint(kind: ShapeKind, state: ParameterState, values: 
   const exact = { ...state.exact };
   delete exact[keys.TracePointPercent];
   return { ...next, texts: { ...state.texts, [keys.TracePointPercent]: formatSteppedDecimal(start) }, exact };
-}
-
-/** The state with the point of a plane through a line at the middle of its edge. */
-export function pointAtMidpoint(kind: ShapeKind, state: ParameterState): ParameterState {
-  if (!isBoxSolid(kind)) return state;
-  const keys = boxKeysOf(kind);
-  const exact = { ...state.exact };
-  delete exact[keys.PointPercent];
-  return { ...state, texts: { ...state.texts, [keys.PointPercent]: '50' }, exact };
 }
 
 /**
@@ -2379,7 +2370,9 @@ function boxChecks(
     const vertex = section.traceVertex as BoxVertex;
     const edge = section.traceSegment as BoxSegment;
     const range = boxApexPointRange(shape, scale, vertex, edge);
-    const interval = range === null ? null : pointInterval(range);
+    // The construction has excluded M at either end already; its ratio is not moved in by a field's step from there.
+    const apexPilot = isConstructionShape(shape);
+    const interval = range === null ? null : apexPilot ? { min: range.min, max: range.max } : pointInterval(range);
     ranges[box.TracePointPercent] = interval;
     const percent = section.tracePointPercent as number;
     const lateral = segmentName([PYRAMID_APEX, vertex]);
@@ -2399,8 +2392,12 @@ function boxChecks(
         errors: {
           [field]: end
             ? `Ця точка лежить на прямій ${lateral} або дає грань піраміди, тож перерізу немає. Пересуньте точку.`
-            : `За цього положення точки одна з частин була б надто тонкою. На ребрі ${segmentName(edge)} допустимо від ` +
-              `${formatDecimal(Math.ceil(interval.min * 10) / 10)} % до ${formatDecimal(Math.floor(interval.max * 10) / 10)} %.`,
+            : apexPilot
+              ? `За цього положення M одна з частин була б надто тонкою. M має лежати від ` +
+                `${formatDecimal(Math.ceil(interval.min * 10) / 10)} % до ${formatDecimal(Math.floor(interval.max * 10) / 10)} % ` +
+                `довжини ${segmentName(edge)}, рахуючи від ${vertexName(edge[0])}.`
+              : `За цього положення точки одна з частин була б надто тонкою. На ребрі ${segmentName(edge)} допустимо від ` +
+                `${formatDecimal(Math.ceil(interval.min * 10) / 10)} % до ${formatDecimal(Math.floor(interval.max * 10) / 10)} %.`,
         },
         ranges,
       };
@@ -2471,7 +2468,7 @@ function boxChecks(
     shown === null
       ? 'Модель замала для двох придатних частин уздовж цього напряму: збільште її.'
       : facePilot
-        ? `Переріз надто близько до ${far?.edge === true ? 'грані або ребра' : 'грані'}: тонша частина була б непридатною до друку. Він має лежати від ` +
+        ? `Переріз надто близько до ${far?.edge === true ? 'грані або ребра' : far?.vertex === true ? 'грані або вершини' : 'грані'}: тонша частина була б непридатною до друку. Він має лежати від ` +
           `${formatDecimal(Math.ceil(shown.min * 10) / 10)} % до ${formatDecimal(Math.floor(shown.max * 10) / 10)} %${gap}.`
         : `Допустимі значення — від ${formatDecimal(Math.ceil(shown.min * 10) / 10)} % до ${formatDecimal(Math.floor(shown.max * 10) / 10)} %: ` +
           'усі частини мають лишатися придатними до друку.';
@@ -4030,6 +4027,23 @@ function resolveSection(
     delete errors[box.LineDihedralDeg];
     if (construction.status !== 'valid') return { values, errors, section: 'none', pilotDraft: construction };
   }
+  // The same for the plane through a pyramid's lateral edge and M on a base edge.
+  if (type === 'through-apex' && keys.box !== undefined && apexPointActive(keys.box, choices as unknown as BoxChoices)) {
+    const box = keys.box;
+    const context = boxContextOf(kind as BoxSolid, choices, shape);
+    if (traceSelection(box, choices as unknown as BoxChoices, context).kind === 'edge-point') {
+      const ratioKeys = [box.TracePointRatioFirst, box.TracePointRatioSecond];
+      construction = apexDraft(
+        box,
+        choices as unknown as BoxChoices,
+        values,
+        context,
+        Object.fromEntries(ratioKeys.map((key) => [key, errors[key]])),
+      );
+      for (const key of ratioKeys) delete errors[key];
+      if (construction.status !== 'valid') return { values, errors, section: 'none', pilotDraft: construction };
+    }
+  }
   // The same for the plane parallel to a face, its second plane's position included.
   if (facePilot && keys.box !== undefined) {
     const box = keys.box;
@@ -4655,7 +4669,20 @@ function inactiveSectionKeys(kind: ShapeKind, choices: ParameterChoices): (keyof
             box.Trace,
             ...(choices[box.Trace] === 'angle'
               ? [box.TraceAngleDeg, box.SectionPercent]
-              : [box.TraceSegment, box.TraceVertex, ...(choices[box.Trace] === 'edge-point' ? [box.TracePointPercent] : [])]),
+              : [
+                  box.TraceSegment,
+                  box.TraceVertex,
+                  ...(choices[box.Trace] !== 'edge-point'
+                    ? []
+                    : apexPointActive(box, choices as BoxChoices)
+                      ? [
+                          box.TracePointMode,
+                          ...(choices[box.TracePointMode] === 'ratio'
+                            ? [box.TracePointRatioFirst, box.TracePointRatioSecond]
+                            : []),
+                        ]
+                      : [box.TracePointPercent]),
+                ]),
             ...secondFields,
           ],
     'through-line':
@@ -4715,6 +4742,10 @@ function inactiveSectionKeys(kind: ShapeKind, choices: ParameterChoices): (keyof
           box.SecondMode,
           box.SecondRatioFirst,
           box.SecondRatioSecond,
+          box.TracePointPercent,
+          box.TracePointMode,
+          box.TracePointRatioFirst,
+          box.TracePointRatioSecond,
         ];
   const cuts = [...new Set([...Object.values(cutFields).flat(), ...allPlateFields, ...allBoxPlaneFields])].filter(
     (key) => !active.has(key),
@@ -4817,7 +4848,11 @@ export type PilotChoice =
   /** The base vertex of a longitudinal plane's median, altitude or bisector, of either base. */
   | { readonly kind: 'trace-vertex'; readonly vertex: BoxVertex }
   /** The base side a longitudinal plane's midline is parallel to, of either base, its ends in either order. */
-  | { readonly kind: 'trace-side'; readonly segment: BoxSegment };
+  | { readonly kind: 'trace-side'; readonly segment: BoxSegment }
+  /** Where M of a pyramid's plane through a lateral edge and M lies on its base edge: at the midpoint, or at a ratio. */
+  | { readonly kind: 'trace-point-mode'; readonly mode: PointMode }
+  /** The pair of opposite edges of a triangular pyramid an inclined plane is parallel to, by either of its edges. */
+  | { readonly kind: 'pair'; readonly segment: BoxSegment };
 
 /**
  * The state with a plane through a segment given at an angle to a face as the plane it is now: its angle and side from that face, an
@@ -4856,7 +4891,7 @@ export function applyPilotChoice(
   values: ParameterValues,
   choice: PilotChoice,
 ): ParameterState {
-  if (!isBoxSolid(kind) || !isConstructionSolid(kind)) return state;
+  if (!isBoxSolid(kind) || !isConstructionSolid(kind, state.choices)) return state;
   const keys = boxKeysOf(kind);
   const choices = state.choices as unknown as BoxChoices;
   switch (choice.kind) {
@@ -4926,6 +4961,17 @@ export function applyPilotChoice(
       if (side === undefined || choices[keys.TraceSegment] === segmentKey(side)) return state;
       return { ...state, choices: { ...state.choices, [keys.TraceSegment]: segmentKey(side) } };
     }
+    case 'trace-point-mode':
+      return { ...state, choices: { ...state.choices, [keys.TracePointMode]: choice.mode } };
+    case 'pair': {
+      // Either edge of a pair is the pair: the same two directions, the same planes.
+      const [first, second] = choice.segment;
+      const pair = oppositeEdgePairs(boxContextFrom(kind, values, state.choices).topology).find((key) =>
+        pairOf(key).some(([a, b]) => (a === first && b === second) || (a === second && b === first)),
+      );
+      if (pair === undefined || choices[keys.ParallelEdges] === pair) return state;
+      return { ...state, choices: { ...state.choices, [keys.ParallelEdges]: pair, [keys.NormalAlong]: 'none' } };
+    }
     case 'normal': {
       const context = boxContextFrom(kind, values, state.choices);
       const entry = entryOf(normalEntries(context.topology), choice.segment);
@@ -4961,7 +5007,10 @@ export function applyPilotChoice(
     case 'diagonal': {
       // A family by either of its diagonals: an upper one, or the one in effect, changes nothing, the plane's position included.
       const context = boxContextFrom(kind, values, state.choices);
-      const family = familyOf(diagonalFamilies(traceSelection(keys, choices, context).segments), choice.segment);
+      const family = familyOf(
+        diagonalFamilies(traceSelection(keys, choices, context).segments, context.topology.kind !== 'pyramid'),
+        choice.segment,
+      );
       if (family === undefined || choices[keys.TraceSegment] === family.key) return state;
       return { ...state, choices: { ...state.choices, [keys.TraceSegment]: family.key } };
     }

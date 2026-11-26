@@ -1,7 +1,7 @@
 import { boxPlane, boxVertices } from '@diploma-3d/engine';
 import type { BoxSectionSpec } from '@diploma-3d/schema';
 import { describe, expect, it } from 'vitest';
-import { sectionNumberFields, shapePanel } from '../shapes.ts';
+import { shapePanel } from '../shapes.ts';
 import { type BoxKeysOf, type BoxSolid, boxContextOf, boxKeysOf, type ThroughLineChoices, throughLineSelection } from './box.ts';
 import {
   addSecondCut,
@@ -214,15 +214,16 @@ describe('the sections of a cube and the parallelepipeds', () => {
     expect(segments).toContainEqual({ value: 'A-C1', label: 'AC₁', group: 'Діагоналі тіла' });
     // The lateral edges as one, the eight base edges, twelve face diagonals and four body diagonals.
     expect(segments).toHaveLength(1 + 8 + 12 + 4);
-    // A pentagonal prism has the same field and no collapsed list beside it; a pyramid keeps that list of the same choice.
+    // A pentagonal prism and a square pyramid have the same field and no collapsed list beside it.
     const pentagonal = groupOf('prism', 'Переріз', {}, { prismSection: 'inclined', prismBaseSides: 5 }).fields;
     expect(pentagonal.some((candidate) => candidate.key === 'prism-normal-along')).toBe(false);
     expect(pentagonal.find((candidate) => candidate.key === 'prism-normal')?.type).toBe('normal-construction');
-    const further = groupOf('pyramid', 'Переріз', {}, { pyramidSection: 'inclined' }).fields.find(
-      (candidate) => candidate.key === 'pyramid-normal-along',
-    ) as unknown as { label: string; fields: { options?: { label: string }[] }[] };
-    expect(further.label).toBe('Перпендикулярно ребру або діагоналі');
-    expect((further.fields[0]?.options ?? []).map(({ label }) => label)).toContain('Ребро SA');
+    const pyramid = groupOf('pyramid', 'Переріз', {}, { pyramidSection: 'inclined' }).fields;
+    expect(pyramid.some((candidate) => candidate.key === 'pyramid-normal-along')).toBe(false);
+    const pyramidNormal = pyramid.find((candidate) => candidate.type === 'normal-construction');
+    expect(pyramidNormal?.type === 'normal-construction' ? pyramidNormal.options.map(({ label }) => label) : []).toEqual(
+      expect.arrayContaining(['SA', 'AC']),
+    );
     // The triangle near the corner A, perpendicular to the body diagonal.
     const perpendicular = { ...chosen, cubeNormalAlong: 'A-C1' } as const;
     const triangle = request('cube', { cubeSectionPercent: '16' }, perpendicular);
@@ -828,16 +829,25 @@ describe('the sections of the pyramids and the tetrahedron', () => {
         'Похилий',
       ]);
     }
-    expect(optionsOf(groupOf('pyramid', 'Переріз', {}, chosen({})), 'pyramidFace').map((option) => option.label)).toEqual([
-      'ABCD — основа',
-      'SAB — бічна грань',
-      'SBC — бічна грань',
-      'SCD — бічна грань',
-      'SDA — бічна грань',
+    const squareFaces = groupOf('pyramid', 'Переріз', {}, chosen({})).fields.find((field) => field.type === 'face-construction');
+    expect(squareFaces?.type === 'face-construction' ? squareFaces.face.options.map(({ label }) => label) : []).toEqual([
+      'ABCD',
+      'SAB',
+      'SBC',
+      'SCD',
+      'SDA',
     ]);
-    expect(
-      optionsOf(groupOf('tetrahedron', 'Переріз', {}, { tetrahedronSection: 'face-parallel' }), 'tetrahedronFace'),
-    ).toHaveLength(4);
+    // A triangular pyramid's faces in the construction: four orientations, each its own, measured to the vertex opposite.
+    const face = groupOf('tetrahedron', 'Переріз', {}, { tetrahedronSection: 'face-parallel' }).fields.find(
+      (field) => field.type === 'face-construction',
+    );
+    expect(face?.type === 'face-construction' ? face.face.options.map(({ label }) => label) : []).toEqual([
+      'ABC',
+      'SAB',
+      'SBC',
+      'SCA',
+    ]);
+    expect(face?.type === 'face-construction' ? face.positions[0]?.labels : []).toEqual(['Від ABC', 'До S']);
   });
 
   it('through the apex: the base’s lines, the lateral edge with a point, and the pyramid’s height', () => {
@@ -867,30 +877,47 @@ describe('the sections of the pyramids and the tetrahedron', () => {
       tracePointPercent: 50,
       positionPercent: 50,
     });
+    // The lateral edge and M picked in the construction, M at the midpoint or a ratio.
     const group = groupOf('tetrahedron', 'Переріз', {}, sc);
-    expect(optionsOf(group, 'tetrahedronTraceVertex').map((option) => option.label)).toEqual(['SA', 'SB', 'SC']);
-    expect(optionsOf(group, 'tetrahedronTraceSegment').map((option) => option.label)).toEqual(['Ребро AB']);
+    const field = group.fields.find((candidate) => candidate.type === 'trace-construction');
+    if (field?.type !== 'trace-construction') throw new Error('Expected the construction.');
+    expect(field).toMatchObject({ label: 'Бічне ребро', target: 'lateral', title: 'SC', selected: 'C' });
+    expect(field.options.map((option) => option.label)).toEqual(['SA', 'SB', 'SC']);
+    expect(field.point).toMatchObject({ title: 'Середина AB', mode: 'midpoint', labels: ['AM', 'MB'] });
+    expect(field.point?.options.map((option) => option.label)).toEqual(['Ребро AB']);
+    expect(group.fields.some((candidate) => candidate.key === 'tetrahedronTraceVertex')).toBe(false);
     expect(labels(group)).toContain('Площина проходить через бічне ребро SC і точку ребра AB.');
   });
 
   it('through a base edge: only the base’s edges, and of the lateral edges those that do not meet it', () => {
     const group = groupOf('tetrahedron', 'Переріз', {}, { tetrahedronSection: 'through-line', tetrahedronLineMethod: 'point' });
-    expect(group.fields.some((field) => field.key === 'tetrahedronLineFace')).toBe(false);
-    expect(optionsOf(group, 'tetrahedronLine').map((option) => option.label)).toEqual(['Ребро AB', 'Ребро BC', 'Ребро CA']);
-    expect(optionsOf(group, 'tetrahedronPointEdge').map((option) => option.label)).toEqual(['Ребро SC']);
+    const field = group.fields.find((candidate) => candidate.type === 'through-point');
+    if (field?.type !== 'through-point') throw new Error('Expected the construction.');
+    expect(field.segment.baseEdge).toBe(true);
+    expect(field.segment.options.map((option) => option.label)).toEqual(['AB — ребро', 'BC — ребро', 'AC — ребро']);
+    expect(field.point.options.map((option) => option.label)).toEqual(['Ребро CS']);
     const result = request('tetrahedron', {}, { tetrahedronSection: 'through-line', tetrahedronLineMethod: 'point' });
     expect(result.spec?.section).toEqual({
       type: 'through-line',
       face: 'ABC',
       line: ['A', 'B'],
       method: 'point',
-      pointEdge: ['S', 'C'],
+      pointEdge: ['C', 'S'],
       pointPercent: 50,
     });
-    // S and C give the faces SAB and ABC: the field stops short of both.
-    const point = sectionNumberFields(group).find((field) => field.key === 'tetrahedronPointPercent');
-    expect(point?.range?.min).toBeGreaterThan(0);
-    expect(point?.range?.max).toBeLessThan(100);
+    // C and S give the faces ABC and SAB: said at the construction, the plain solid shown meanwhile.
+    for (const [first, second] of [
+      ['0', '1'],
+      ['1', '0'],
+    ] as const) {
+      const end = request(
+        'tetrahedron',
+        { tetrahedronPointRatioFirst: first, tetrahedronPointRatioSecond: second },
+        { tetrahedronSection: 'through-line', tetrahedronLineMethod: 'point', tetrahedronPointMode: 'ratio' },
+      );
+      expect(end.pilotDraft).toMatchObject({ status: 'invalid', problem: 'face' });
+      expect(end.spec?.section).toBeUndefined();
+    }
   });
 
   it('parallel to a pair of opposite edges, through the height’s foot, and back to its angles where it is', () => {
@@ -908,15 +935,14 @@ describe('the sections of the pyramids and the tetrahedron', () => {
       secondPositionPercent: 88,
     });
     const group = groupOf('tetrahedron', 'Переріз', start.texts, start.choices);
-    const pairs = group.fields.find((field) => field.key === 'tetrahedron-parallel-edges') as unknown as {
-      fields: { options?: { label: string }[] }[];
-    };
-    expect((pairs.fields[0]?.options ?? []).map((option) => option.label)).toEqual([
-      'Не вибрано — задати кутами',
+    const pairs = group.fields.find((field) => field.type === 'pair-construction');
+    expect(pairs).toMatchObject({ title: 'SC і AB', selected: 'S-C|A-B' });
+    expect(pairs?.type === 'pair-construction' ? pairs.options.map((option) => option.label) : []).toEqual([
       'SA і BC',
       'SB і AC',
       'SC і AB',
     ]);
+    expect(group.fields.some((field) => field.key === 'tetrahedron-parallel-edges')).toBe(false);
     expect(group.fields.map((field) => field.key)).toEqual(
       expect.arrayContaining(['tetrahedron-height-foot', 'tetrahedron-normal-manual']),
     );

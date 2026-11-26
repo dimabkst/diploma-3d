@@ -32,10 +32,11 @@ import { type AngleSide, angleDraft, anglePilotActive, referenceFaceOf, turnOf }
 import { faceDraft, facePilotActive, placementPercent } from './faceConstruction.ts';
 import type { ConnectorChoice, ParameterChoices, ParameterValues, SectionChoice } from './parameters.ts';
 import { constructionKeys, pilotDraft, pointPercentOf, throughPointSelection } from './throughPoint.ts';
+import { apexDraft, apexPointActive, apexPointPercent } from './traceConstruction.ts';
 
 /** Whether a box's plane through a line is the pilot's, through a point M, for a cube or a parallelepiped. */
 export const pilotActive = (keys: BoxKeysOf, choices: BoxChoices): boolean =>
-  constructionKeys(keys) && choices[keys.LineMethod] === 'point';
+  constructionKeys(keys, choices) && choices[keys.LineMethod] === 'point';
 
 /**
  * The solids whose sections are planes through their named vertices: a cube, the parallelepipeds and the prisms, each a prism
@@ -62,6 +63,8 @@ export const BOX_NUMBER_FIELDS = [
   'SecondRatioFirst',
   'SecondRatioSecond',
   'TracePointPercent',
+  'TracePointRatioFirst',
+  'TracePointRatioSecond',
   'PlaneInclinationDeg',
   'PlaneDirectionDeg',
   'DovetailSize',
@@ -119,6 +122,8 @@ type BoxChoiceFields = {
    */
   FaceMode: 'midpoint' | 'ratio';
   SecondMode: 'midpoint' | 'ratio';
+  /** Where M lies on its base edge in the construction of a pyramid's plane through a lateral edge and M; see `traceConstruction.ts`. */
+  TracePointMode: 'midpoint' | 'ratio';
   /**
    * Which of the two planes through a segment at an angle to its reference face is meant, in the construction of a cube's and a
    * parallelepiped's plane at an angle; see `angleConstruction.ts`.
@@ -174,6 +179,7 @@ export const BOX_CHOICE_FIELDS = [
   'PointMode',
   'FaceMode',
   'SecondMode',
+  'TracePointMode',
   'LineSide',
   'NormalAlong',
   'ParallelEdges',
@@ -206,16 +212,6 @@ export const segmentName = ([first, second]: readonly [BoxVertex, BoxVertex]): s
   `${vertexName(first)}${vertexName(second)}`;
 
 export const faceName = (topology: PrismTopology, face: BoxFace): string => (topology.faces[face] ?? []).map(vertexName).join('');
-
-/** What a face is to the solid: a base or a lateral face. */
-export const faceRole = (topology: PrismTopology, face: BoxFace): string =>
-  face === topology.lowerBase
-    ? topology.kind === 'pyramid'
-      ? 'основа'
-      : 'нижня основа'
-    : face === topology.upperBase
-      ? 'верхня основа'
-      : 'бічна грань';
 
 /** The edges and the diagonals of a face, edges first, in the order around it. */
 export const faceLines = boxFaceLines;
@@ -255,12 +251,6 @@ export function allSegments(
     ...bodyDiagonals.map((segment) => ({ segment, kind: 'body' as const })),
   ];
 }
-
-/** The texts of a segment as an option: the lateral edges, an edge, a face's diagonal or the solid's own. */
-export const segmentLabel = (segment: BoxSegment, kind: 'lateral' | 'edge' | 'face' | 'body'): string =>
-  kind === 'lateral'
-    ? 'Бічні ребра'
-    : `${kind === 'edge' ? 'Ребро' : kind === 'face' ? 'Діагональ грані' : 'Діагональ тіла'} ${segmentName(segment)}`;
 
 const sameSegment = (a: readonly [BoxVertex, BoxVertex], b: readonly [BoxVertex, BoxVertex]) =>
   (a[0] === b[0] && a[1] === b[1]) || (a[0] === b[1] && a[1] === b[0]);
@@ -645,6 +635,7 @@ export const initialBoxChoices = (): BoxChoices =>
         PointMode: 'midpoint',
         FaceMode: 'midpoint',
         SecondMode: 'ratio',
+        TracePointMode: 'midpoint',
         LineSide: 'first',
         NormalAlong: 'none',
         ParallelEdges: 'none',
@@ -687,6 +678,9 @@ export function boxModeKeys(
       return throughLineSelection(keys, choices, context).method === 'angle' ? [keys.LineAngleDeg] : [keys.PointPercent];
     case 'through-apex': {
       const { kind } = traceSelection(keys, choices, context);
+      if (kind === 'edge-point' && apexPointActive(keys, choices)) {
+        return choices[keys.TracePointMode] === 'ratio' ? [keys.TracePointRatioFirst, keys.TracePointRatioSecond] : [];
+      }
       return kind === 'angle' ? [keys.TraceAngleDeg, keys.SectionPercent] : kind === 'edge-point' ? [keys.TracePointPercent] : [];
     }
     case 'inclined':
@@ -713,6 +707,9 @@ export function boxSectionReady(
   }
   if (type === 'through-line' && anglePilotActive(keys, choices)) {
     return angleDraft(keys, choices, values, context, {}).status === 'valid';
+  }
+  if (type === 'through-apex' && apexPointActive(keys, choices)) {
+    return apexDraft(keys, choices, values, context, {}).status === 'valid';
   }
   return type !== 'through-line' || !pilotActive(keys, choices) || pilotDraft(keys, choices, values, context).status === 'valid';
 }
@@ -776,7 +773,14 @@ export function boxSectionOf(
         traceAngleDeg: kind === 'angle' ? read(keys.TraceAngleDeg) : 0,
         ...(segment === undefined ? {} : { traceSegment: segment }),
         ...(vertex === undefined ? {} : { traceVertex: vertex }),
-        ...(kind === 'edge-point' ? { tracePointPercent: read(keys.TracePointPercent) } : {}),
+        // The construction's M by its midpoint or ratio, which the caller has checked, see `apexDraft`; else the percent field.
+        ...(kind === 'edge-point'
+          ? {
+              tracePointPercent: apexPointActive(keys, choices)
+                ? (apexPointPercent(keys, choices, read) as number)
+                : read(keys.TracePointPercent),
+            }
+          : {}),
         positionPercent: kind === 'angle' ? read(keys.SectionPercent) : 50,
         ...secondPlane,
       };

@@ -77,6 +77,10 @@ const modes: readonly { readonly value: PointMode; readonly label: string }[] = 
             Перше число — відстань від грані {field.face.title} до перерізу, друге — від перерізу до ребра {field.face.opposite},
             найдальшого від грані; обидві відстані — перпендикуляри до грані. Ребро обирати не треба. Так 1 : 2 — третина шляху
             від {field.face.title}.
+          {:else if field.face.oppositeVertex}
+            Перше число — відстань від грані {field.face.title} до перерізу, друге — від перерізу до вершини {field.face.opposite},
+            протилежної грані; обидві відстані — перпендикуляри до грані. Вершину обирати не треба. Так 1 : 2 — третина шляху від
+            {field.face.title}.
           {:else}
             Перше число — відстань від грані {field.face.title} до перерізу, друге — від перерізу до {field.face.opposite}. Так 1 :
             2 — третина шляху від {field.face.title}.

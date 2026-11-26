@@ -22,7 +22,7 @@ import {
 
 /** Whether a box's plane parallel to a face is this construction's: for a cube, the parallelepipeds and the prisms. */
 export const facePilotActive = (keys: BoxKeysOf, choices: BoxChoices): boolean =>
-  constructionKeys(keys) && choices[keys.Section] === 'face-parallel';
+  constructionKeys(keys, choices) && choices[keys.Section] === 'face-parallel';
 
 /** What the face construction reads of a solid: its topology and, while it is valid, its geometry; see `BoxContext`. */
 export type FaceSolid = Pick<BoxContext, 'topology' | 'orientations' | 'shape'>;
@@ -110,16 +110,24 @@ const minus = (a: Vec, b: Vec): Vec => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const dot = (a: Vec, b: Vec) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 
 /**
- * The solid's far side from a face, by name: the parallel face, or else the lateral edge the far support plane passes through,
- * CC₁ for a triangular prism's ABB₁A₁; and whether that is an edge rather than a face. Never a face that is not there.
+ * The solid's far side from a face, by name: the parallel face, or else what the far support plane passes through, the lateral
+ * edge CC₁ for a triangular prism's ABB₁A₁, a pyramid's vertex opposite the face, S for ABC and C for SAB; and whether that is an
+ * edge or a vertex rather than a face. Never a face that is not there.
  */
-export function farSideOf(solid: FaceSolid, face: BoxFace): { readonly name: string; readonly edge: boolean } {
+export function farSideOf(
+  solid: FaceSolid,
+  face: BoxFace,
+): { readonly name: string; readonly edge: boolean; readonly vertex: boolean } {
   const { topology } = solid;
   const opposite = oppositeFace(solid, face);
-  if (opposite !== undefined) return { name: faceName(topology, opposite), edge: false };
+  if (opposite !== undefined) return { name: faceName(topology, opposite), edge: false, vertex: false };
   const off = farVertices(solid, face);
   const edge = off.length === 2 && topology.edges.some(([a, b]) => off.includes(a) && off.includes(b));
-  return { name: edge ? segmentName(off as unknown as BoxSegment) : off.map(vertexName).join(', '), edge };
+  return {
+    name: edge ? segmentName(off as unknown as BoxSegment) : off.map(vertexName).join(', '),
+    edge,
+    vertex: off.length === 1,
+  };
 }
 
 export type Placement = 'first' | 'second';
@@ -184,7 +192,9 @@ export function faceDraft(
           ? `збігається з гранню ${faceName(topology, face)}`
           : far.edge
             ? `лише проходить через ребро ${far.name} і не розтинає тіла`
-            : `збігається з гранню ${far.name}`;
+            : far.vertex
+              ? `лише проходить через вершину ${far.name} і не розтинає тіла`
+              : `збігається з гранню ${far.name}`;
       return invalid('boundary', `${plane} ${at}. Оберіть положення строго між ${faceName(topology, face)} і ${far.name}.`);
     }
     return { percent };

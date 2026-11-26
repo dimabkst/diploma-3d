@@ -276,6 +276,7 @@ const sectionOutlines = $derived(
 const segmentEnds = $derived(view.geometry.segment === undefined ? undefined : view.geometry.segment.ends.map(at));
 const pointEdgeEnds = $derived(view.geometry.pointEdge === undefined ? undefined : view.geometry.pointEdge.ends.map(at));
 const m = $derived(view.geometry.m === undefined ? undefined : at(view.geometry.m));
+const foot = $derived(view.geometry.height === undefined ? undefined : at(view.geometry.height[1]));
 const pendingAt = $derived(view.pending === undefined ? undefined : at(view.pending));
 
 // The labels stand a little outside each vertex, away from the solid's middle on screen, so that neither the vertex, nor its
@@ -360,6 +361,14 @@ const labels = $derived.by(() => {
       />
     {/if}
   {/if}
+  <!-- A pyramid's height SH, to its actual foot H, along which its plane through a lateral edge and the height runs. -->
+  {#if view.geometry.height !== undefined}
+    {@const [s, h] = [at(view.geometry.height[0]), at(view.geometry.height[1])]}
+    {#if s !== undefined && h !== undefined}
+      <line class="height-line" x1={s.x} y1={s.y} x2={h.x} y2={h.y} />
+      <circle class="height-foot" cx={h.x} cy={h.y} r="4" />
+    {/if}
+  {/if}
   <!-- Lines besides the edges, such as the base diagonals offered: faint while offered, marked when chosen. -->
   {#each view.lines ?? [] as line (line.key)}
     {@const [a, b] = [at(line.ends[0]), at(line.ends[1])]}
@@ -438,6 +447,12 @@ const labels = $derived.by(() => {
     {@const placed = inside(m.x + 12, m.y - 14)}
     <span class="label-at" style:transform={`translate(${placed.x}px, ${placed.y}px)`}>
       <PointLabel text="M" tone="visible" />
+    </span>
+  {/if}
+  {#if foot !== undefined}
+    {@const placed = inside(foot.x + 12, foot.y - 14)}
+    <span class="label-at" style:transform={`translate(${placed.x}px, ${placed.y}px)`}>
+      <PointLabel text="H" tone="visible" />
     </span>
   {/if}
 </div>
@@ -534,6 +549,16 @@ const labels = $derived.by(() => {
   .offered,
   .trace-line {
     stroke-linecap: round;
+  }
+
+  .height-line {
+    stroke: var(--color-text);
+    stroke-width: 2px;
+    stroke-dasharray: 4 4;
+  }
+
+  .height-foot {
+    fill: var(--color-text);
   }
 
   .offered.candidate {

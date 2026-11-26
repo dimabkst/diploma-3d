@@ -40,18 +40,24 @@ export const isThroughPointSolid = (kind: ShapeKind): kind is ThroughPointSolid 
   (THROUGH_POINT_SOLIDS as readonly string[]).includes(kind);
 
 /**
- * Whether a solid has the interactive constructions: a cube, a rectangular and an oblique parallelepiped, and every prism, right
- * or oblique, over any of its bases. Their topology, and where it takes it their geometry, not their names, then decides what each
- * construction offers.
+ * Whether a solid has the interactive constructions: a cube, a rectangular and an oblique parallelepiped, every prism and every
+ * pyramid, the regular tetrahedron among them, right or oblique, over any of their bases. Their topology, and where it takes it
+ * their geometry, not their names, then decides what each construction offers. The choices are not read: every such solid has
+ * them, whatever its base.
  */
-export const isConstructionSolid = (kind: ShapeKind): boolean => isThroughPointSolid(kind) || kind === 'prism';
+export const isConstructionSolid = (kind: ShapeKind, _choices: unknown): boolean =>
+  isThroughPointSolid(kind) || kind === 'prism' || kind === 'pyramid' || kind === 'tetrahedron';
 
-/** The same of a box's keys. */
-export const constructionKeys = (keys: BoxKeysOf): boolean =>
-  isConstructionSolid(keys.Section.slice(0, -'Section'.length) as ShapeKind);
+/** The same of a box's keys and the choices they read. */
+export const constructionKeys = (keys: BoxKeysOf, choices: unknown): boolean =>
+  isConstructionSolid(keys.Section.slice(0, -'Section'.length) as ShapeKind, choices);
 
 /** The same of a specification's solid. */
-export const isConstructionShape = (shape: { readonly kind: ShapeKind }): boolean => isConstructionSolid(shape.kind);
+export const isConstructionShape = (shape: { readonly kind: ShapeKind }): boolean => isConstructionSolid(shape.kind, undefined);
+
+/** What to choose first: a segment, or a pyramid's edge of its base. */
+export const segmentPrompt = (topology: PrismTopology): string =>
+  topology.kind === 'pyramid' ? PILOT_MESSAGES.baseEdge : PILOT_MESSAGES.segment;
 
 /** Where M lies on its edge: at the midpoint, or at UM : MV = a : b for the edge's endpoints U, V in their stable order. */
 export type PointMode = 'midpoint' | 'ratio';
@@ -69,7 +75,9 @@ export type ConstructionField =
   | 'second-position'
   | 'diagonal'
   | 'normal'
-  | 'trace';
+  | 'trace'
+  | 'trace-point'
+  | 'pair';
 
 /**
  * A segment's endpoints in a stable order by their names, whatever order they were picked or stored in: by the letter, then the
@@ -116,7 +124,10 @@ export interface ThroughPointSelection {
  */
 function usableLines(context: BoxContext) {
   const { topology, lines } = context;
-  return topology.faceNames.map((face) => ({
+  // A pyramid's plane through a segment is one through an edge of its base: through a lateral edge it would pass through the
+  // apex, which is the plane through the apex's own construction.
+  const faces = topology.kind === 'pyramid' ? [topology.lowerBase] : topology.faceNames;
+  return faces.map((face) => ({
     face,
     choices:
       lines?.[face]?.filter((choice) => choice.pointEdges.length > 0) ??
@@ -249,6 +260,7 @@ export type PilotDraft =
 
 export const PILOT_MESSAGES = {
   segment: 'Оберіть відрізок: ребро або діагональ грані.',
+  baseEdge: 'Оберіть ребро основи.',
   pointEdge: 'Оберіть ребро для точки M.',
   zeroRatio: 'Обидві частини відношення не можуть бути нулями: їхня сума має бути більшою за 0.',
   collinear: 'Точка M лежить на прямій вибраного відрізка, тож площину не визначено. Оберіть інше ребро або положення точки.',
@@ -329,7 +341,7 @@ export function pilotDraft(
   ratioErrors: Readonly<Record<string, string | undefined>> = {},
 ): PilotDraft {
   const { segment, pointEdge, mode } = throughPointSelection(keys, choices, context);
-  if (segment === undefined) return { status: 'incomplete', message: PILOT_MESSAGES.segment };
+  if (segment === undefined) return { status: 'incomplete', message: segmentPrompt(context.topology) };
   if (pointEdge === undefined) return { status: 'incomplete', message: PILOT_MESSAGES.pointEdge };
   if (mode === 'ratio') {
     const error = ratioErrors[keys.PointRatioFirst] ?? ratioErrors[keys.PointRatioSecond];
@@ -356,7 +368,9 @@ export interface ConstructionDraft {
   /** M's share of its edge from its first vertex, in percent, while the ratio is valid. */
   readonly percent: number | undefined;
   /** The plane of a valid draft: `boxSection`'s own input, the second plane's position included where there is one. */
-  readonly plane: Extract<BoxSectionSpec, { type: 'through-line' | 'face-parallel' | 'longitudinal' }> | undefined;
+  readonly plane:
+    | Extract<BoxSectionSpec, { type: 'through-line' | 'face-parallel' | 'longitudinal' | 'through-apex' }>
+    | undefined;
 }
 
 /**
@@ -420,6 +434,8 @@ export interface ConstructionGeometry {
   readonly sections: readonly (readonly string[])[];
   /** A longitudinal plane's trace on the lower base, by its ends' ids among `points`, and whether the plane passes through it. */
   readonly trace: { readonly ends: readonly [string, string]; readonly through: boolean } | undefined;
+  /** A pyramid's height SH, from its apex to the foot H where the apex projects onto the base plane, by its ids among `points`. */
+  readonly height: readonly [string, string] | undefined;
 }
 
 export function constructionGeometry(
@@ -502,15 +518,27 @@ export function constructionGeometry(
       sections.length = 0;
     }
   }
-  // A longitudinal plane along a line of the base: that line within the base, from the engine's own trace.
+  // A longitudinal plane, or a pyramid's plane through its apex, along a line of the base: that line within the base, from the
+  // engine's own trace; the latter always passes through it.
   let trace: ConstructionGeometry['trace'];
+  let height: ConstructionGeometry['height'];
   // A diagonal's trace is the diagonal itself, which its own picking draws.
-  if (plane?.type === 'longitudinal' && plane.trace !== 'angle' && plane.trace !== 'diagonal') {
+  if (
+    (plane?.type === 'longitudinal' || plane?.type === 'through-apex') &&
+    plane.trace !== 'angle' &&
+    plane.trace !== 'diagonal'
+  ) {
     const ends = baseTrace(vertices, topology.faces[topology.lowerBase] ?? [], plane);
     if (ends !== undefined) {
       points.T0 = toGltfPosition(ends[0]);
       points.T1 = toGltfPosition(ends[1]);
-      trace = { ends: ['T0', 'T1'], through: plane.through === true };
+      trace = { ends: ['T0', 'T1'], through: plane.type === 'through-apex' || plane.through === true };
+    }
+    // The height's foot where the apex actually projects, on the base plane z = 0, not the base's centre.
+    if (plane.type === 'through-apex' && plane.trace === 'height-edge' && topology.apex !== undefined) {
+      const [x, y] = vertices[topology.apex];
+      points.H = toGltfPosition([x, y, 0]);
+      height = [topology.apex, 'H'];
     }
   }
   return {
@@ -519,6 +547,7 @@ export function constructionGeometry(
     edges,
     faces,
     trace,
+    height,
     referenceFace: draft.face,
     vertexFaces,
     segment: segment === undefined ? undefined : { ends: segment, diagonal: boxFacesHolding(topology, segment).length === 1 },

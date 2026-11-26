@@ -829,7 +829,9 @@ test('a tetrahedron through its apex, through a base edge and a lateral edge’s
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Через вершину піраміди' });
   await entry(page, 'Слід на основі').selectOption({ label: 'Через медіану (= висоту)' });
-  await entry(page, 'З вершини').selectOption({ label: 'C' });
+  await page.getByRole('button', { name: /^З вершини/ }).click();
+  await entry(page, 'Або зі списку').selectOption({ label: 'C' });
+  await page.getByRole('button', { name: 'Готово', exact: true }).click();
   const median = await download(page);
   expect(median.fileName).toBe('tetrahedron-apex-section.3mf');
   expect(median.section).toMatchObject({ type: 'through-apex', trace: 'median', traceVertex: 'C' });
@@ -838,9 +840,12 @@ test('a tetrahedron through its apex, through a base edge and a lateral edge’s
   expect(labels.filter((label) => label.name === 'S')).toHaveLength(2);
 
   await entry(page, 'Слід на основі').selectOption({ label: 'Через бічне ребро й точку' });
-  await entry(page, 'Бічне ребро').selectOption({ label: 'SC' });
-  expect(await options(page, 'Ребро основи з точкою')).toEqual(['Ребро AB']);
-  await expect(entry(page, 'Точка на AB від A')).toHaveValue('50');
+  await page.getByRole('button', { name: /^Бічне ребро/ }).click();
+  await entry(page, 'Або зі списку').selectOption({ label: 'SC' });
+  await page.getByRole('button', { name: /^Точка M/ }).click();
+  expect(await options(page, 'Ребро зі списку')).toEqual(['Ребро AB']);
+  await expect(page.getByRole('button', { name: /^Точка M/ })).toContainText('Середина AB');
+  await page.getByRole('button', { name: 'Готово', exact: true }).click();
   expect((await download(page)).section).toMatchObject({
     trace: 'edge-point',
     traceVertex: 'C',
@@ -850,22 +855,27 @@ test('a tetrahedron through its apex, through a base edge and a lateral edge’s
 
   await entry(page, 'Тип перерізу').selectOption({ label: 'Через ребро основи' });
   await entry(page, 'Спосіб').selectOption({ label: 'Через точку ребра' });
-  // SA and SB give the face SAB with AB: only SC is offered.
-  expect(await options(page, 'Ребро з точкою')).toEqual(['Ребро SC']);
-  await expect(entry(page, 'Точка на SC від S')).toHaveValue('50');
+  await expect(page.getByRole('button', { name: /^Ребро основи/ })).toContainText('AB');
+  // SA and SB give the face SAB with AB: only CS is offered.
+  await page.getByRole('button', { name: /^Точка M/ }).click();
+  expect(await options(page, 'Ребро зі списку')).toEqual(['Не обрано', 'Ребро CS']);
+  await expect(page.getByRole('button', { name: /^Точка M/ })).toContainText('Середина CS');
+  await page.getByRole('button', { name: 'Готово', exact: true }).click();
   expect((await download(page)).section).toEqual({
     type: 'through-line',
     face: 'ABC',
     line: ['A', 'B'],
     method: 'point',
-    pointEdge: ['S', 'C'],
+    pointEdge: ['C', 'S'],
     pointPercent: 50,
   });
   await expectLabelsOnVertices(page, { kind: 'tetrahedron' });
 
   await entry(page, 'Тип перерізу').selectOption({ label: 'Похилий' });
-  await page.getByRole('button', { name: 'Паралельно двом ребрам' }).click();
-  await entry(page, 'Паралельно ребрам').selectOption({ label: 'SC і AB' });
+  await page.getByRole('button', { name: /^Паралельно ребрам/ }).click();
+  // The pair's own list, the one its open field shows.
+  await entry(page, 'Або зі списку').filter({ visible: true }).selectOption({ label: 'SC і AB' });
+  await page.getByRole('button', { name: 'Готово', exact: true }).click();
   await page.getByRole('button', { name: 'Через основу висоти', exact: true }).click();
   const pair = await partVolumes(page);
   expect(pair.section).toMatchObject({
@@ -893,7 +903,10 @@ test('an oblique square pyramid at half its height, and through its apex and a d
   const shape = { kind: 'pyramid', baseType: 'regular', baseSides: 4, heightRatio: 1, apexXRatio: 0.3, apexYRatio: 0 } as const;
   await openSection(page, 'Переріз');
   await entry(page, 'Тип перерізу').selectOption({ label: 'Паралельно грані' });
-  expect(await options(page, 'Паралельно грані')).toHaveLength(5);
+  // Five faces, each its own orientation, in the construction's list.
+  await page.getByRole('button', { name: /^Грань/ }).click();
+  expect(await options(page, 'Або зі списку')).toEqual(['ABCD', 'SAB', 'SBC', 'SCD', 'SDA']);
+  await page.getByRole('button', { name: 'Готово', exact: true }).click();
   const half = await partVolumes(page);
   // The apex's part at half height is an eighth of the pyramid.
   const [lower, upper] = half.volumes as [number, number];

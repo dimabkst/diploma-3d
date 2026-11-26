@@ -38,6 +38,7 @@ import HelpToggle from './HelpToggle.svelte';
 import LinkedBaseDiagram from './LinkedBaseDiagram.svelte';
 import NormalConstruction from './NormalConstruction.svelte';
 import NumberField from './NumberField.svelte';
+import PairConstruction from './PairConstruction.svelte';
 import ParameterSection from './ParameterSection.svelte';
 import SectionSwatch from './SectionSwatch.svelte';
 import SegmentedControl from './SegmentedControl.svelte';
@@ -340,6 +341,14 @@ const alignments: readonly { readonly alignment: TrapezoidAlignment; readonly la
               />
             {:else if field.type === 'trace-construction'}
               <TraceConstruction
+                {field}
+                bind:texts
+                {values}
+                onopen={(open) => onconstruction?.(open)}
+                onchoice={(choice) => onpilotchoice?.(choice)}
+              />
+            {:else if field.type === 'pair-construction'}
+              <PairConstruction
                 {field}
                 onopen={(open) => onconstruction?.(open)}
                 onchoice={(choice) => onpilotchoice?.(choice)}

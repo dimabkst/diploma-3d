@@ -1,6 +1,6 @@
 <script lang="ts">
 import { THREE_MF_MEDIA_TYPE } from '@diploma-3d/engine';
-import type { BoxVertex, ShapeKind } from '@diploma-3d/schema';
+import { type BoxSegment, type BoxVertex, PYRAMID_APEX, type ShapeKind } from '@diploma-3d/schema';
 import { untrack } from 'svelte';
 import AppHeader from './lib/components/AppHeader.svelte';
 import Button from './lib/components/Button.svelte';
@@ -16,6 +16,7 @@ import {
   boxKeysOf,
   boxTopologyFor,
   isBoxSolid,
+  pairOf,
   segmentKey,
   segmentOf,
   traceSelection,
@@ -24,6 +25,7 @@ import {
 import { buildModel } from './lib/model/buildModel.ts';
 import { type ConnectorScale, connectorScaleOf } from './lib/model/connectorScale.ts';
 import {
+  copiesOf,
   diagonalFamilies,
   diagonalPartners,
   diagonalPilotActive,
@@ -59,7 +61,6 @@ import {
   partsSeparated,
   plateChosen,
   plateConnectorFallback,
-  pointAtMidpoint,
   removeSecondCut,
   resetMagnetAllowances,
   resetShapeParameters,
@@ -76,7 +77,6 @@ import {
   switchLinkedAlternative,
   switchTiltMode,
   throughHeightFoot,
-  tracePointAtMidpoint,
   traceThrough,
 } from './lib/model/parameters.ts';
 import { loadPrintSizeText, savePrintSize } from './lib/model/printSize.ts';
@@ -266,7 +266,7 @@ const trialFile = $derived(model.status === 'ready' && model.key === requestKey 
 const pilotOn = $derived(
   selectedKind !== undefined &&
     isBoxSolid(selectedKind) &&
-    isConstructionSolid(selectedKind) &&
+    isConstructionSolid(selectedKind, parameterChoices) &&
     activeSection(selectedKind, parameterChoices) === 'through-line',
 );
 // The same construction by a point or at an angle: the segment's field is shared, the other one is M's or the angle's.
@@ -302,7 +302,8 @@ const diagonalOn = $derived(
 const normalOn = $derived(
   selectedKind !== undefined && isBoxSolid(selectedKind) && normalPilotActive(boxKeysOf(selectedKind), parameterChoices as never),
 );
-// A triangular prism's longitudinal plane along a median, an altitude, a bisector or a midline: its base element picked on the model.
+// A triangular prism's longitudinal plane, or a triangular pyramid's plane through its apex, along a median, an altitude, a bisector
+// or a midline, or a pyramid's through a lateral edge: its base element or lateral edge picked on the model.
 const traceOn = $derived(
   selectedKind !== undefined && isBoxSolid(selectedKind) && tracePilotActive(boxKeysOf(selectedKind), parameterChoices as never),
 );
@@ -334,7 +335,9 @@ const constructionForPreview = $derived(
     : traceOn
       ? traceView(selectedKind)
       : normalOn
-        ? normalView(selectedKind)
+        ? construction.field === 'pair'
+          ? pairView(selectedKind)
+          : normalView(selectedKind)
         : diagonalOn
           ? diagonalView(selectedKind)
           : facePilotOn
@@ -371,10 +374,68 @@ const constructionForPreview = $derived(
  */
 function traceView(kind: BoxSolid) {
   const keys = boxKeysOf(kind);
-  const trace = traceSelection(keys, parameterChoices as never, boxContextFrom(kind, request?.values ?? {}, parameterChoices));
-  const choosing = construction.field === 'trace';
-  const upper = (vertex: BoxVertex) => `${vertex}1` as BoxVertex;
-  const sides = traceTargetOf(trace.kind) === 'side';
+  const context = boxContextFrom(kind, request?.values ?? {}, parameterChoices);
+  const trace = traceSelection(keys, parameterChoices as never, context);
+  const pyramid = context.topology.kind === 'pyramid';
+  const target = traceTargetOf(trace.kind);
+  const field = construction.field;
+  // A prism's upper base stands for the lower one; a pyramid has none, and its lateral edge SV is picked by itself or by V.
+  const copies = (vertex: BoxVertex): BoxVertex[] => (pyramid ? [vertex] : [vertex, `${vertex}1` as BoxVertex]);
+  const sideKeys = ([a, b]: BoxSegment) => {
+    const [upperA, upperB] = [copies(a)[1], copies(b)[1]];
+    return [
+      segmentKey(canonicalSegment([a, b])),
+      ...(upperA === undefined || upperB === undefined ? [] : [segmentKey(canonicalSegment([upperA, upperB]))]),
+    ];
+  };
+  const lateral = (vertex: BoxVertex): BoxSegment => canonicalSegment([PYRAMID_APEX, vertex]);
+  const section = request?.spec?.section;
+  const { connector: _connector, ...plane } = (section ?? {}) as Record<string, unknown>;
+  const point = trace.kind === 'edge-point' && section?.type === 'through-apex' ? section.tracePointPercent : undefined;
+  const lines = [
+    ...(target === 'side' && trace.segment !== undefined
+      ? [{ key: segmentKey(trace.segment), ends: trace.segment, state: 'selected' as const }]
+      : []),
+    ...(target === 'lateral' && trace.vertex !== undefined
+      ? [{ key: segmentKey(lateral(trace.vertex)), ends: lateral(trace.vertex), state: 'in-plane' as const }]
+      : []),
+  ];
+  return {
+    field,
+    pending: undefined,
+    draft: {
+      segment: undefined,
+      // M's base edge, and M on it while the plane is made.
+      pointEdge: trace.kind === 'edge-point' ? trace.segment : undefined,
+      pointEdgeEligible: trace.kind === 'edge-point',
+      percent: point,
+      plane:
+        section?.type === 'longitudinal' || section?.type === 'through-apex' ? (plane as ConstructionDraft['plane']) : undefined,
+    },
+    lines,
+    vertexTargets: field === 'trace' && target !== 'side' ? trace.vertices.flatMap(copies) : [],
+    edgeTargets:
+      field === 'trace'
+        ? target === 'side'
+          ? trace.segments.flatMap(sideKeys)
+          : target === 'lateral'
+            ? trace.vertices.map((vertex) => segmentKey(lateral(vertex)))
+            : []
+        : field === 'trace-point'
+          ? trace.segments.map((segment) => segmentKey(canonicalSegment(segment)))
+          : [],
+    faceTargets: [],
+  };
+}
+
+/**
+ * The view of an inclined plane parallel to a pair of opposite edges while the pair is chosen: every edge may be tapped, which
+ * chooses its pair; the pair chosen drawn, and the section as the request has it.
+ */
+function pairView(kind: BoxSolid) {
+  const keys = boxKeysOf(kind);
+  const topology = boxTopologyFor(kind, parameterChoices);
+  const chosen = parameterChoices[keys.ParallelEdges];
   const section = request?.spec?.section;
   const { connector: _connector, ...plane } = (section ?? {}) as Record<string, unknown>;
   return {
@@ -385,20 +446,11 @@ function traceView(kind: BoxSolid) {
       pointEdge: undefined,
       pointEdgeEligible: false,
       percent: undefined,
-      plane: section?.type === 'longitudinal' ? (plane as ConstructionDraft['plane']) : undefined,
+      plane: section?.type === 'inclined' ? (plane as ConstructionDraft['plane']) : undefined,
     },
-    lines:
-      sides && trace.segment !== undefined
-        ? [{ key: segmentKey(trace.segment), ends: trace.segment, state: 'selected' as const }]
-        : [],
-    vertexTargets: choosing && !sides ? trace.vertices.flatMap((vertex) => [vertex, upper(vertex)]) : [],
-    edgeTargets:
-      choosing && sides
-        ? trace.segments.flatMap(([a, b]) => [
-            segmentKey(canonicalSegment([a, b])),
-            segmentKey(canonicalSegment([upper(a), upper(b)])),
-          ])
-        : [],
+    lines: chosen === 'none' ? [] : pairOf(chosen).map((ends) => ({ key: segmentKey(ends), ends, state: 'selected' as const })),
+    vertexTargets: [],
+    edgeTargets: construction.field === 'pair' ? topology.edges.map((edge) => segmentKey(canonicalSegment(edge))) : [],
     faceTargets: [],
   };
 }
@@ -441,16 +493,18 @@ function diagonalView(kind: BoxSolid) {
   const keys = boxKeysOf(kind);
   const context = boxContextFrom(kind, request?.values ?? {}, parameterChoices);
   const trace = traceSelection(keys, parameterChoices as never, context);
-  const families = diagonalFamilies(trace.segments);
+  // A pyramid has no upper base, and its plane through the apex always holds the diagonal.
+  const pyramid = context.topology.kind === 'pyramid';
+  const families = diagonalFamilies(trace.segments, !pyramid);
   const chosen = trace.segment === undefined ? undefined : familyOf(families, trace.segment);
-  const through = parameterChoices[keys.TraceThrough];
+  const through = pyramid || parameterChoices[keys.TraceThrough];
   const { pending } = construction;
   // A quadrilateral's four diagonals are all drawn; a denser base's only the chosen family and, after a first vertex, the
   // diagonals through it, so that the drawing stays readable.
   const dense = families.length > 2;
   const candidates = pending === undefined ? [] : diagonalsThrough(families, pending);
   const lines = families.flatMap((family) =>
-    [family.lower, family.upper]
+    copiesOf(family)
       .filter((ends) => !dense || family === chosen || candidates.some((candidate) => segmentKey(candidate) === segmentKey(ends)))
       .map((ends) => ({
         key: segmentKey(ends),
@@ -469,11 +523,12 @@ function diagonalView(kind: BoxSolid) {
       pointEdge: undefined,
       pointEdgeEligible: false,
       percent: undefined,
-      plane: section?.type === 'longitudinal' ? (plane as ConstructionDraft['plane']) : undefined,
+      plane:
+        section?.type === 'longitudinal' || section?.type === 'through-apex' ? (plane as ConstructionDraft['plane']) : undefined,
     },
     lines,
     vertexTargets: [
-      ...new Set(pending === undefined ? families.flatMap(({ lower, upper }) => [...lower, ...upper]) : [pending, ...partners]),
+      ...new Set(pending === undefined ? families.flatMap((family) => copiesOf(family).flat()) : [pending, ...partners]),
     ],
     edgeTargets: lines.map(({ key }) => key),
     faceTargets: [],
@@ -565,7 +620,23 @@ function pickOnModel(pick: ConstructionPick) {
   }
   if (field === 'trace') {
     if (pick.kind === 'vertex') choosePilot({ kind: 'trace-vertex', vertex: pick.vertex });
+    if (pick.kind === 'edge') {
+      const [first, second] = segmentOf(pick.edge);
+      // A pyramid's lateral edge SV stands for its vertex V in the base.
+      if (first === PYRAMID_APEX || second === PYRAMID_APEX) {
+        choosePilot({ kind: 'trace-vertex', vertex: first === PYRAMID_APEX ? second : first });
+      } else {
+        choosePilot({ kind: 'trace-side', segment: [first, second] });
+      }
+    }
+    return;
+  }
+  if (field === 'trace-point') {
     if (pick.kind === 'edge') choosePilot({ kind: 'trace-side', segment: segmentOf(pick.edge) });
+    return;
+  }
+  if (field === 'pair') {
+    if (pick.kind === 'edge') choosePilot({ kind: 'pair', segment: segmentOf(pick.edge) });
     return;
   }
   if (field === 'diagonal' && selectedKind !== undefined && isBoxSolid(selectedKind)) {
@@ -629,8 +700,10 @@ function pickNormal(pick: ConstructionPick) {
  */
 function pickDiagonal(kind: BoxSolid, pick: ConstructionPick) {
   const keys = boxKeysOf(kind);
+  const context = boxContextFrom(kind, request?.values ?? {}, parameterChoices);
   const families = diagonalFamilies(
-    traceSelection(keys, parameterChoices as never, boxContextFrom(kind, request?.values ?? {}, parameterChoices)).segments,
+    traceSelection(keys, parameterChoices as never, context).segments,
+    context.topology.kind !== 'pyramid',
   );
   if (pick.kind === 'edge') {
     choosePilot({ kind: 'diagonal', segment: segmentOf(pick.edge) });
@@ -638,6 +711,14 @@ function pickDiagonal(kind: BoxSolid, pick: ConstructionPick) {
   }
   if (pick.kind !== 'vertex') return;
   const { pending } = construction;
+  // A pyramid's apex, or any vertex no diagonal of a base passes through: not one to start or finish a diagonal from.
+  if (diagonalPartners(families, pick.vertex).length === 0) {
+    construction = {
+      ...construction,
+      notice: `Через ${vertexName(pick.vertex)} не проходить жодна діагональ основи. Оберіть підсвічену вершину.`,
+    };
+    return;
+  }
   if (pending === undefined) {
     construction = { ...construction, pending: pick.vertex, notice: undefined };
     return;
@@ -740,16 +821,8 @@ function runPanelAction(action: PanelAction) {
     if (selectedKind !== undefined) applyState(throughHeightFoot(selectedKind, parameterState, request?.values ?? {}));
     return;
   }
-  if (action === 'trace-midpoint') {
-    if (selectedKind !== undefined) applyState(tracePointAtMidpoint(selectedKind, parameterState));
-    return;
-  }
   if (action === 'normal-manual') {
     if (selectedKind !== undefined) applyState(normalAlongManual(selectedKind, parameterState));
-    return;
-  }
-  if (action === 'line-midpoint') {
-    if (selectedKind !== undefined) applyState(pointAtMidpoint(selectedKind, parameterState));
     return;
   }
   if (action === 'reset-magnet-allowances') {

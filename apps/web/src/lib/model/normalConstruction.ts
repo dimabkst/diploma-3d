@@ -10,7 +10,7 @@ import { isConstructionSolid } from './throughPoint.ts';
 
 /** Whether a box's inclined plane is this construction's: of a cube, a parallelepiped or a prism of any base. */
 export const normalPilotActive = (keys: BoxKeysOf, choices: BoxChoices): boolean =>
-  isConstructionSolid(keys.Section.slice(0, -'Section'.length) as ShapeKind) && choices[keys.Section] === 'inclined';
+  isConstructionSolid(keys.Section.slice(0, -'Section'.length) as ShapeKind, choices) && choices[keys.Section] === 'inclined';
 
 /** A segment the plane may be perpendicular to, as the mode lists it: its key, its ends in the listed order, and its kind. */
 export interface NormalEntry {

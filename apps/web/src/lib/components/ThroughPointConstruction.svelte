@@ -54,16 +54,21 @@ const modes: readonly { readonly value: PointMode; readonly label: string }[] = 
   </Field>
   <ConstructionPicker
     id={`${field.key}-segment`}
-    label="Відрізок"
+    label={field.segment.baseEdge ? 'Ребро основи' : 'Відрізок'}
     value={field.segment.title ?? 'не обрано'}
     open={field.open === 'segment'}
     ontoggle={() => toggle('segment')}
   >
     {#if field.segment.pending === undefined}
-      <p class="hint">Оберіть ребро або дві вершини однієї грані: на моделі придатні вершини й ребра підсвічено.</p>
+      <p class="hint">
+        {field.segment.baseEdge
+          ? 'Оберіть ребро основи або дві його вершини: на моделі їх підсвічено.'
+          : 'Оберіть ребро або дві вершини однієї грані: на моделі придатні вершини й ребра підсвічено.'}
+      </p>
     {:else}
       <p class="hint" role="status">
-        Перша вершина — {field.segment.pending}. Оберіть другу вершину тієї самої грані: їх підсвічено.
+        Перша вершина — {field.segment.pending}. Оберіть другу вершину {field.segment.baseEdge ? 'основи' : 'тієї самої грані'}: їх
+        підсвічено.
       </p>
       <div class="actions">
         <Button variant="secondary" onclick={oncancelpending}>Скасувати вибір вершини</Button>

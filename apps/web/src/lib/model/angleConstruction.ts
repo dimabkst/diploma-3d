@@ -12,9 +12,9 @@ import { type BoxChoices, type BoxContext, type BoxKeysOf, faceName, segmentName
 import {
   type ConstructionDraft,
   constructionKeys,
-  PILOT_MESSAGES,
   type PilotDraft,
   planeContact,
+  segmentPrompt,
   throughPointSelection,
 } from './throughPoint.ts';
 
@@ -23,7 +23,7 @@ export type AngleSide = 'first' | 'second';
 
 /** Whether a box's plane through a line is this construction's: by its angle, for a cube and the parallelepipeds. */
 export const anglePilotActive = (keys: BoxKeysOf, choices: BoxChoices): boolean =>
-  constructionKeys(keys) && choices[keys.LineMethod] === 'angle';
+  constructionKeys(keys, choices) && choices[keys.LineMethod] === 'angle';
 
 /** The faces an angle may be measured from: the two faces of an edge, the one face of a face's diagonal. */
 export const referenceFaces = (topology: PrismTopology, segment: BoxSegment): BoxFace[] => boxFacesHolding(topology, segment);
@@ -94,7 +94,7 @@ export function angleDraft(
   angleErrors: Readonly<Record<string, string | undefined>>,
 ): PilotDraft {
   const { segment } = throughPointSelection(keys, choices, context);
-  if (segment === undefined) return { status: 'incomplete', message: PILOT_MESSAGES.segment };
+  if (segment === undefined) return { status: 'incomplete', message: segmentPrompt(context.topology) };
   const error = angleErrors[keys.LineDihedralDeg];
   const angleDeg = values[keys.LineDihedralDeg];
   if (error !== undefined || angleDeg === undefined) {
